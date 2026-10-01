@@ -970,6 +970,18 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     }
     const auto effectiveDescriptor = armOverlay.descriptor;
     const auto effectiveContent = armOverlay.content;
+    const auto contentTransfer = selectRenderTapeArmContentTransfer(
+        armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
+            ? &*armSnapshot : nullptr,
+        identity, peCaptureState_->renderTapeArmSnapshotOrdinal,
+        armOverlay, renderTapeObjectAdmitted(identity));
+    if (contentTransfer.disposition ==
+            RenderTapeArmContentTransferDisposition::InvalidSnapshot ||
+        contentTransfer.disposition ==
+            RenderTapeArmContentTransferDisposition::AlreadyAdmitted) {
+        abortRenderTapeCapture("jit_content_transfer_owner");
+        return false;
+    }
     if (object->lifetime.textureAlias &&
         !materializeRenderTapeObjectForReference(
             object->aliasParentTexture, handleIndex, recordIndex,
@@ -1204,14 +1216,20 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     }
     for (std::uint32_t subresource = 0u;
          subresource < effectiveContent.size(); ++subresource) {
-        const auto status = peCaptureState_->renderTapeCapture.resourceMutationBytes(
-            identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
-            subresource, 0u, effectiveContent[subresource]);
+        const auto incomingBytes = effectiveContent[subresource].size();
+        auto *ownedBytes = contentTransfer.payload(subresource);
+        const auto status = ownedBytes
+            ? peCaptureState_->renderTapeCapture.resourceMutationOwnedBytes(
+                  identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
+                  subresource, 0u, std::move(*ownedBytes))
+            : peCaptureState_->renderTapeCapture.resourceMutationBytes(
+                  identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
+                  subresource, 0u, effectiveContent[subresource]);
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             const dxmt9::d3d9::pe::PeWireObjectRef reference{.identity = identity};
             logRenderTapeMutationRejection(
                 "jit_resource_mutation", "mutation_bytes", reference,
-                subresource, effectiveContent[subresource].size(), status);
+                subresource, incomingBytes, status);
             abortRenderTapeCapture("jit_resource_mutation");
             return false;
         }

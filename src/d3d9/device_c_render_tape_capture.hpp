@@ -222,10 +222,26 @@ public:
   RenderTapeCaptureStatus registerBlobBytes(std::span<const std::byte> bytes,
                                             RenderTapeDigest* digest = nullptr);
 
+  // Consumes at entry on success or failure. Admission independently hashes
+  // the original bytes and uses the borrowed API's exact dedup/budgets. Any
+  // rejection aborts an enabled owner: consumed bytes cannot be retried in
+  // the same interval as if the snapshot were still complete.
+  RenderTapeCaptureStatus registerOwnedBlobBytes(
+      std::vector<std::byte>&& bytes, RenderTapeDigest* digest = nullptr);
+
   RenderTapeCaptureStatus resourceMutationBytes(
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
       std::uint32_t subresource, std::uint64_t byteOffset,
       std::span<const std::byte> bytes,
+      RenderTapeBufferMutationDisposition bufferDisposition =
+          RenderTapeBufferMutationDisposition::Plain);
+
+  // Same consuming/fail-stop contract, including event validation/reserve/
+  // append rejection after successful blob admission.
+  RenderTapeCaptureStatus resourceMutationOwnedBytes(
+      const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
+      std::uint32_t subresource, std::uint64_t byteOffset,
+      std::vector<std::byte>&& bytes,
       RenderTapeBufferMutationDisposition bufferDisposition =
           RenderTapeBufferMutationDisposition::Plain);
 
@@ -320,6 +336,9 @@ public:
   static RenderTapeDigest sha256(std::span<const std::byte> bytes);
 
 private:
+  RenderTapeCaptureStatus registerBlobStorage(
+      std::span<const std::byte> bytes, RenderTapeDigest* digest,
+      std::vector<std::byte>* transferredBytes);
   RenderTapeCaptureStatus armWithBlobStorage(
       std::span<const std::byte> bootstrapOverlay,
       std::span<const RenderTapeCaptureBlob> blobs,

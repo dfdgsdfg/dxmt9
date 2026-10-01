@@ -348,6 +348,24 @@ deliberately terminated after repeated failures without a published Tape.
 The next ownership review must address selected arm-snapshot duplication in
 bootstrap and JIT while preserving snapshots not yet materialized and EVENT
 checkpoint authority; a larger configured budget is not the demonstrated fix.
+Selected current-arm payloads now transfer to bootstrap/session storage after
+checked identity/epoch/source selection. Bootstrap stages throwing work before
+final swaps; JIT owned-mutation failures abort the interval. Descriptors,
+unmaterialized snapshots and mutable registry bytes remain intact. Native
+capture/tape tests pass (2/2), including 4,096 transfer-predicate cases, pointer
+conservation, duplicate content, partial-transfer failure, fresh-epoch retry,
+and EVENT authority. These are bounded ownership tests, not original workload
+qualification. PE32, PE64 and canonical Unix builds pass. Capture
+`app-d3d9-stkcop-bench-tape-h430-query-volume-17` reaches arm completion and
+100 events, 73 blobs, 32,673,548 owned blob bytes. Its first JIT failure is
+buffer 4294969099 generation 1, 2,097,150 bytes, at borrowed
+`register_blob_bytes/blob_payload_copy` (`bad_alloc`), not an explicit budget.
+A later retry fails on texture 4294969217 generation 21, 524,288 bytes,
+after 132 events and 35,120,242 owned bytes. The selected snapshot transfer
+does not remove this durable-registry fallback copy. The process was
+deliberately terminated with no published Tape; host VM summary alone cannot
+attribute Wine guest allocator exhaustion. Further ownership work must not
+move mutable durable bytes away from later application mutations.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

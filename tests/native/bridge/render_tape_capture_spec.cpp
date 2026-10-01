@@ -2844,6 +2844,37 @@ void testCompletedEventQueryArmOverlay() {
             std::equal(durableBytes.begin(), durableBytes.end(), durableBefore.begin()) &&
             !durableCycle.capturedCycle && !durableCycle.completedEventCheckpoint,
         "completed EVENT arm overlay supplies typed authority without durable mutation or blob");
+  PeCaptureState transferOwner({}, kRenderTapeProfileFrame, 0u);
+  transferOwner.renderTapeArmSnapshotOrdinal = 4u;
+  transferOwner.renderTapeArmSnapshots.push_back({
+      .armOrdinal = 4u,
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 901u},
+      .descriptor = {std::byte{1u}},
+      .content = {{std::byte{1u}, std::byte{2u}, std::byte{3u}, std::byte{4u}}}});
+  transferOwner.renderTapeArmSnapshots.push_back({
+      .armOrdinal = 4u, .identity = identity, .descriptor = bytesOf(arm)});
+  auto& bufferSnapshot = transferOwner.renderTapeArmSnapshots[0];
+  auto& querySnapshot = transferOwner.renderTapeArmSnapshots[1];
+  const auto* queryDescriptorPointer = querySnapshot.descriptor.data();
+  const auto bufferOverlay = renderTapeSelectArmObjectSnapshotOverlay(
+      {}, {}, bufferSnapshot.descriptor, bufferSnapshot.content, 4u, 4u);
+  const auto bufferTransfer = selectRenderTapeArmContentTransfer(
+      &bufferSnapshot, bufferSnapshot.identity, 4u, bufferOverlay, false);
+  std::vector<RenderTapeCaptureBlob> transferredBlobs(1u);
+  transferredBlobs[0].bytes.swap(*bufferTransfer.payload(0u));
+  RenderTapeQueryDescriptorDecoded afterTransfer{};
+  check(transferOwner.renderTapeCapture.armWithOwnedBlobs(
+            bootstrapChunk(), std::move(transferredBlobs)) == RenderTapeCaptureStatus::Accepted &&
+            transferOwner.renderTapeCapture.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+            transferOwner.renderTapeCapture.objectDefine(identity,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+                querySnapshot.descriptor, 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+            bufferSnapshot.content[0].empty() && querySnapshot.content.empty() &&
+            querySnapshot.descriptor.data() == queryDescriptorPointer && querySnapshot.armOrdinal == 4u &&
+            renderTapeArmSnapshotEpochMatches(querySnapshot.armOrdinal, 4u) &&
+            renderTapeLoadQueryDescriptor(querySnapshot.descriptor, afterTransfer) &&
+            renderTapeEventQueryCheckpointMatchesCycle(afterTransfer, identity, durableCycle),
+        "other payload transfer and query materialization preserve exact EVENT descriptor/ordinal authority");
   const auto stale = renderTapeSelectArmObjectSnapshotOverlay(
       durableBytes, noContent, std::as_bytes(std::span(&arm, 1u)), noContent,
       3u, 4u);
@@ -3958,6 +3989,364 @@ void testMutationFailureProvenanceAndFaults() {
             preverified.registerBlobBytes(payload) == RenderTapeCaptureStatus::Accepted &&
             !preverified.mutationFailure().valid && preverified.ownedBlobEntries() == 1u,
         "direct byte registration failure cannot roll back a pre-existing verified catalogue entry");
+}
+
+void testArmSnapshotTransferGuardExhaustive() {
+  using Disposition = RenderTapeArmContentTransferDisposition;
+  using Source = RenderTapeArmSnapshotOverlaySource;
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 3u, .objectId = 501u};
+  RenderTapeArmObjectSnapshot snapshot{
+      .objectIndex = 999u, .armOrdinal = 7u, .identity = identity,
+      .descriptor = {std::byte{1u}},
+      .content = {{std::byte{2u}}, {std::byte{3u}}}};
+  const std::vector<std::byte> otherDescriptor{std::byte{1u}};
+  const std::vector<std::vector<std::byte>> otherContent = snapshot.content;
+  const auto* originalFirst = snapshot.content[0].data();
+  constexpr std::array sources{
+      Source::Missing, Source::DurableBase, Source::CurrentArm, Source::StaleArm};
+  // Exhaust the actual production predicate: source, presence, exact kind /
+  // generation / id, epoch, selected storage/extent, and admission state.
+  for (const auto source : sources) {
+    for (unsigned epoch = 0u; epoch < 4u; ++epoch) {
+      for (unsigned bits = 0u; bits < 256u; ++bits) {
+        const bool present = (bits & 1u) != 0u;
+        const bool exactKind = (bits & 2u) != 0u;
+        const bool exactGeneration = (bits & 4u) != 0u;
+        const bool exactId = (bits & 8u) != 0u;
+        const bool ownedContent = (bits & 16u) != 0u;
+        const bool ownedDescriptor = (bits & 32u) != 0u;
+        const bool exactCount = (bits & 64u) != 0u;
+        const bool admitted = (bits & 128u) != 0u;
+        snapshot.identity = identity;
+        if (!exactKind) snapshot.identity.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+        if (!exactGeneration) ++snapshot.identity.generation;
+        if (!exactId) ++snapshot.identity.objectId;
+        snapshot.armOrdinal = epoch == 0u ? 7u : epoch == 1u ? 6u : 0u;
+        const auto activeOrdinal = epoch == 3u ? 0u : 7u;
+        const auto content = ownedContent
+            ? std::span<const std::vector<std::byte>>(snapshot.content)
+            : std::span<const std::vector<std::byte>>(otherContent);
+        const RenderTapeArmObjectSnapshotOverlaySelection selected{
+            .source = source,
+            .descriptor = ownedDescriptor ? std::span<const std::byte>(snapshot.descriptor)
+                                          : std::span<const std::byte>(otherDescriptor),
+            .content = exactCount ? content : content.first(1u)};
+        const auto transfer = selectRenderTapeArmContentTransfer(
+            present ? &snapshot : nullptr, identity, activeOrdinal, selected, admitted);
+        const auto expected = admitted ? Disposition::AlreadyAdmitted
+            : source == Source::StaleArm ? Disposition::InvalidSnapshot
+            : source != Source::CurrentArm ? Disposition::Borrowed
+            : present && exactKind && exactGeneration && exactId && epoch == 0u &&
+                      ownedContent && ownedDescriptor && exactCount
+                ? Disposition::OwnedSnapshot : Disposition::InvalidSnapshot;
+        check(transfer.disposition == expected &&
+                  transfer.payload(0u) == (expected == Disposition::OwnedSnapshot
+                      ? &snapshot.content[0] : nullptr) &&
+                  transfer.payload(2u) == nullptr &&
+                  snapshot.content[0].data() == originalFirst &&
+                  snapshot.content == otherContent,
+              "exhaustive transfer guards reject guessed/stale/admitted storage without consuming bytes");
+      }
+    }
+  }
+  snapshot.identity = identity;
+  snapshot.identity.generation = 0u;
+  snapshot.armOrdinal = 7u;
+  const RenderTapeArmObjectSnapshotOverlaySelection invalidIdentityOverlay{
+      .source = Source::CurrentArm, .descriptor = snapshot.descriptor, .content = snapshot.content};
+  check(selectRenderTapeArmContentTransfer(&snapshot, snapshot.identity, 7u,
+            invalidIdentityOverlay, false).disposition == Disposition::InvalidSnapshot,
+        "exact equality cannot make a zero-generation identity a transferable owner");
+}
+
+void testSelectiveArmTransferAndOwnedMutation() {
+  const auto bootstrap = bootstrapChunk();
+  const D9CWireObjectIdentity first{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 3u, .objectId = 501u};
+  auto second = first;
+  ++second.objectId;
+  const D9CBufferDesc descriptor{.size = 8197u};
+  const auto makeSnapshot = [&](const D9CWireObjectIdentity& identity, std::uint64_t epoch) {
+    return RenderTapeArmObjectSnapshot{
+        .objectIndex = 999u, .armOrdinal = epoch, .identity = identity,
+        .descriptor = bytesOf(descriptor),
+        .content = {std::vector<std::byte>(descriptor.size, std::byte{0x35u})}};
+  };
+  const auto select = [](RenderTapeArmObjectSnapshot& snapshot, std::uint64_t epoch,
+                         bool admitted = false) {
+    const auto overlay = renderTapeSelectArmObjectSnapshotOverlay(
+        {}, {}, snapshot.descriptor, snapshot.content, snapshot.armOrdinal, epoch);
+    return selectRenderTapeArmContentTransfer(
+        &snapshot, snapshot.identity, epoch, overlay, admitted);
+  };
+  const auto define = [&](RenderTapeCaptureSession& session, const auto& identity) {
+    return session.objectDefine(identity,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+        std::as_bytes(std::span(&descriptor, 1u)), 0u, {}, descriptor.size, 1u);
+  };
+
+  PeCaptureState pe({}, kRenderTapeProfileFrame, 0u);
+  pe.renderTapeArmSnapshotOrdinal = 7u;
+  pe.renderTapeArmSnapshots.push_back(makeSnapshot(first, 7u));
+  pe.renderTapeArmSnapshots.push_back(makeSnapshot(second, 7u));
+  auto& selected = pe.renderTapeArmSnapshots[0];
+  auto& unselected = pe.renderTapeArmSnapshots[1];
+  const auto selectedDescriptor = selected.descriptor;
+  const auto* selectedPointer = selected.content[0].data();
+  const auto* unselectedPointer = unselected.content[0].data();
+  // A metadata allocation failure before the producer's final swap cannot
+  // surrender even the first selected payload or alter an unrelated owner.
+  for (const std::size_t allocation : {0u, 1u}) {
+    RenderTapeCaptureBootstrapSeed failedSeed;
+    bool rejected = false;
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    try {
+      failedSeed.blobs.emplace_back();
+      failedSeed.mutations.push_back({.identity = first, .byteSize = descriptor.size});
+    } catch (const std::bad_alloc&) {
+      rejected = true;
+    }
+    capture_state_allocation_probe::failEnabled = false;
+    check(rejected && selected.content[0].data() == selectedPointer &&
+              unselected.content[0].data() == unselectedPointer &&
+              selected.content[0].size() == descriptor.size &&
+              pe.renderTapeCapture.publicationBundle().events.empty(),
+          "failed bootstrap metadata staging precedes every destructive payload transfer");
+  }
+  RenderTapeCaptureBootstrapSeed seed;
+  seed.blobs.emplace_back();
+  const auto selectedExtent = selected.content[0].size();
+  const auto selectedDigest = RenderTapeCaptureSession::sha256(selected.content[0]);
+  seed.mutations.push_back({.identity = first, .kind = RenderTapeMutationKind::Upload,
+      .byteSize = selectedExtent, .digest = selectedDigest});
+  // The producer's final transfer follows complete validation/metadata staging.
+  const auto transfer = select(selected, 7u);
+  seed.blobs[0].bytes.swap(*transfer.payload(0u));
+  check(seed.blobs[0].bytes.data() == selectedPointer && selected.content[0].empty() &&
+            selected.descriptor == selectedDescriptor && selected.identity.objectId == first.objectId &&
+            selected.armOrdinal == 7u && unselected.content[0].data() == unselectedPointer &&
+            unselected.content[0].size() == selectedExtent &&
+            seed.mutations[0].byteSize == selectedExtent,
+        "bootstrap transfers only the selected original payload and preserves all metadata/unselected storage");
+  capture_state_allocation_probe::watchedPointer = const_cast<std::byte*>(selectedPointer);
+  capture_state_allocation_probe::watchedFreed = false;
+  capture_state_allocation_probe::watchSize = selectedExtent;
+  check(pe.renderTapeCapture.armWithOwnedBlobs(bootstrap, std::move(seed.blobs)) ==
+            RenderTapeCaptureStatus::Accepted &&
+            pe.renderTapeCapture.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+            define(pe.renderTapeCapture, first) == RenderTapeCaptureStatus::Accepted &&
+            pe.renderTapeCapture.resourceMutation(first, RenderTapeMutationKind::Upload,
+                0u, 0u, selectedExtent, selectedDigest) == RenderTapeCaptureStatus::Accepted &&
+            capture_state_allocation_probe::watchedPointer == selectedPointer &&
+            !capture_state_allocation_probe::watchedFreed,
+        "bootstrap-to-session transfer conserves the original pointer without payload-sized allocation");
+  pe.renderTapeAdmittedIdentities.push_back(first);
+  const auto eventCountBeforeDuplicate = pe.renderTapeCapture.eventCount();
+  for (unsigned reference = 0u; reference < 3u; ++reference) {
+    const bool admitted = renderTapeBootstrapClosureContains(pe.renderTapeAdmittedIdentities, first);
+    check(admitted && select(selected, 7u, admitted).disposition ==
+              RenderTapeArmContentTransferDisposition::AlreadyAdmitted &&
+              pe.renderTapeCapture.eventCount() == eventCountBeforeDuplicate,
+          "duplicate exact parent references bypass moved-from content without a second Upload");
+  }
+  check(define(pe.renderTapeCapture, second) == RenderTapeCaptureStatus::Accepted &&
+            pe.renderTapeCapture.resourceMutationOwnedBytes(second, RenderTapeMutationKind::Upload,
+                0u, 0u, std::move(*select(unselected, 7u).payload(0u))) ==
+                RenderTapeCaptureStatus::Accepted && unselected.content[0].empty() &&
+            pe.renderTapeCapture.ownedBlobEntries() == 1u &&
+            pe.renderTapeCapture.ownedBlobBytes() == selectedExtent &&
+            pe.renderTapeCapture.eventCount() == eventCountBeforeDuplicate + 2u &&
+            capture_state_allocation_probe::watchedPointer == selectedPointer &&
+            !capture_state_allocation_probe::watchedFreed,
+        "previously unselected JIT owner transfers, deduplicates equal bytes, but emits its own nonzero Upload");
+  capture_state_allocation_probe::watchSize = 0u;
+  pe.renderTapeCapture.abort();
+  check(capture_state_allocation_probe::watchedFreed,
+        "terminal owner release frees the exact snapshot pointer it consumed");
+  capture_state_allocation_probe::watchedPointer = nullptr;
+
+  for (const bool success : {false, true}) {
+    RenderTapeCaptureSession session(true, {.maxEvents = success ? 4096u : 4u});
+    auto a = makeSnapshot(first, 7u);
+    auto b = makeSnapshot(second, 7u);
+    check(session.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+              define(session, first) == RenderTapeCaptureStatus::Accepted &&
+              session.resourceMutationOwnedBytes(first, RenderTapeMutationKind::Upload,
+                  0u, 0u, std::move(*select(a, 7u).payload(0u))) == RenderTapeCaptureStatus::Accepted &&
+              define(session, second) == RenderTapeCaptureStatus::Accepted,
+          "bounded serialized transition commits one owner before the second transfer");
+    const auto status = session.resourceMutationOwnedBytes(second, RenderTapeMutationKind::Upload,
+        0u, 0u, std::move(*select(b, 7u).payload(0u)));
+    check(a.content[0].empty() && b.content[0].empty() &&
+              status == (success ? RenderTapeCaptureStatus::Accepted
+                                 : RenderTapeCaptureStatus::CapacityExceeded) &&
+              session.state() == (success ? RenderTapeCaptureState::Capturing
+                                         : RenderTapeCaptureState::Aborted) &&
+              (success ? session.ownedBlobBytes() == descriptor.size
+                       : session.ownedBlobBytes() == 0u && session.eventCount() == 0u &&
+                           session.publicationBundle().events.empty() &&
+                           session.mutationFailure().byteSize == descriptor.size),
+          "actual owned-transfer transition is complete admission or terminal abort, never missing-byte retry");
+    if (!success) {
+      std::vector<std::byte> forbiddenRetry(descriptor.size, std::byte{0x35u});
+      check(session.resourceMutationOwnedBytes(second, RenderTapeMutationKind::Upload,
+                0u, 0u, std::move(forbiddenRetry)) == RenderTapeCaptureStatus::InvalidState &&
+                forbiddenRetry.empty() && session.state() == RenderTapeCaptureState::Aborted,
+            "consumed partial transfer cannot retry in the same interval");
+      auto fresh = makeSnapshot(first, 8u);
+      check(session.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+                session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+                define(session, first) == RenderTapeCaptureStatus::Accepted &&
+                session.resourceMutationOwnedBytes(first, RenderTapeMutationKind::Upload,
+                    0u, 0u, std::move(*select(fresh, 8u).payload(0u))) == RenderTapeCaptureStatus::Accepted &&
+                !session.mutationFailure().valid,
+            "next arm obtains fresh epoch-owned bytes and retries without stale failure authority");
+    }
+  }
+  PeCaptureState partial({.maxEvents = 4u}, kRenderTapeProfileFrame, 0u);
+  partial.renderTapeArmSnapshotOrdinal = 7u;
+  partial.renderTapeArmSnapshots.push_back(makeSnapshot(first, 7u));
+  partial.renderTapeArmSnapshots.push_back(makeSnapshot(second, 7u));
+  auto third = second;
+  ++third.objectId;
+  partial.renderTapeArmSnapshots.push_back(makeSnapshot(third, 7u));
+  auto& a = partial.renderTapeArmSnapshots[0];
+  auto& b = partial.renderTapeArmSnapshots[1];
+  auto& untouched = partial.renderTapeArmSnapshots[2];
+  capture_state_allocation_probe::watchedPointer = untouched.content[0].data();
+  capture_state_allocation_probe::watchedFreed = false;
+  check(partial.renderTapeCapture.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+            partial.renderTapeCapture.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+            define(partial.renderTapeCapture, first) == RenderTapeCaptureStatus::Accepted &&
+            partial.renderTapeCapture.resourceMutationOwnedBytes(first, RenderTapeMutationKind::Upload,
+                0u, 0u, std::move(*select(a, 7u).payload(0u))) == RenderTapeCaptureStatus::Accepted &&
+            define(partial.renderTapeCapture, second) == RenderTapeCaptureStatus::Accepted &&
+            partial.renderTapeCapture.resourceMutationOwnedBytes(second, RenderTapeMutationKind::Upload,
+                0u, 0u, std::move(*select(b, 7u).payload(0u))) == RenderTapeCaptureStatus::CapacityExceeded &&
+            untouched.content[0].size() == descriptor.size && !capture_state_allocation_probe::watchedFreed,
+        "partial JIT transfer aborts the session without consuming unrelated arm payloads");
+  // PE abortRenderTapeCapture clears all snapshot owners at the same terminal
+  // boundary; its next-arm snapshot pass recreates them from authoritative data.
+  partial.renderTapeCapture.abort();
+  partial.renderTapeArmSnapshots.clear();
+  check(capture_state_allocation_probe::watchedFreed &&
+            partial.renderTapeCapture.ownedBlobBytes() == 0u &&
+            partial.renderTapeCapture.publicationBundle().events.empty(),
+        "terminal PE cleanup releases unselected as well as already transferred snapshot storage");
+  capture_state_allocation_probe::watchedPointer = nullptr;
+}
+
+void testOwnedMutationFaultsAndBorrowedEquivalence() {
+  const auto bootstrap = bootstrapChunk();
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 3u, .objectId = 501u};
+  constexpr std::array<std::byte, 7u> original{
+      std::byte{1u}, std::byte{2u}, std::byte{3u}, std::byte{4u},
+      std::byte{5u}, std::byte{6u}, std::byte{7u}};
+  const D9CBufferDesc descriptor{.size = original.size()};
+  const auto setup = [&](RenderTapeCaptureSession& session) {
+    check(session.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+              session.objectDefine(identity,
+                  static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+                  std::as_bytes(std::span(&descriptor, 1u)), 0u, {}, original.size(), 1u) ==
+                  RenderTapeCaptureStatus::Accepted,
+          "owned mutation fixture defines validated complete buffer storage");
+  };
+  bool reachedSuccess = false;
+  bool sawCatalogue = false;
+  bool sawPublication = false;
+  bool sawEvent = false;
+  for (std::size_t allocation = 0u; allocation < 32u; ++allocation) {
+    RenderTapeCaptureSession session(true);
+    setup(session);
+    std::vector<std::byte> bytes(original.begin(), original.end());
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    const auto status = session.resourceMutationOwnedBytes(
+        identity, RenderTapeMutationKind::Upload, 0u, 0u, std::move(bytes));
+    capture_state_allocation_probe::failEnabled = false;
+    check(bytes.empty(), "owned mutation consumes at entry even when metadata admission throws");
+    if (status == RenderTapeCaptureStatus::Accepted) {
+      reachedSuccess = true;
+      check(session.ownedBlobBytes() == original.size() && session.eventCount() == 3u,
+            "successful owned wrapper preserves original nonzero mutation size");
+      break;
+    }
+    const auto failure = session.mutationFailure();
+    const std::string_view phase(failure.phase);
+    check(status == RenderTapeCaptureStatus::CapacityExceeded &&
+              failure.valid && failure.hasIdentity && failure.identity.objectId == identity.objectId &&
+              failure.byteSize == original.size() &&
+              std::string_view(failure.exceptionKind) == "bad_alloc" &&
+              phase != "blob_payload_copy" && phase != "blob_payload_move" &&
+              phase != "blob_digest" && session.state() == RenderTapeCaptureState::Aborted &&
+              session.ownedBlobEntries() == 0u && session.eventCount() == 0u &&
+              session.publicationBundle().events.empty() && session.sealedArtifact().empty(),
+          "owned fault sweep attributes metadata/event failures and fail-stops without payload copy or publication");
+    sawCatalogue |= phase == "blob_catalogue_append";
+    sawPublication |= phase == "blob_publication_append";
+    sawEvent |= phase == "event_append";
+  }
+  check(reachedSuccess && sawCatalogue && sawPublication && sawEvent,
+        "owned fault sweep exercises both metadata layers and event allocation");
+
+  for (const unsigned rejection : {0u, 1u, 2u}) {
+    RenderTapeCaptureSession session(true,
+        {.maxBlobEntries = rejection == 0u ? 0u : 4096u,
+         .maxBlobBytes = rejection == 1u ? 6u : kRenderTapeDefaultMaxBlobBytes});
+    setup(session);
+    auto requestedIdentity = identity;
+    if (rejection == 2u) ++requestedIdentity.objectId;
+    std::vector<std::byte> bytes(original.begin(), original.end());
+    const auto status = session.resourceMutationOwnedBytes(requestedIdentity,
+        RenderTapeMutationKind::Upload, 0u, 0u, std::move(bytes));
+    check(status == (rejection == 2u ? RenderTapeCaptureStatus::InvalidInput
+                                   : RenderTapeCaptureStatus::CapacityExceeded) &&
+              bytes.empty() && session.state() == RenderTapeCaptureState::Aborted &&
+              session.mutationFailure().byteSize == original.size() &&
+              std::string_view(session.mutationFailure().exceptionKind) == "none",
+          "owned explicit limits and event validation rejection retain original extent and abort");
+  }
+  RenderTapeCaptureSession borrowed(true);
+  RenderTapeCaptureSession owned(true);
+  setup(borrowed);
+  setup(owned);
+  std::vector<std::byte> durable(original.begin(), original.end());
+  const auto* durablePointer = durable.data();
+  auto transferred = durable;
+  check(borrowed.resourceMutationBytes(identity, RenderTapeMutationKind::Upload,
+            0u, 0u, durable) == RenderTapeCaptureStatus::Accepted &&
+            owned.resourceMutationOwnedBytes(identity, RenderTapeMutationKind::Upload,
+                0u, 0u, std::move(transferred)) == RenderTapeCaptureStatus::Accepted &&
+            transferred.empty() && durable.data() == durablePointer &&
+            std::equal(durable.begin(), durable.end(), original.begin(), original.end()),
+        "durable borrowed fallback remains byte-identical and is never consumed");
+  const auto finish = [&](RenderTapeCaptureSession& session) {
+    const auto output = outputSurfaceDescriptor();
+    const auto present = presentChunk();
+    const auto attachment = oracle();
+    check(session.objectDefine(kSurface,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              std::as_bytes(std::span(&output, 1u)), 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+              session.commandChunk(CommandChunkEnvelope{.recordCount = 1u}, present) ==
+                  RenderTapeCaptureStatus::Accepted &&
+              session.completePresent(session.eventCount(), 1u,
+                  RenderTapeDigestValidity::NotCaptured, {},
+                  std::as_bytes(std::span(&attachment, 1u))) == RenderTapeCaptureStatus::Complete,
+          "both mutation ownership paths seal the complete canonical reference frame");
+  };
+  finish(borrowed);
+  finish(owned);
+  check(borrowed.publicationBundle().events == owned.publicationBundle().events &&
+            borrowed.publicationBundle().blobs.size() == 1u &&
+            owned.publicationBundle().blobs.size() == 1u &&
+            owned.publicationBundle().blobs[0].bytes == durable &&
+            owned.publicationBundle().blobs[0].digest == RenderTapeCaptureSession::sha256(durable),
+        "owned mutation independently rehashes original bytes and preserves borrowed events/publication");
 }
 
 void testConsumingArmBlobOwnershipAndEquivalence() {
@@ -6367,6 +6756,9 @@ int main(int argc, char** argv) {
     testFailureBeforePublishAndBoundedBackpressure();
     testArmFailureProvenanceAndAbortRelease();
     testMutationFailureProvenanceAndFaults();
+    testArmSnapshotTransferGuardExhaustive();
+    testSelectiveArmTransferAndOwnedMutation();
+    testOwnedMutationFaultsAndBorrowedEquivalence();
     testConsumingArmBlobOwnershipAndEquivalence();
     testBoundedBlobBytesAndDeduplication();
     testRenderTapeBlobCapacityResolverTruthTable();

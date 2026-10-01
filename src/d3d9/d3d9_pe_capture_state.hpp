@@ -42,6 +42,55 @@ struct RenderTapeArmObjectSnapshot {
   std::vector<std::vector<std::byte>> content{};
 };
 
+enum class RenderTapeArmContentTransferDisposition : std::uint8_t {
+  Borrowed,
+  OwnedSnapshot,
+  AlreadyAdmitted,
+  InvalidSnapshot,
+};
+
+// A call-local capability, not a retained payload view. Only a selected,
+// current, generation-qualified arm owner can surrender bytes. Descriptors,
+// snapshot records and unselected payloads remain owned by the arm boundary.
+struct RenderTapeArmContentTransferSelection {
+  RenderTapeArmContentTransferDisposition disposition =
+      RenderTapeArmContentTransferDisposition::Borrowed;
+  std::span<std::vector<std::byte>> content{};
+
+  std::vector<std::byte>* payload(std::size_t subresource) const noexcept {
+    return disposition == RenderTapeArmContentTransferDisposition::OwnedSnapshot &&
+                   subresource < content.size()
+        ? &content[subresource] : nullptr;
+  }
+};
+
+inline RenderTapeArmContentTransferSelection selectRenderTapeArmContentTransfer(
+    RenderTapeArmObjectSnapshot* snapshot,
+    const D9CWireObjectIdentity& identity, std::uint64_t activeOrdinal,
+    const dxmt9::d3d9::RenderTapeArmObjectSnapshotOverlaySelection& selected,
+    bool admitted) noexcept {
+  using Disposition = RenderTapeArmContentTransferDisposition;
+  using Source = dxmt9::d3d9::RenderTapeArmSnapshotOverlaySource;
+  if (admitted)
+    return {.disposition = Disposition::AlreadyAdmitted};
+  if (selected.source != Source::CurrentArm)
+    return {.disposition = selected.source == Source::StaleArm
+                ? Disposition::InvalidSnapshot : Disposition::Borrowed};
+  if (!snapshot || identity.generation == 0u || identity.objectId == 0u ||
+      identity.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+      snapshot->identity.kind != identity.kind ||
+      snapshot->identity.generation != identity.generation ||
+      snapshot->identity.objectId != identity.objectId ||
+      !dxmt9::d3d9::renderTapeArmSnapshotEpochMatches(
+          snapshot->armOrdinal, activeOrdinal) ||
+      selected.descriptor.data() != snapshot->descriptor.data() ||
+      selected.descriptor.size() != snapshot->descriptor.size() ||
+      selected.content.data() != snapshot->content.data() ||
+      selected.content.size() != snapshot->content.size())
+    return {.disposition = Disposition::InvalidSnapshot};
+  return {.disposition = Disposition::OwnedSnapshot, .content = snapshot->content};
+}
+
 enum class RenderTapeObjectRegistration : std::uint8_t {
   Rejected,
   Existing,

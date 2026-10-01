@@ -100,6 +100,11 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             detail ? detail : "unknown");
     };
     try {
+        struct PendingContentTransfer {
+            std::vector<std::byte> *source = nullptr;
+            std::size_t blobIndex = 0u;
+        };
+        std::vector<PendingContentTransfer> pendingContentTransfers;
         dxmt9::d3d9::pe::CommandChunkBuilder builder({
             .records = dxmt9::d3d9::pe::kRenderTapeBootstrapMaxRecords,
             .handles = 256u,
@@ -500,6 +505,22 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             }
             const auto effectiveDescriptor = armOverlay.descriptor;
             const auto effectiveContent = armOverlay.content;
+            const auto contentTransfer = selectRenderTapeArmContentTransfer(
+                armSnapshot != peCaptureState_->renderTapeArmSnapshots.end()
+                    ? &*armSnapshot : nullptr,
+                object->identity, peCaptureState_->renderTapeArmSnapshotOrdinal,
+                armOverlay, renderTapeObjectAdmitted(object->identity));
+            if (contentTransfer.disposition ==
+                    RenderTapeArmContentTransferDisposition::InvalidSnapshot ||
+                contentTransfer.disposition ==
+                    RenderTapeArmContentTransferDisposition::AlreadyAdmitted) {
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture producer aborted reason=content_transfer_owner "
+                    "kind=%u generation=%u object_id=%llu",
+                    object->identity.kind, object->identity.generation,
+                    static_cast<unsigned long long>(object->identity.objectId));
+                return false;
+            }
             exceptionDescriptorBytes = effectiveDescriptor.size();
             exceptionContentCount = effectiveContent.size();
             exceptionPhase = "object_descriptor_copy";
@@ -649,17 +670,29 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                         return false;
                     }
                     exceptionPhase = "content_digest";
+                    const auto contentBytes = static_cast<std::uint64_t>(bytes.size());
                     const auto digest =
                         dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes);
-                    exceptionPhase = "content_blob_copy";
-                    seed.blobs.push_back({.bytes = bytes});
+                    if (auto *ownedBytes = contentTransfer.payload(subresource)) {
+                        // Stage every allocating/validating operation first.
+                        // No snapshot is consumed until the complete seed is
+                        // valid and every metadata slot below already exists.
+                        exceptionPhase = "content_transfer_stage";
+                        seed.blobs.emplace_back();
+                        pendingContentTransfers.push_back({
+                            .source = ownedBytes,
+                            .blobIndex = seed.blobs.size() - 1u});
+                    } else {
+                        exceptionPhase = "content_blob_copy";
+                        seed.blobs.push_back({.bytes = bytes});
+                    }
                     exceptionPhase = "content_mutation_append";
                     seed.mutations.push_back({
                         .identity = object->identity,
                         .kind = dxmt9::d3d9::RenderTapeMutationKind::Upload,
                         .subresource = subresource,
                         .byteOffset = 0u,
-                        .byteSize = bytes.size(),
+                        .byteSize = contentBytes,
                         .digest = digest,
                     });
                 }
@@ -687,6 +720,12 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             "mutations=%zu blobs=%zu oracle_attachments=%zu",
             seed.objects.size(), seed.mutations.size(), seed.blobs.size(),
             seed.oracleAttachments.size());
+        // Serialized owner: neither the snapshot outer slots nor seed blob
+        // indices changed after staging. These swaps cannot allocate/fail.
+        // Any later arm failure aborts the interval; it cannot reuse the now
+        // consumed snapshots as complete same-interval seed evidence.
+        for (const auto &transfer : pendingContentTransfers)
+            seed.blobs[transfer.blobIndex].bytes.swap(*transfer.source);
         return true;
     } catch (const std::bad_alloc &exception) {
         logProducerException("bad_alloc", exception.what());

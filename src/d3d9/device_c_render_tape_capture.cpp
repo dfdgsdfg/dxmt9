@@ -479,11 +479,28 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerVerifiedBlob(
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
     std::span<const std::byte> bytes, RenderTapeDigest* digestOut) {
+  return registerBlobStorage(bytes, digestOut, nullptr);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::registerOwnedBlobBytes(
+    std::vector<std::byte>&& bytes, RenderTapeDigest* digestOut) {
+  std::vector<std::byte> owned;
+  owned.swap(bytes);
+  const auto status = registerBlobStorage(owned, digestOut, &owned);
+  if (status != RenderTapeCaptureStatus::Accepted && enabled_)
+    abortInternal();
+  return status;
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobStorage(
+    std::span<const std::byte> bytes, RenderTapeDigest* digestOut,
+    std::vector<std::byte>* transferredBytes) {
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
   mutationFailure_ = {};
-  auto context = mutationFailureContext("register_blob_bytes");
+  auto context = mutationFailureContext(
+      transferredBytes ? "register_owned_blob_bytes" : "register_blob_bytes");
   context.byteSize = bytes.size();
   const auto fail = [&](RenderTapeCaptureStatus status, const char* reason,
                         const char* exception = "none") {
@@ -532,11 +549,20 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
     }
   }
   try {
-    context.phase = "blob_payload_copy";
-    RenderTapePublishedBlob owned{
-        .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())};
-    context.phase = "blob_publication_append";
-    publishedBlobs_.push_back(std::move(owned));
+    if (transferredBytes) {
+      // All potentially throwing metadata admission precedes the payload
+      // transfer. The original bytes are hashed above, never a caller digest.
+      context.phase = "blob_publication_append";
+      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest});
+      context.phase = "blob_payload_move";
+      publishedBlobs_.back().bytes.swap(*transferredBytes);
+    } else {
+      context.phase = "blob_payload_copy";
+      RenderTapePublishedBlob owned{
+          .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())};
+      context.phase = "blob_publication_append";
+      publishedBlobs_.push_back(std::move(owned));
+    }
     blobBytes_ += incomingBytes;
   } catch (...) {
     if (!alreadyCatalogued && !catalogue_.blobs.empty()) {
@@ -574,6 +600,35 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationBytes(
       identity, kind, subresource, byteOffset, bytes.size(),
       std::span<const std::byte, kRenderTapeDigestSize>(digest),
       bufferDisposition);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationOwnedBytes(
+    const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
+    std::uint32_t subresource, std::uint64_t byteOffset,
+    std::vector<std::byte>&& bytes,
+    RenderTapeBufferMutationDisposition bufferDisposition) {
+  const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
+  RenderTapeDigest digest{};
+  const auto blobStatus = registerOwnedBlobBytes(std::move(bytes), &digest);
+  if (blobStatus != RenderTapeCaptureStatus::Accepted) {
+    if (mutationFailure_.valid) {
+      mutationFailure_.hasIdentity = true;
+      mutationFailure_.identity = identity;
+      mutationFailure_.kind = kind;
+      mutationFailure_.bufferDisposition = bufferDisposition;
+      mutationFailure_.subresource = subresource;
+      mutationFailure_.byteOffset = byteOffset;
+      mutationFailure_.byteSize = incomingBytes;
+      mutationFailure_.eventPayloadBytes = sizeof(RenderTapeResourceMutationHeader);
+    }
+    return blobStatus;
+  }
+  const auto status = resourceMutation(
+      identity, kind, subresource, byteOffset, incomingBytes, digest,
+      bufferDisposition);
+  if (status != RenderTapeCaptureStatus::Accepted && enabled_)
+    abortInternal();
+  return status;
 }
 
 RenderTapeCaptureMutationFailure RenderTapeCaptureSession::mutationFailureContext(

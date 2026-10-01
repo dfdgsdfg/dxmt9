@@ -618,6 +618,18 @@ failure. Digest computation must use bounded scratch independent of input
 extent. Arm snapshots needed by later JIT materialization remain owned until
 their existing lifetime boundary; consuming bootstrap seeds must not drain them.
 
+For an exact current-arm identity selected for bootstrap or JIT admission,
+snapshot-owned payloads may instead transfer to the staged seed/session without
+copying. Unselected snapshots and mutable durable-registry storage must remain
+untouched. Snapshot identity, arm ordinal and descriptor authority survive
+payload transfer, including completed-EVENT polling authority. The transfer
+must either finish that identity's admission or abort the whole capture
+interval; a partially drained snapshot must never authorize same-interval
+retry or completeness. Repeated references to an admitted identity reuse its
+session-owned bytes. A new arm reconstructs snapshots after abort. The actual
+transfer predicate and failure transitions require bounded native coverage;
+pointer conservation proves ownership behavior, not byte authenticity.
+
 The capture owner must also enforce an overflow-safe total owned-blob byte
 budget before hashing or copying a new blob. The capture-only production
 default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`
