@@ -1313,6 +1313,28 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
             produced ? 1 : 0, static_cast<unsigned>(armStatus),
             static_cast<unsigned>(intervalStatus), seed.objects.size(),
             seed.mutations.size(), seed.blobs.size());
+        if (produced) {
+            const auto &failure = peCaptureState_->renderTapeCapture.armFailure();
+            const auto &limits = peCaptureState_->renderTapeCapture.limits();
+            dxmt9DeviceInfoLog(
+                "render_tape_capture arm_failure reason=%s exception_kind=%s "
+                "layer=%s phase=%s blob_index=%llu blob_bytes=%llu "
+                "input_blob_count=%llu unique_blob_count=%llu cumulative_blob_bytes=%llu "
+                "event_payload_bytes=%llu event_count=%llu event_bytes=%llu "
+                "max_blob_entries=%u max_blob_bytes=%llu max_events=%u max_event_bytes=%llu",
+                failure.reason, failure.exceptionKind, failure.layer, failure.phase,
+                static_cast<unsigned long long>(failure.blobIndex),
+                static_cast<unsigned long long>(failure.blobBytes),
+                static_cast<unsigned long long>(failure.inputBlobCount),
+                static_cast<unsigned long long>(failure.uniqueBlobCount),
+                static_cast<unsigned long long>(failure.cumulativeBlobBytes),
+                static_cast<unsigned long long>(failure.eventPayloadBytes),
+                static_cast<unsigned long long>(failure.eventCount),
+                static_cast<unsigned long long>(failure.eventBytes),
+                limits.maxBlobEntries,
+                static_cast<unsigned long long>(limits.maxBlobBytes), limits.maxEvents,
+                static_cast<unsigned long long>(limits.maxEventBytes));
+        }
         abortRenderTapeCapture("arm_validation");
         return false;
     }

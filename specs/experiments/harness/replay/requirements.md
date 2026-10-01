@@ -593,6 +593,13 @@ failed validation, missing/rejecting publisher, or producer failure aborts the
 interval without exposing a partial artifact. The producer must not recover
 bytes by retaining or dereferencing stale COM pointers.
 
+Abort must release session-owned blob payloads, object descriptors, catalogue,
+event builder and unpublished artifact storage before a retry can build its
+next snapshot. Live byte/count accounting must describe retained storage, not
+report zero while old payloads remain owned. Failure attribution may preserve
+pre-release extents as value-only diagnostics; it must not keep those payloads
+alive. Resetting the builder must preserve the selected capture profile.
+
 The capture owner must also enforce an overflow-safe total owned-blob byte
 budget before hashing or copying a new blob. The capture-only production
 default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`

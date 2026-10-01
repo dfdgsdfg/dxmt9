@@ -269,6 +269,22 @@ after several managed texture snapshots, before bootstrap. Its exception type
 and exact throwing operation are not yet identified; process RSS alone does
 not prove allocation/address-space exhaustion. The process was deliberately
 terminated after repetition, with no published Tape or FPS qualification.
+Retry `app-d3d9-stkcop-bench-tape-h430-query-volume-11` on `516c3f25`
+does not reproduce the arm-snapshot exception. Snapshots and bootstrap complete,
+but session arming repeatedly returns `CapacityExceeded` (`arm_status=5`,
+`produced=1`, four seed blobs). Both `armWithBlobs` and its nested `arm` map
+allocation exceptions to that same status, so this evidence does not yet
+distinguish a configured limit from an allocation failure. The runner was
+deliberately terminated after repetition; no Tape was published. Cold failure
+provenance must cover both layers before attributing or changing storage.
+Both arm layers now report allocation-free failure provenance distinguishing
+explicit limits from typed exceptions and identifying the failing phase.
+Terminal abort releases capture-owned payloads and builder storage before
+retry, preserving only value diagnostics. Native capture/tape tests pass (2/2),
+including allocation-failure sweeps and abort deallocation checks; PE32, PE64,
+and the canonical Unix build pass. This fixes an independent retry-retention
+bug, not the unexplained first-attempt failure in capture 11. A new workload
+capture remains required to identify that failure and qualify the original Tape.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

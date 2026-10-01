@@ -768,7 +768,7 @@ replayPrevalidatedRenderTape(const ImportedRenderTapeView& tape,
 class RenderTapeBuilder {
 public:
   explicit RenderTapeBuilder(
-      std::uint32_t profile = kRenderTapeProfileFrame) : profile_(profile) {}
+      std::uint32_t profile = kRenderTapeProfileFrame) noexcept : profile_(profile) {}
 
   // Copies an already validated event payload verbatim. seal() still rebuilds
   // event ordinals, offsets, padding, and presentCount canonically.

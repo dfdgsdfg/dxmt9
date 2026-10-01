@@ -773,12 +773,15 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
     if (!peCaptureState_)
         return;
     const auto &limits = peCaptureState_->renderTapeCapture.limits();
+    const auto &aborted = peCaptureState_->renderTapeCapture.lastAbortAccounting();
     dxmt9DeviceInfoLog(
         "render_tape_capture mutation_reject reason=%s detail=%s status=%u "
         "capture_state=%u kind=%u generation=%u object_id=%llu "
         "subresource=%u bytes=%llu live_object=%d event_count=%u/%u "
         "buffered_bytes=%llu/%llu owned_blob_bytes=%llu/%llu "
-        "owned_blob_entries=%u/%u",
+        "owned_blob_entries=%u/%u last_abort_valid=%d last_abort_event_count=%llu "
+        "last_abort_event_bytes=%llu last_abort_blob_count=%llu "
+        "last_abort_blob_bytes=%llu last_abort_object_count=%llu",
         reason, detail, static_cast<unsigned>(status),
         static_cast<unsigned>(peCaptureState_->renderTapeCapture.state()),
         object.identity.kind, object.identity.generation,
@@ -791,7 +794,13 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
         static_cast<unsigned long long>(
             peCaptureState_->renderTapeCapture.ownedBlobBytes()),
         static_cast<unsigned long long>(limits.maxBlobBytes),
-        peCaptureState_->renderTapeCapture.ownedBlobEntries(), limits.maxBlobEntries);
+        peCaptureState_->renderTapeCapture.ownedBlobEntries(), limits.maxBlobEntries,
+        aborted.valid ? 1 : 0,
+        static_cast<unsigned long long>(aborted.eventCount),
+        static_cast<unsigned long long>(aborted.eventBytes),
+        static_cast<unsigned long long>(aborted.blobCount),
+        static_cast<unsigned long long>(aborted.blobBytes),
+        static_cast<unsigned long long>(aborted.objectCount));
 }
 
 bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
@@ -1004,8 +1013,7 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     } else if (incomplete) {
         // Keep the diagnostic index identical to the existing rejection
         // below: a count mismatch with no empty slot reports content.size().
-        const auto missingSubresource = static_cast<std::uint32_t>(
-            firstMissing - object->content.begin());
+        const auto missingSubresource = firstMissingSubresource;
         dxmt9::d3d9::RenderTapeOriginLocator locator{};
         locator.originIdentity = identity;
         locator.resolvedIdentity = identity;

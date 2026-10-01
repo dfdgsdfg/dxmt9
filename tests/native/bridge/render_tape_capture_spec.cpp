@@ -28,14 +28,31 @@ namespace capture_state_allocation_probe {
 
 bool enabled = false;
 std::size_t count = 0u;
+bool failEnabled = false;
+std::size_t failAfter = 0u;
+std::size_t watchSize = 0u;
+void* watchedPointer = nullptr;
+bool watchedFreed = false;
 
 } // namespace capture_state_allocation_probe
 
 void* operator new(std::size_t size) {
+  if (capture_state_allocation_probe::failEnabled) {
+    if (capture_state_allocation_probe::failAfter == 0u) {
+      capture_state_allocation_probe::failEnabled = false;
+      throw std::bad_alloc();
+    }
+    --capture_state_allocation_probe::failAfter;
+  }
   if (capture_state_allocation_probe::enabled)
     ++capture_state_allocation_probe::count;
-  if (void* value = std::malloc(size))
+  if (void* value = std::malloc(size)) {
+    if (size == capture_state_allocation_probe::watchSize) {
+      capture_state_allocation_probe::watchedPointer = value;
+      capture_state_allocation_probe::watchedFreed = false;
+    }
     return value;
+  }
   throw std::bad_alloc();
 }
 
@@ -44,6 +61,8 @@ void* operator new[](std::size_t size) {
 }
 
 void operator delete(void* value) noexcept {
+  if (value && value == capture_state_allocation_probe::watchedPointer)
+    capture_state_allocation_probe::watchedFreed = true;
   std::free(value);
 }
 
@@ -3373,6 +3392,143 @@ void testFailureBeforePublishAndBoundedBackpressure() {
   check(failed.sealedArtifact().empty(), "failed sealing has no partial tape");
 }
 
+void testArmFailureProvenanceAndAbortRelease() {
+  const auto bootstrap = bootstrapChunk();
+  const std::array<RenderTapeCaptureBlob, 2u> blobs{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(3u, std::byte{1u})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(2u, std::byte{2u})}};
+  RenderTapeCaptureSession bytesLimited(true, {.maxBlobBytes = 4u});
+  check(bytesLimited.armWithBlobs(bootstrap, blobs) ==
+            RenderTapeCaptureStatus::CapacityExceeded,
+        "arm provenance fixture hits unchanged blob byte limit");
+  const auto byteFailure = bytesLimited.armFailure();
+  check(std::string_view(byteFailure.reason) == "blob_byte_limit" &&
+            std::string_view(byteFailure.exceptionKind) == "none" &&
+            std::string_view(byteFailure.layer) == "arm_with_blobs" &&
+            byteFailure.blobIndex == 1u && byteFailure.blobBytes == 2u &&
+            byteFailure.uniqueBlobCount == 1u &&
+            byteFailure.cumulativeBlobBytes == 3u &&
+            bytesLimited.limits().maxBlobBytes == 4u,
+        "explicit blob limit is separate from exceptions with exact prior/incoming extents");
+  RenderTapeCaptureSession entriesLimited(true, {.maxBlobEntries = 1u});
+  check(entriesLimited.armWithBlobs(bootstrap, blobs) ==
+            RenderTapeCaptureStatus::CapacityExceeded &&
+            std::string_view(entriesLimited.armFailure().reason) == "blob_entry_limit" &&
+            entriesLimited.armFailure().blobIndex == 1u,
+        "explicit unique entry count limit has its own arm provenance");
+  RenderTapeCaptureSession eventsLimited(true, {.maxEvents = 0u});
+  check(eventsLimited.armWithBlobs(bootstrap, blobs) ==
+            RenderTapeCaptureStatus::CapacityExceeded,
+        "wrapper fixture delegates to unchanged bootstrap event reserve limit");
+  const auto eventFailure = eventsLimited.armFailure();
+  check(std::string_view(eventFailure.reason) == "event_count_limit" &&
+            std::string_view(eventFailure.layer) == "arm" &&
+            std::string_view(eventFailure.phase) == "bootstrap_event_reserve" &&
+            std::string_view(eventFailure.exceptionKind) == "none" &&
+            eventFailure.inputBlobCount == 2u && eventFailure.uniqueBlobCount == 2u &&
+            eventFailure.cumulativeBlobBytes == 5u &&
+            eventFailure.eventPayloadBytes ==
+                sizeof(RenderTapeBootstrapHeader) + bootstrap.size(),
+        "downstream event rejection retains both exact layer and wrapper byte totals");
+  RenderTapeCaptureSession eventBytesLimited(true, {.maxEventBytes = 0u});
+  check(eventBytesLimited.arm(bootstrap) == RenderTapeCaptureStatus::CapacityExceeded &&
+            std::string_view(eventBytesLimited.armFailure().reason) == "event_byte_limit",
+        "direct arm event-byte limit is not mislabeled as allocation failure");
+  constexpr std::array<std::byte, 1u> malformed{std::byte{0u}};
+  RenderTapeCaptureSession malformedArm(true);
+  check(malformedArm.armWithBlobs(malformed, blobs) ==
+            RenderTapeCaptureStatus::CapacityExceeded &&
+            std::string_view(malformedArm.armFailure().layer) == "arm" &&
+            std::string_view(malformedArm.armFailure().phase) == "bootstrap_append" &&
+            std::string_view(malformedArm.armFailure().reason) == "exception" &&
+            std::string_view(malformedArm.armFailure().exceptionKind) == "invalid_argument",
+        "downstream canonical-overlay exception survives wrapper status translation");
+
+  bool sawDigest = false;
+  bool sawOwnedCopy = false;
+  bool sawCatalogueCopy = false;
+  bool sawBootstrapAppend = false;
+  bool reachedSuccess = false;
+  for (std::size_t allocation = 0u; allocation < 32u; ++allocation) {
+    RenderTapeCaptureSession injected(true);
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    const auto status = injected.armWithBlobs(bootstrap, blobs);
+    capture_state_allocation_probe::failEnabled = false;
+    if (status == RenderTapeCaptureStatus::Accepted) {
+      reachedSuccess = true;
+      check(std::string_view(injected.armFailure().reason) == "none",
+            "successful arm has no stale exception provenance");
+      break;
+    }
+    const auto failure = injected.armFailure();
+    check(status == RenderTapeCaptureStatus::CapacityExceeded &&
+              std::string_view(failure.reason) == "exception" &&
+              std::string_view(failure.exceptionKind) == "bad_alloc" &&
+              injected.ownedBlobBytes() == 0u &&
+              injected.publicationBundle().events.empty(),
+          "every injected allocation failure is typed without publishing partial data");
+    const std::string_view phase(failure.phase);
+    sawDigest |= phase == "blob_digest";
+    sawOwnedCopy |= phase == "owned_blob_copy";
+    sawCatalogueCopy |= phase == "catalogue_copy";
+    sawBootstrapAppend |= phase == "bootstrap_append";
+    if (std::string_view(failure.layer) == "arm")
+      check(failure.uniqueBlobCount == 2u && failure.cumulativeBlobBytes == 5u,
+            "inner allocation exception retains complete outer copied-byte accounting");
+  }
+  check(reachedSuccess && sawDigest && sawOwnedCopy && sawCatalogueCopy && sawBootstrapAppend,
+        "allocation fault sweep binds both arm layers and each large copy/append phase");
+
+  const RenderTapeCaptureBlob retained{
+      .bytes = std::vector<std::byte>(8197u, std::byte{0x35u})};
+  RenderTapeCaptureSession session(true);
+  capture_state_allocation_probe::watchSize = retained.bytes.size();
+  check(session.armWithBlobs(bootstrap, std::span(&retained, 1u)) ==
+            RenderTapeCaptureStatus::Accepted,
+        "abort release fixture retains an owned payload distinct from caller bytes");
+  capture_state_allocation_probe::watchSize = 0u;
+  check(capture_state_allocation_probe::watchedPointer &&
+            capture_state_allocation_probe::watchedPointer != retained.bytes.data() &&
+            !capture_state_allocation_probe::watchedFreed,
+        "allocation observer identifies the session-owned raw payload");
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 99u};
+  const D9CBufferDesc buffer{.size = 8197u};
+  check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+            session.objectDefine(identity,
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+                std::as_bytes(std::span(&buffer, 1u)), 0u, {}) ==
+                RenderTapeCaptureStatus::Accepted,
+        "abort release fixture retains descriptor and builder event payloads");
+  const auto previousEvents = session.eventCount();
+  const auto previousBytes = session.bufferedBytes();
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  session.abort();
+  capture_state_allocation_probe::enabled = false;
+  const auto aborted = session.lastAbortAccounting();
+  check(capture_state_allocation_probe::count == 0u &&
+            capture_state_allocation_probe::watchedFreed &&
+            session.state() == RenderTapeCaptureState::Aborted &&
+            session.ownedBlobBytes() == 0u && session.ownedBlobEntries() == 0u &&
+            session.eventCount() == 0u && session.bufferedBytes() == 0u &&
+            !session.hasLiveObject(identity) && session.sealedArtifact().empty() &&
+            aborted.valid && aborted.eventCount == previousEvents &&
+            aborted.eventBytes == previousBytes && aborted.blobCount == 1u &&
+            aborted.blobBytes == retained.bytes.size() && aborted.objectCount == 1u,
+        "abort frees payload owners allocation-free, zeros live accounting, preserves value evidence");
+  session.abort();
+  check(session.lastAbortAccounting().eventCount == previousEvents &&
+            session.armWithBlobs(bootstrap, std::span(&retained, 1u)) ==
+                RenderTapeCaptureStatus::Accepted &&
+            session.ownedBlobBytes() == retained.bytes.size() &&
+            !session.lastAbortAccounting().valid &&
+            std::string_view(session.armFailure().reason) == "none",
+        "repeated abort preserves attribution and retry restores unchanged admission");
+  capture_state_allocation_probe::watchedPointer = nullptr;
+}
+
 void testBoundedBlobBytesAndDeduplication() {
   const RenderTapeCaptureLimits limits{.maxBlobBytes = 4u};
   const std::array<RenderTapeCaptureBlob, 2u> overflowing{
@@ -5568,6 +5724,7 @@ int main(int argc, char** argv) {
     testObjectDefineValidationDetailTruthTable();
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
+    testArmFailureProvenanceAndAbortRelease();
     testBoundedBlobBytesAndDeduplication();
     testRenderTapeBlobCapacityResolverTruthTable();
     testProductionBlobDefaultIsCaptureBounded();

@@ -48,6 +48,32 @@ struct RenderTapeCaptureLimits {
   std::uint64_t maxBlobBytes = kRenderTapeDefaultMaxBlobBytes;
 };
 
+// Cold arm-failure provenance. Strings always name static storage; recording
+// a failure must not allocate or retain an exception's borrowed what() text.
+struct RenderTapeCaptureArmFailure {
+  const char* reason = "none";
+  const char* exceptionKind = "none";
+  const char* layer = "none";
+  const char* phase = "none";
+  std::uint64_t blobIndex = UINT64_MAX;
+  std::uint64_t blobBytes = 0u;
+  std::uint64_t inputBlobCount = 0u;
+  std::uint64_t uniqueBlobCount = 0u;
+  std::uint64_t cumulativeBlobBytes = 0u;
+  std::uint64_t eventPayloadBytes = 0u;
+  std::uint64_t eventCount = 0u;
+  std::uint64_t eventBytes = 0u;
+};
+
+struct RenderTapeCaptureAbortAccounting {
+  bool valid = false;
+  std::uint64_t eventCount = 0u;
+  std::uint64_t eventBytes = 0u;
+  std::uint64_t blobCount = 0u;
+  std::uint64_t blobBytes = 0u;
+  std::uint64_t objectCount = 0u;
+};
+
 // Value-only handoff for the device-owned production checkpoint and the
 // explicit injected test override. The session copies every field before the
 // producer's call returns and never retains COM/Metal objects.
@@ -228,6 +254,12 @@ public:
     return static_cast<std::uint32_t>(catalogue_.blobs.size());
   }
   const RenderTapeCaptureLimits& limits() const noexcept { return limits_; }
+  const RenderTapeCaptureArmFailure& armFailure() const noexcept {
+    return armFailure_;
+  }
+  const RenderTapeCaptureAbortAccounting& lastAbortAccounting() const noexcept {
+    return lastAbortAccounting_;
+  }
   bool hasLiveObject(const D9CWireObjectIdentity& identity) const noexcept {
     return hasObject(identity, true);
   }
@@ -277,6 +309,8 @@ private:
 
   bool enabled_ = false;
   RenderTapeCaptureLimits limits_{};
+  RenderTapeCaptureArmFailure armFailure_{};
+  RenderTapeCaptureAbortAccounting lastAbortAccounting_{};
   RenderTapeCaptureState state_ = RenderTapeCaptureState::Disabled;
   std::size_t eventCount_ = 0u;
   std::uint64_t eventBytes_ = 0u;

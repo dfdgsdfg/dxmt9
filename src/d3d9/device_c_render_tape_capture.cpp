@@ -6,7 +6,11 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <new>
+#include <stdexcept>
+#include <type_traits>
 
 namespace dxmt9::d3d9 {
 
@@ -173,24 +177,47 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     std::span<const std::byte> bootstrapOverlay,
     std::span<const RenderTapeBlob> blobs,
     std::span<const std::byte> gammaRamp) {
+  armFailure_ = {};
+  RenderTapeCaptureArmFailure context{
+      .layer = "arm", .phase = "input_validation", .inputBlobCount = blobs.size(),
+      .uniqueBlobCount = blobs.size(), .eventCount = eventCount_,
+      .eventBytes = eventBytes_};
+  for (const auto& blob : blobs) {
+    context.cumulativeBlobBytes = blob.size >
+            std::numeric_limits<std::uint64_t>::max() - context.cumulativeBlobBytes
+        ? std::numeric_limits<std::uint64_t>::max()
+        : context.cumulativeBlobBytes + blob.size;
+  }
+  const auto fail = [&](const char* reason, const char* exception = "none") {
+    context.reason = reason;
+    context.exceptionKind = exception;
+    armFailure_ = context;
+  };
   if (!enabled_) {
+    fail("disabled");
     return RenderTapeCaptureStatus::Disabled;
   }
   if (state_ != RenderTapeCaptureState::Disabled &&
       state_ != RenderTapeCaptureState::Aborted) {
+    fail("invalid_state");
     return RenderTapeCaptureStatus::InvalidState;
   }
   if (bootstrapOverlay.empty() || blobs.size() > limits_.maxBlobEntries ||
       (!gammaRamp.empty() && gammaRamp.size() != kRenderTapeGammaRampBytes)) {
+    fail(blobs.size() > limits_.maxBlobEntries ? "blob_entry_limit" : "invalid_input");
     return RenderTapeCaptureStatus::InvalidInput;
   }
   if (builder_.profile() != kRenderTapeProfileFrame &&
       builder_.profile() != kRenderTapeProfileSequence) {
+    fail("invalid_profile");
     return RenderTapeCaptureStatus::InvalidInput;
   }
 
   try {
+    context.phase = "catalogue_copy";
     catalogue_.blobs.assign(blobs.begin(), blobs.end());
+    context.phase = "session_reset";
+    lastAbortAccounting_ = {};
     publishedBlobs_.clear();
     publicationBundle_ = {};
     objects_.clear();
@@ -203,19 +230,46 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     validationStatus_ = RenderTapeValidationStatus::Valid;
     validationResult_ = RenderTapeValidationResult{
         .status = RenderTapeValidationStatus::Valid};
+    context.phase = "builder_reset";
     builder_ = RenderTapeBuilder(builder_.profile());
+    context.phase = "bootstrap_event_reserve";
+    context.eventPayloadBytes = sizeof(RenderTapeBootstrapHeader) +
+                                bootstrapOverlay.size() + gammaRamp.size();
+    context.eventCount = eventCount_;
+    context.eventBytes = eventBytes_;
     const auto status = reserveEvent(sizeof(RenderTapeBootstrapHeader) +
                                      bootstrapOverlay.size() + gammaRamp.size());
     if (status != RenderTapeCaptureStatus::Accepted) {
+      fail(eventCount_ >= limits_.maxEvents ? "event_count_limit"
+          : context.eventPayloadBytes > std::numeric_limits<std::uint64_t>::max() - eventBytes_
+              ? "event_bytes_overflow" : "event_byte_limit");
       return status;
     }
+    context.phase = "bootstrap_append";
     builder_.appendBootstrapState(bootstrapOverlay, gammaRamp);
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapeBootstrapHeader) + bootstrapOverlay.size() +
                    gammaRamp.size();
     state_ = RenderTapeCaptureState::Armed;
     return RenderTapeCaptureStatus::Accepted;
+  } catch (const std::bad_alloc&) {
+    fail("exception", "bad_alloc");
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::length_error&) {
+    fail("exception", "length_error");
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::invalid_argument&) {
+    fail("exception", "invalid_argument");
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::exception&) {
+    fail("exception", "std_exception");
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
   } catch (...) {
+    fail("exception", "unknown");
     abortInternal();
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
@@ -225,6 +279,15 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     std::span<const std::byte> bootstrapOverlay,
     std::span<const RenderTapeCaptureBlob> blobs,
     std::span<const std::byte> gammaRamp) {
+  armFailure_ = {};
+  RenderTapeCaptureArmFailure context{
+      .layer = "arm_with_blobs", .phase = "catalogue_reserve",
+      .inputBlobCount = blobs.size()};
+  const auto fail = [&](const char* reason, const char* exception = "none") {
+    context.reason = reason;
+    context.exceptionKind = exception;
+    armFailure_ = context;
+  };
   std::uint64_t totalBlobBytes = 0u;
   std::vector<RenderTapeBlob> catalogue;
   std::vector<RenderTapePublishedBlob> owned;
@@ -232,8 +295,15 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     const auto reserveCount = std::min<std::size_t>(
         blobs.size(), limits_.maxBlobEntries);
     catalogue.reserve(reserveCount);
+    context.phase = "owned_reserve";
     owned.reserve(reserveCount);
-    for (const auto& blob : blobs) {
+    for (std::size_t index = 0u; index < blobs.size(); ++index) {
+      const auto& blob = blobs[index];
+      context.blobIndex = index;
+      context.blobBytes = blob.bytes.size();
+      context.uniqueBlobCount = owned.size();
+      context.cumulativeBlobBytes = totalBlobBytes;
+      context.phase = "blob_deduplicate";
       const bool duplicate = std::any_of(
           owned.begin(), owned.end(), [&](const auto& published) {
             return published.bytes == blob.bytes;
@@ -242,28 +312,54 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
         continue;
       }
       if (owned.size() >= limits_.maxBlobEntries) {
+        context.phase = "blob_entry_admission";
+        fail("blob_entry_limit");
         return RenderTapeCaptureStatus::CapacityExceeded;
       }
       const auto blobBytes = static_cast<std::uint64_t>(blob.bytes.size());
       if (blobBytes > limits_.maxBlobBytes ||
           totalBlobBytes > limits_.maxBlobBytes - blobBytes) {
+        context.phase = "blob_byte_admission";
+        fail("blob_byte_limit");
         return RenderTapeCaptureStatus::CapacityExceeded;
       }
+      context.phase = "blob_digest";
       const auto digest = sha256(blob.bytes);
+      context.phase = "catalogue_append";
       catalogue.push_back(RenderTapeBlob{.digest = digest,
                                          .size = blob.bytes.size(),
                                          .verified = 1u});
+      context.phase = "owned_blob_copy";
       owned.push_back(RenderTapePublishedBlob{.digest = digest,
                                               .bytes = blob.bytes});
       totalBlobBytes += blobBytes;
     }
+  } catch (const std::bad_alloc&) {
+    fail("exception", "bad_alloc");
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::length_error&) {
+    fail("exception", "length_error");
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::invalid_argument&) {
+    fail("exception", "invalid_argument");
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const std::exception&) {
+    fail("exception", "std_exception");
+    return RenderTapeCaptureStatus::CapacityExceeded;
   } catch (...) {
+    fail("exception", "unknown");
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
   const auto status = arm(bootstrapOverlay, catalogue, gammaRamp);
   if (status == RenderTapeCaptureStatus::Accepted) {
     publishedBlobs_ = std::move(owned);
     blobBytes_ = totalBlobBytes;
+  } else {
+    // Preserve the downstream layer/phase/reason, while retaining the
+    // caller's raw input count and the wrapper's successfully copied totals.
+    armFailure_.inputBlobCount = blobs.size();
+    armFailure_.uniqueBlobCount = owned.size();
+    armFailure_.cumulativeBlobBytes = totalBlobBytes;
   }
   return status;
 }
@@ -816,9 +912,26 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
 }
 
 void RenderTapeCaptureSession::abortInternal() noexcept {
+  static_assert(std::is_nothrow_constructible_v<RenderTapeBuilder, std::uint32_t>);
+  static_assert(std::is_nothrow_move_assignable_v<RenderTapeBuilder>);
+  static_assert(std::is_nothrow_move_assignable_v<RenderTapePublicationBundle>);
+  if (state_ != RenderTapeCaptureState::Aborted) {
+    lastAbortAccounting_ = {
+        .valid = true, .eventCount = eventCount_, .eventBytes = eventBytes_,
+        .blobCount = catalogue_.blobs.size(), .blobBytes = blobBytes_,
+        .objectCount = objects_.size()};
+  }
   state_ = RenderTapeCaptureState::Aborted;
-  sealedArtifact_.clear();
+  // These are capture-owned CPU values, never queue/Metal backing. Release
+  // them at the terminal boundary, before a retry builds another snapshot.
+  std::vector<RenderTapePublishedBlob>{}.swap(publishedBlobs_);
+  std::vector<RenderTapeBlob>{}.swap(catalogue_.blobs);
+  std::vector<ObjectSlot>{}.swap(objects_);
+  std::vector<std::byte>{}.swap(sealedArtifact_);
+  builder_ = RenderTapeBuilder(builder_.profile());
   publicationBundle_ = {};
+  eventCount_ = 0u;
+  eventBytes_ = 0u;
   blobBytes_ = 0u;
 }
 
