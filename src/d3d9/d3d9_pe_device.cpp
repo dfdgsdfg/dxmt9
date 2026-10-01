@@ -2350,9 +2350,16 @@ HRESULT D3D9DeviceImpl::AppendQueryIssueForChild(
                           entry->query, flags, captured)) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture query rejected reason=query_uncaptured_cycle "
-                "kind=%u generation=%u object_id=%llu flags=%u",
+                "kind=%u generation=%u object_id=%llu registry_present=%d "
+                "query_type=%u issue_cycle=%llu active=%d captured_cycle=%d "
+                "flags=%u hr=0x%08x",
                 query.identity.kind, query.identity.generation,
-                static_cast<unsigned long long>(query.identity.objectId), flags);
+                static_cast<unsigned long long>(query.identity.objectId),
+                entry ? 1 : 0, entry ? entry->query.type : 0u,
+                static_cast<unsigned long long>(entry ? entry->query.issueCycle : 0u),
+                entry && entry->query.active ? 1 : 0,
+                entry && entry->query.capturedCycle ? 1 : 0,
+                flags, static_cast<unsigned>(result));
             abortRenderTapeCapture("query_uncaptured_cycle");
         } else if (!captured) {
             dxmt9::d3d9::RenderTapeQueryDescriptorV2 descriptor{

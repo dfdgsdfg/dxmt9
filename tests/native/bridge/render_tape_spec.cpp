@@ -2881,7 +2881,7 @@ void opaqueOracleAlphaIsCanonical() {
 void queryTranscriptV2PreservesCallsAndRejectsStaleCycles() {
   constexpr D9CWireObjectIdentity queryIdentity{
       .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 7u, .objectId = 901u};
-  const auto makeTape = [&](RenderTapeQueryDescriptorV2 descriptor,
+  const auto makeTape = [&](auto descriptor,
                             bool includeBegin, bool includeEnd,
                             RenderTapeQueryGetDataControlV2 observed,
                             std::int32_t hr = 0, bool reissue = false,
@@ -3064,6 +3064,131 @@ void queryTranscriptV2PreservesCallsAndRejectsStaleCycles() {
   cycle.issueCycle = std::numeric_limits<std::uint64_t>::max();
   check(!renderTapeAdvanceQueryCycle(cycle, 2u, true),
         "issue-cycle overflow fails closed");
+
+  const D9CRenderTapeEventQueryCheckpointRequest request{
+      .identity = queryIdentity, .issueCycle = 589u, .issueOrdinal = 1000u,
+      .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+      .queryType = 8u,
+  };
+  const D9CRenderTapeEventQueryCheckpointResult proof{
+      .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+      .status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_COMPLETE,
+      .queryType = 8u, .identity = queryIdentity, .issueCycle = 589u,
+      .coreQueryIdentity = 71u, .deviceEpoch = 4u, .issueOrdinal = 1000u,
+      .rawOrdinal = 901u, .queueIdentity = 27u, .endSequence = 50u,
+      .initializerSequence = 3u, .completedSequence = 50u,
+      .completedInitializer = 3u,
+  };
+  RenderTapeQueryDescriptorV3 checkpoint{
+      .initialIssueCycle = 589u, .checkpoint = proof};
+  RenderTapeQueryDescriptorDecoded normalized{};
+  const auto checkpointBytes = std::as_bytes(std::span(&checkpoint, 1u));
+  check(renderTapeEventQueryCheckpointResultMatches(request, proof) &&
+            renderTapeLoadQueryDescriptor(checkpointBytes, normalized) &&
+            renderTapeQueryDescriptorIdentityMatches(normalized, queryIdentity) &&
+            !renderTapeLoadQueryDescriptorV2(checkpointBytes, decodedDescriptor),
+        "V3 completed EVENT checkpoint decodes explicitly without widening V2");
+  auto eventPoll = eventReady;
+  eventPoll.issueCycle = 589u;
+  eventPoll.definedBytes = 0u;
+  check(validateRenderTape(makeTape(checkpoint, false, false, eventPoll), catalogue)
+            .valid(),
+        "V3 checkpoint authorizes exact old-cycle EVENT poll without fabricated Issue");
+  auto checkpointCycle = renderTapeInitialQueryCycle(normalized);
+  check(!checkpointCycle.capturedCycle && checkpointCycle.completedEventCheckpoint &&
+            checkpointCycle.issueOrdinal == 1000u &&
+            renderTapeQueryPollCycleAdmitted(checkpointCycle, 589u, 0) &&
+            renderTapeEventQueryCheckpointMatchesCycle(
+                normalized, queryIdentity, checkpointCycle),
+        "checkpoint provenance is separate from captured Issue history");
+  auto staleCheckpointCycle = checkpointCycle;
+  ++staleCheckpointCycle.issueOrdinal;
+  check(!renderTapeEventQueryCheckpointMatchesCycle(
+            normalized, queryIdentity, staleCheckpointCycle),
+        "arm checkpoint cannot authorize another public Issue ordinal");
+  staleCheckpointCycle = checkpointCycle;
+  staleCheckpointCycle.active = true;
+  check(!renderTapeEventQueryCheckpointMatchesCycle(
+            normalized, queryIdentity, staleCheckpointCycle),
+        "completed EVENT checkpoint cannot authorize an open BEGIN");
+  check(renderTapeAdvanceQueryCycle(checkpointCycle, 1u, true) &&
+            checkpointCycle.issueCycle == 590u && checkpointCycle.issueOrdinal == 1001u &&
+            checkpointCycle.capturedCycle && !checkpointCycle.completedEventCheckpoint &&
+            !renderTapeQueryPollCycleAdmitted(checkpointCycle, 589u, 0),
+        "END-only reissue replaces checkpoint authority transactionally");
+  eventPoll.issueCycle = 590u;
+  check(validateRenderTape(makeTape(checkpoint, false, true, eventPoll), catalogue)
+            .valid(), "captured replacement EVENT END preserves absolute cycle");
+  eventPoll.issueCycle = 589u;
+  check(validateRenderTape(makeTape(checkpoint, false, true, eventPoll), catalogue)
+            .status == RenderTapeValidationStatus::QueryUncapturedCycle,
+        "old checkpoint poll is stale after captured replacement END");
+  auto forgedV2 = event;
+  forgedV2.initialState = static_cast<std::uint32_t>(
+      RenderTapeQueryInitialState::CompletedEventCheckpoint);
+  forgedV2.initialIssueCycle = 589u;
+  check(!renderTapeLoadQueryDescriptorV2(
+            std::as_bytes(std::span(&forgedV2, 1u)), decodedDescriptor) &&
+            !renderTapeLoadQueryDescriptor(
+                std::as_bytes(std::span(&forgedV2, 1u)), normalized),
+        "V2 cannot reuse its initial state field for a checkpoint");
+  for (unsigned mutation = 0u; mutation < 15u; ++mutation) {
+    auto invalid = checkpoint;
+    if (mutation == 0u) invalid.schemaVersion = 2u;
+    if (mutation == 1u) invalid.type = 9u;
+    if (mutation == 2u) invalid.dataBytes = 8u;
+    if (mutation == 3u) invalid.initialState = 1u;
+    if (mutation == 4u) --invalid.initialIssueCycle;
+    if (mutation == 5u) invalid.checkpoint.active = 1u;
+    if (mutation == 6u) invalid.checkpoint.status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_PENDING;
+    if (mutation == 7u) invalid.checkpoint.resultCode = 1;
+    if (mutation == 8u) invalid.checkpoint.deviceEpoch = 0u;
+    if (mutation == 9u) invalid.checkpoint.coreQueryIdentity = 0u;
+    if (mutation == 10u) invalid.checkpoint.rawOrdinal = 0u;
+    if (mutation == 11u) invalid.checkpoint.queueIdentity = 0u;
+    if (mutation == 12u) --invalid.checkpoint.completedSequence;
+    if (mutation == 13u) --invalid.checkpoint.completedInitializer;
+    if (mutation == 14u) invalid.checkpoint.reserved0 = 1u;
+    check(!renderTapeLoadQueryDescriptor(
+              std::as_bytes(std::span(&invalid, 1u)), normalized) &&
+              normalized.schemaVersion == 0u &&
+              validateRenderTape(makeTape(invalid, false, false, eventPoll), catalogue)
+                  .status == RenderTapeValidationStatus::InvalidQueryTranscript,
+          "malformed, active, Pending, early, or unauthenticated EVENT checkpoints reject");
+  }
+  auto foreign = checkpoint;
+  ++foreign.checkpoint.identity.generation;
+  check(validateRenderTape(makeTape(foreign, false, false, eventPoll), catalogue)
+            .status == RenderTapeValidationStatus::InvalidQueryTranscript,
+        "checkpoint wire identity must match exact ObjectDefine generation");
+  auto staleProof = proof;
+  --staleProof.issueOrdinal;
+  check(!renderTapeEventQueryCheckpointResultMatches(request, staleProof),
+        "capture result for a prior public Issue ordinal cannot seed the arm");
+  auto emptyPrefix = checkpoint;
+  emptyPrefix.checkpoint.endSequence = 0u;
+  emptyPrefix.checkpoint.initializerSequence = 0u;
+  emptyPrefix.checkpoint.completedSequence = 0u;
+  emptyPrefix.checkpoint.completedInitializer = 0u;
+  check(validateRenderTape(makeTape(emptyPrefix, false, false, eventPoll), catalogue)
+            .valid(), "authenticated completed empty-prefix EVENT permits END sequence zero");
+  RenderTapeQueryCycleState beginEnd{.type = 8u};
+  check(renderTapeAdvanceQueryCycle(beginEnd, 2u, false) &&
+            beginEnd.issueCycle == 1u && beginEnd.issueOrdinal == 1u && beginEnd.active &&
+            renderTapeAdvanceQueryCycle(beginEnd, 1u, false) &&
+            beginEnd.issueCycle == 1u && beginEnd.issueOrdinal == 2u && !beginEnd.active,
+        "EVENT BEGIN+END advances two public ordinals but one cycle");
+  RenderTapeQueryCycleState endOnly{.type = 8u};
+  check(renderTapeAdvanceQueryCycle(endOnly, 1u, false) &&
+            endOnly.issueCycle == 1u && endOnly.issueOrdinal == 1u,
+        "EVENT END-only advances one public ordinal and one cycle");
+  endOnly.issueOrdinal = std::numeric_limits<std::uint64_t>::max();
+  const auto beforeOverflow = endOnly;
+  check(!renderTapeAdvanceQueryCycle(endOnly, 1u, true) &&
+            endOnly.issueCycle == beforeOverflow.issueCycle &&
+            endOnly.issueOrdinal == beforeOverflow.issueOrdinal &&
+            endOnly.capturedCycle == beforeOverflow.capturedCycle,
+        "public Issue ordinal overflow rejects without changing cycle authority");
 }
 
 } // namespace

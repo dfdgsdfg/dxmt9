@@ -160,6 +160,8 @@ void testPendingCompletionReissueLifetimeAndFailure() {
   upper->progress.completed = upper->progress.published;
   checkEq(device->pollQuerySnapshot(snapshot, &value, sizeof(value), 0), S_OK,
           "completed snapshot poll");
+  check(device->queryPollSnapshotCurrent(snapshot),
+        "successful poll retains current capture control epoch");
   checkEq(value, 1ull, "snapshot copied resolved value");
 
   const auto oldReceipt = snapshot.backendFence.snapshot();
@@ -192,6 +194,8 @@ void testPendingCompletionReissueLifetimeAndFailure() {
   checkEq(value, 0xfeedfaceu, "backend failure preserves output");
   upper->progress.failed = false;
   checkEq(device->reset(testParams()), D3D_OK, "reset after snapshot");
+  check(!device->queryPollSnapshotCurrent(snapshot),
+        "Reset after S_OK but before final capture check rejects old epoch");
   value = 0xfeedfaceu;
   checkEq(device->pollQuerySnapshot(snapshot, &value, sizeof(value), 0),
           D3DERR_DEVICELOST, "stale epoch fails closed");

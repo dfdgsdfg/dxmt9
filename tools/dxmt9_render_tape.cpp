@@ -96,7 +96,7 @@ public:
   struct QueryDefinitionInspection {
     std::uint32_t event = 0u;
     D9CWireObjectIdentity identity{};
-    RenderTapeQueryDescriptorV2 descriptor{};
+    RenderTapeQueryDescriptorDecoded descriptor{};
     RenderTapeQueryCycleState cycle{};
     bool versioned = false;
   };
@@ -127,12 +127,10 @@ public:
         std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
         if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
         QueryDefinitionInspection row{.event = ordinal, .identity = fixed.identity};
-        row.versioned = renderTapeLoadQueryDescriptorV2(
-            event.payload.subspan(sizeof(fixed)), row.descriptor);
-        if (row.versioned) {
-          row.cycle.type = row.descriptor.type;
-          row.cycle.issueCycle = row.descriptor.initialIssueCycle;
-        }
+        row.versioned = renderTapeLoadQueryDescriptor(
+            event.payload.subspan(sizeof(fixed)), row.descriptor) &&
+            renderTapeQueryDescriptorIdentityMatches(row.descriptor, fixed.identity);
+        if (row.versioned) row.cycle = renderTapeInitialQueryCycle(row.descriptor);
         queryTranscriptComplete &= row.versioned;
         queryDefinitions.push_back(row);
       } else if (type == RenderTapeEventType::CommandChunk) {
@@ -174,6 +172,15 @@ public:
         if (row.versioned) {
           std::memcpy(&row.control, event.payload.data() + sizeof(fixed), sizeof(row.control));
           row.versioned = row.control.schemaVersion == kRenderTapeQueryTranscriptVersion2;
+          const auto definition = std::find_if(queryDefinitions.begin(), queryDefinitions.end(),
+              [&](const auto& value) {
+                return value.identity.kind == fixed.identity.kind &&
+                    value.identity.generation == fixed.identity.generation &&
+                    value.identity.objectId == fixed.identity.objectId;
+              });
+          row.versioned &= definition != queryDefinitions.end() && definition->versioned &&
+              renderTapeQueryPollCycleAdmitted(definition->cycle, row.control.issueCycle,
+                                              fixed.resultCode);
         }
         queryTranscriptComplete &= row.versioned;
         queryPolls.push_back(row);
@@ -1250,10 +1257,32 @@ int main(int argc, char** argv) {
       std::cout << "{\"event_ordinal\":" << row.event << ",\"identity\":";
       writeInspectionIdentity(std::cout, row.identity);
       std::cout << ",\"versioned\":" << (row.versioned ? "true" : "false")
+                << ",\"schema_version\":" << row.descriptor.schemaVersion
                 << ",\"type\":" << row.descriptor.type
                 << ",\"data_bytes\":" << row.descriptor.dataBytes
                 << ",\"initial_state\":" << row.descriptor.initialState
-                << ",\"initial_issue_cycle\":" << row.descriptor.initialIssueCycle << '}';
+                << ",\"initial_issue_cycle\":" << row.descriptor.initialIssueCycle;
+      if (row.descriptor.schemaVersion == kRenderTapeQueryDescriptorVersion3) {
+        const auto& checkpoint = row.descriptor.checkpoint;
+        std::cout << ",\"checkpoint\":{\"checkpoint_version\":" << checkpoint.checkpointVersion
+                  << ",\"status\":" << checkpoint.status
+                  << ",\"query_type\":" << checkpoint.queryType
+                  << ",\"active\":" << checkpoint.active << ",\"identity\":";
+        writeInspectionIdentity(std::cout, checkpoint.identity);
+        std::cout << ",\"issue_cycle\":" << checkpoint.issueCycle
+                  << ",\"core_query_identity\":" << checkpoint.coreQueryIdentity
+                  << ",\"device_epoch\":" << checkpoint.deviceEpoch
+                  << ",\"issue_ordinal\":" << checkpoint.issueOrdinal
+                  << ",\"raw_ordinal\":" << checkpoint.rawOrdinal
+                  << ",\"queue_identity\":" << checkpoint.queueIdentity
+                  << ",\"end_sequence\":" << checkpoint.endSequence
+                  << ",\"initializer_sequence\":" << checkpoint.initializerSequence
+                  << ",\"completed_sequence\":" << checkpoint.completedSequence
+                  << ",\"completed_initializer\":" << checkpoint.completedInitializer
+                  << ",\"result_code\":" << checkpoint.resultCode
+                  << ",\"reserved0\":" << checkpoint.reserved0 << '}';
+      }
+      std::cout << '}';
     }
     std::cout << "],\"issues\":[";
     for (std::size_t index = 0u; index < sink.queryIssues.size(); ++index) {

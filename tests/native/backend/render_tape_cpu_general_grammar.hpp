@@ -392,9 +392,11 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
           GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
       if (plan.definitions[event.index].fixed.identity.kind ==
           D9C_CHUNK_HANDLE_KIND_QUERY) {
-        RenderTapeQueryDescriptorV2 query{};
-        if (!renderTapeLoadQueryDescriptorV2(
-                plan.definitions[event.index].descriptor, query))
+        RenderTapeQueryDescriptorDecoded query{};
+        if (!renderTapeLoadQueryDescriptor(
+                plan.definitions[event.index].descriptor, query) ||
+            !renderTapeQueryDescriptorIdentityMatches(
+                query, plan.definitions[event.index].fixed.identity))
           return detail::generalCpuReject(
               GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts,
               eventIndex);

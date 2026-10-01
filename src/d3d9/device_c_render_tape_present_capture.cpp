@@ -68,6 +68,11 @@ void retainSnapshotSurface(std::uint32_t kind, void* object) noexcept {
   }
 }
 
+void retainCheckpointQuery(std::uint32_t kind, void* object) noexcept {
+  if (kind == D9C_CHUNK_HANDLE_KIND_QUERY && object)
+    dxmt9c_query_addref(static_cast<D9CQuery*>(object));
+}
+
 bool sameSurfaceDesc(const D9CSurfaceDesc& a,
                      const D9CSurfaceDesc& b) noexcept {
   return a.format == b.format && a.usage == b.usage && a.pool == b.pool &&
@@ -426,6 +431,134 @@ extern "C" int32_t dxmt9c_device_wait_for_pending_work(D9CDevice* device) {
 extern "C" void dxmt9c_device_cancel_render_tape_present_capture(
     D9CDevice* device) {
   cancelPresentCapture(device);
+}
+
+extern "C" int32_t dxmt9c_device_capture_render_tape_event_query_checkpoint(
+    D9CDevice* device, const D9CRenderTapeEventQueryCheckpointRequest* request,
+    D9CRenderTapeEventQueryCheckpointResult* out) {
+  using namespace dxmt9::d3d9;
+  namespace core = dxmt9::core;
+  using State = dxmt9::query::ReplayReceiptState;
+  if (!out) return core::D3DERR_INVALIDCALL;
+  *out = {};
+  out->status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_UNSUPPORTED;
+  if (!device || !request || request->checkpointVersion !=
+          D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1 ||
+      request->queryType != 8u || !request->issueCycle ||
+      request->issueOrdinal < request->issueCycle ||
+      request->identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY ||
+      !request->identity.generation || !request->identity.objectId)
+    return core::D3DERR_INVALIDCALL;
+  const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
+      wireHandleEntry(request->identity)}};
+  std::array<void*, 1u> resolved{};
+  if (!device->wireObjects.resolveAndRetain(entries, resolved,
+                                            retainCheckpointQuery)) {
+    out->status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_GENERATION;
+    return core::D3DERR_INVALIDCALL;
+  }
+  const auto release = [](D9CQuery* query) { dxmt9c_query_release(query); };
+  std::unique_ptr<D9CQuery, decltype(release)> query(
+      static_cast<D9CQuery*>(resolved[0]), release);
+  if (!query || query->device != device || !query->obj || !query->pollState ||
+      !query->replayDrainTarget || query->obj->type() != core::QueryType::Event ||
+      !query->pollState->checkpointTracking) return core::D3DERR_NOTAVAILABLE;
+  try {
+    auto& ledger = device->replayDrainLedger;
+    const auto receipt = ledger.captureReceipt(query->replayDrainTarget);
+    // Capture observes a recorded current issue, not an unissued/direct Query
+    // or a predicted raw ordinal. Empty GPU publication remains valid below.
+    if (!receipt.capturedSequence) return core::D3DERR_NOTAVAILABLE;
+    if (ledger.waitReceipt(receipt) != State::Ready) {
+      out->status = ledger.terminal()
+          ? D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED
+          : D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_ISSUE;
+      return core::D3DERR_DEVICELOST;
+    }
+    core::QueryPollSnapshot snapshot;
+    RenderTapeEventQueryCheckpointAuthority authority;
+    bool qualified = false;
+    const auto state = ledger.visitReadyReceipt(receipt, [&] {
+      std::lock_guard lock(query->pollState->mutex);
+      const auto& current = *query->pollState;
+      authority = renderTapeEventQueryCheckpointAuthority(
+          current.checkpointCycle, current.checkpointEpoch,
+          current.checkpointMappingValid, current.rawOrdinal, current.snapshot);
+      qualified = renderTapeEventQueryCheckpointAuthorityAdmitted(
+          request->issueCycle, request->issueOrdinal, authority,
+          receipt.capturedSequence, true) &&
+          current.snapshot.owner == &device->dev() &&
+          current.snapshot.identity == query->obj->identity();
+      if (qualified) snapshot = current.snapshot;
+    });
+    if (state != State::Ready || !qualified) {
+      out->status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_ISSUE;
+      return core::D3DERR_INVALIDCALL;
+    }
+    if (!snapshot.eligible &&
+        !device->dev().promotePublishedQueryPollSnapshot(snapshot))
+      return core::D3DERR_NOTAVAILABLE;
+    // Never FLUSH or wait an incomplete EVENT into an initial completed state.
+    const auto result = device->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
+    if (result != core::S_OK) {
+      out->status = result == core::S_FALSE
+          ? D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_PENDING
+          : D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED;
+      out->resultCode = result;
+      return result;
+    }
+    if (!snapshot.backend) return core::D3DERR_NOTAVAILABLE;
+    const auto progress = snapshot.backend->queryProgress();
+    if (dxmt9::query::classifyEnd(snapshot.backendFence, progress) !=
+        dxmt9::query::Poll::Complete) {
+      out->status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED;
+      return core::D3DERR_DEVICELOST;
+    }
+    bool stillCurrent = false;
+    const auto finalState = ledger.visitReadyReceipt(receipt, [&] {
+      std::lock_guard lock(query->pollState->mutex);
+      const auto& current = *query->pollState;
+      const auto finalAuthority = renderTapeEventQueryCheckpointAuthority(
+          current.checkpointCycle, current.checkpointEpoch,
+          current.checkpointMappingValid, current.rawOrdinal, current.snapshot);
+      stillCurrent = authority == finalAuthority &&
+          device->dev().queryPollSnapshotCurrent(snapshot) &&
+          current.snapshot.backend.get() == snapshot.backend.get() &&
+          current.snapshot.backendFence.marker == snapshot.backendFence.marker &&
+          renderTapeEventQueryCheckpointAuthorityAdmitted(
+              request->issueCycle, request->issueOrdinal, finalAuthority,
+              receipt.capturedSequence, true);
+    });
+    if (finalState != State::Ready || !stillCurrent || ledger.terminal()) {
+      out->status = ledger.terminal()
+          ? D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED
+          : D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_ISSUE;
+      return core::D3DERR_DEVICELOST;
+    }
+    D9CRenderTapeEventQueryCheckpointResult captured{
+        .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+        .status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_COMPLETE,
+        .queryType = 8u, .active = 0u, .identity = request->identity,
+        .issueCycle = authority.issueCycle,
+        .coreQueryIdentity = authority.coreQueryIdentity,
+        .deviceEpoch = authority.deviceEpoch,
+        .issueOrdinal = authority.issueOrdinal,
+        .rawOrdinal = authority.rawOrdinal, .queueIdentity = authority.queue,
+        .endSequence = authority.sequence,
+        .initializerSequence = authority.initializer,
+        .completedSequence = progress.completed,
+        .completedInitializer = progress.initializerCompleted,
+        .resultCode = result,
+        .reserved0 = 0u,
+    };
+    if (!renderTapeEventQueryCheckpointResultMatches(*request, captured))
+      return core::D3DERR_NOTAVAILABLE;
+    *out = captured;
+    return core::D3D_OK;
+  } catch (...) {
+    out->status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED;
+    return core::D3DERR_NOTAVAILABLE;
+  }
 }
 
 extern "C" int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(

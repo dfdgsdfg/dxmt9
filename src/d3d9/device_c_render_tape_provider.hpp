@@ -102,6 +102,28 @@ struct RenderTapeQueryReplayRow {
   bool supplemental = false;
 };
 
+// Initial completed EVENT import is setup, never an original transcript issue
+// or a captured GPU result comparison. Captured labels authenticate the cut;
+// only the new local END snapshot can establish replay completion authority.
+struct RenderTapeQueryCheckpointReplayRow {
+  D9CWireObjectIdentity identity{};
+  std::uint64_t capturedIssueCycle = 0u;
+  std::uint64_t capturedIssueOrdinal = 0u;
+  std::uint64_t capturedDeviceEpoch = 0u;
+  std::uint64_t localQueryIdentity = 0u;
+  std::uint64_t localIssueOrdinal = 0u;
+  std::uint64_t localDeviceEpoch = 0u;
+  std::uint64_t localQueue = 0u;
+  std::uint64_t localSequence = 0u;
+  std::uint64_t localInitializer = 0u;
+  std::uint64_t completedSequence = 0u;
+  std::uint64_t completedInitializer = 0u;
+  std::uint32_t setupPolls = 0u;
+  bool setupIssued = false;
+  bool completed = false;
+  bool activated = false;
+};
+
 struct RenderTapeQueryReplayEvidence {
   bool present = false;
   bool transcriptComplete = false;
@@ -126,12 +148,22 @@ struct RenderTapeQueryReplayEvidence {
   std::uint32_t substitutedResults = 0u;
   std::uint32_t supplementalPolls = 0u;
   std::uint32_t supplementalDrains = 0u;
+  std::uint32_t checkpointDefinitions = 0u;
+  std::uint32_t checkpointSetupEnds = 0u;
+  std::uint32_t checkpointSetupPublications = 0u;
+  std::uint32_t checkpointSetupPolls = 0u;
+  std::uint32_t checkpointSetupWaits = 0u;
+  std::uint32_t checkpointCompleted = 0u;
+  std::uint32_t checkpointActivated = 0u;
+  std::uint64_t checkpointSetupWallNanos = 0u;
   std::uint64_t transcriptWallNanos = 0u;
   std::uint64_t oracleWallNanos = 0u;
   std::uint32_t maxOraclePolls = 262144u;
   std::uint64_t maxOracleWallNanos = 5000000000ull;
   RenderTapeQueryReplayFailure failure = RenderTapeQueryReplayFailure::None;
   std::vector<RenderTapeQueryReplayRow> rows{};
+  // Detailed setup rows, like transcript rows, are omitted in measurement.
+  std::vector<RenderTapeQueryCheckpointReplayRow> checkpoints{};
 };
 
 // The prepared harness is intentionally cold-path only. Compatibility

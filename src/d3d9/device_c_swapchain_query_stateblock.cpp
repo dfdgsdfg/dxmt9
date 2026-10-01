@@ -2,6 +2,7 @@
 #include "device_c_query_receipt_observer.hpp"
 #include "dxmt9/dxmt9_wait_trace.hpp"
 #include "dxmt9/dxmt9_cpu_supply_trace.hpp"
+#include "util/config/config.hpp"
 #include "../dxmt9/dxmt9_query_timeline_observer.hpp"
 
 // Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
@@ -265,6 +266,11 @@ extern "C" uint32_t dxmt9c_query_release(D9CQuery* q) {
   return refs;
 }
 
+bool dxmt9::d3d9::renderTapeEventQueryCheckpointTrackingEnabled() noexcept {
+  static const bool enabled = dxmt9::util::getenvFlag("DXMT9_RENDER_TAPE_CAPTURE");
+  return enabled;
+}
+
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
   if (dxmt9::supply::enabled())
     dxmt9::supply::record(dxmt9::supply::Event::QueryIssue, q->device,
@@ -274,6 +280,13 @@ extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
     auto snapshot = q->device->dev().captureQueryPollSnapshot(q->obj);
     snapshot.failed |= result < 0;
     std::lock_guard lock(q->pollState->mutex);
+    if (q->pollState->checkpointTracking && result >= 0 &&
+        q->pollState->checkpointMappingValid) {
+      q->pollState->checkpointMappingValid =
+          dxmt9::d3d9::renderTapeObserveEventQueryCheckpointIssue(
+              q->pollState->checkpointCycle, q->pollState->checkpointEpoch,
+              flags, snapshot);
+    }
     q->pollState->snapshot = std::move(snapshot);
     q->pollState->rawOrdinal = dxmt9::d3d9::queryReplayOrdinal();
   }

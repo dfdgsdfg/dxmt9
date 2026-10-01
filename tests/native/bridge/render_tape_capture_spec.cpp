@@ -2427,6 +2427,77 @@ void testArmColorSnapshotDescriptorTruthTable() {
         "multi-mip cube snapshots remain fail-closed");
 }
 
+void testCompletedEventQueryArmOverlay() {
+  static_assert(std::is_standard_layout_v<D9CRenderTapeEventQueryCheckpointRequest>);
+  static_assert(std::is_trivially_copyable_v<D9CRenderTapeEventQueryCheckpointRequest>);
+  static_assert(sizeof(D9CRenderTapeEventQueryCheckpointRequest) == 40u);
+  static_assert(sizeof(D9CRenderTapeEventQueryCheckpointResult) == 120u);
+  static_assert(sizeof(RenderTapeQueryDescriptorV2) == 24u);
+  static_assert(sizeof(RenderTapeQueryDescriptorV3) == 144u);
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 3u, .objectId = 17u};
+  const RenderTapeQueryDescriptorV2 durable{
+      .type = 8u, .dataBytes = 4u,
+      .initialState = static_cast<std::uint32_t>(
+          RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+      .initialIssueCycle = 2u,
+  };
+  const RenderTapeQueryCycleState durableCycle{
+      .type = 8u, .issueCycle = 2u, .issueOrdinal = 4u};
+  const D9CRenderTapeEventQueryCheckpointRequest request{
+      .identity = identity, .issueCycle = 2u, .issueOrdinal = 4u,
+      .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+      .queryType = 8u,
+  };
+  const D9CRenderTapeEventQueryCheckpointResult result{
+      .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+      .status = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_COMPLETE,
+      .queryType = 8u, .identity = identity, .issueCycle = 2u,
+      .coreQueryIdentity = 88u, .deviceEpoch = 1u, .issueOrdinal = 4u,
+      .rawOrdinal = 55u, .queueIdentity = 22u,
+  };
+  const RenderTapeQueryDescriptorV3 arm{
+      .initialIssueCycle = 2u, .checkpoint = result};
+  const auto durableBytes = std::as_bytes(std::span(&durable, 1u));
+  const std::vector<std::byte> durableBefore(durableBytes.begin(), durableBytes.end());
+  const std::vector<std::vector<std::byte>> noContent;
+  const auto selected = renderTapeSelectArmObjectSnapshotOverlay(
+      durableBytes, noContent, std::as_bytes(std::span(&arm, 1u)), noContent,
+      4u, 4u);
+  RenderTapeQueryDescriptorDecoded descriptor{};
+  check(renderTapeEventQueryCheckpointResultMatches(request, result) &&
+            selected.source == RenderTapeArmSnapshotOverlaySource::CurrentArm &&
+            renderTapeLoadQueryDescriptor(selected.descriptor, descriptor) &&
+            renderTapeEventQueryCheckpointMatchesCycle(descriptor, identity, durableCycle) &&
+            renderTapeArmObjectSnapshotContentComplete(
+                0u, false, RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary,
+                selected.source, selected.content) &&
+            std::equal(durableBytes.begin(), durableBytes.end(), durableBefore.begin()) &&
+            !durableCycle.capturedCycle && !durableCycle.completedEventCheckpoint,
+        "completed EVENT arm overlay supplies typed authority without durable mutation or blob");
+  const auto stale = renderTapeSelectArmObjectSnapshotOverlay(
+      durableBytes, noContent, std::as_bytes(std::span(&arm, 1u)), noContent,
+      3u, 4u);
+  check(stale.source == RenderTapeArmSnapshotOverlaySource::StaleArm &&
+            stale.descriptor.empty(),
+        "EVENT checkpoint from an earlier arm cannot be selected");
+  auto reissued = durableCycle;
+  check(renderTapeAdvanceQueryCycle(reissued, 2u, true) &&
+            !renderTapeEventQueryCheckpointMatchesCycle(descriptor, identity, reissued),
+        "reissue/open BEGIN invalidates old arm EVENT authority");
+  auto staleIdentity = identity;
+  ++staleIdentity.generation;
+  check(!renderTapeEventQueryCheckpointMatchesCycle(
+            descriptor, staleIdentity, durableCycle),
+        "arm EVENT proof binds the exact live wire generation");
+  const auto unavailable = renderTapeSelectArmObjectSnapshotOverlay(
+      durableBytes, noContent, {}, noContent, 0u, 4u);
+  check(unavailable.source == RenderTapeArmSnapshotOverlaySource::DurableBase &&
+            renderTapeLoadQueryDescriptor(unavailable.descriptor, descriptor) &&
+            !renderTapeEventQueryCheckpointMatchesCycle(descriptor, identity, durableCycle),
+        "dormant unavailable EVENT stays a legacy uncheckpointed query until referenced");
+}
+
 void testStandaloneD24S8SnapshotContract() {
   static_assert(std::is_standard_layout_v<D9CRenderTapeD24S8SnapshotRequest>);
   static_assert(std::is_trivially_copyable_v<D9CRenderTapeD24S8SnapshotRequest>);
@@ -5318,6 +5389,7 @@ int main(int argc, char** argv) {
     testMissingSeedDescriptorAndProvenanceTruthTable();
     testArmBoundaryTransitionTruthTable();
     testArmColorSnapshotDescriptorTruthTable();
+    testCompletedEventQueryArmOverlay();
     testStandaloneD24S8SnapshotContract();
     testExpectedContentContractDerivation();
     testUpdateTextureClosureTruthTable();

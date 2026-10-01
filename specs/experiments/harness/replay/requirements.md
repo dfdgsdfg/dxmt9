@@ -1428,3 +1428,43 @@ alone does not authorize a later unprotected transfer. Terminal, failed upload
 or transfer, and incomplete drain must reject checkpoint completeness. Native
 bounded transition tests must distinguish early transfer, producer reopening,
 and signal-only completion from the accepted sequence.
+
+**R-HARN-REPLAY-9.9** A completed pre-cut EVENT query may be represented by an
+explicit versioned initial-state checkpoint, not by a fabricated captured
+QUERY_ISSUE record or an unconditional Ready result. Capture must bind the
+exact wire identity and absolute issue cycle to the current closed EVENT,
+device incarnation, retained published END authority and actual successful
+completion. A stale retained snapshot from an earlier public issue, cancellation,
+terminal state, incomplete publication, Pending result or failed completion
+must not establish this checkpoint. Checkpoints are capture-arm-local and must
+not change the durable registry or the application's query state/HRESULTs.
+Absolute Issue ordinal and logical issue cycle are distinct: BEGIN/END history
+must not be collapsed into an assumed numeric equality. Capture must compare
+both against independently maintained current Unix Issue history; echoing a
+PE-supplied cycle alongside an unrelated valid snapshot is insufficient.
+
+The authenticated checkpoint authorizes restoration of initial EVENT state,
+not adoption of captured queue labels. CPU and Metal replay must establish a
+new local production END/publication identity and complete its real local
+obligations before reporting Ready. The CPU lane uses its declared controlled
+completion backend; only the Metal lane may claim actual GPU completion.
+Checkpoint setup issues, publications and waits must be reported separately
+from captured command/source counts and measured transcript work. Recorded
+GetData calls, FLUSH obligations, absolute cycle matching, reissue/release/reset
+semantics and EVENT's defined-result-byte contract remain intact.
+An empty local END prefix may lawfully publish no source and have sequence
+zero; replay must not invent commands or GPU work to make that receipt
+nonzero. It must still establish the new local issued-query incarnation.
+Checkpoint query setup must occur before the measured transcript. A query
+materialized later by a recorded ObjectDefine must activate the same retained
+setup owner without issuing another END or adding an artificial mid-transcript
+completion fence. Failure cleanup must cover both hidden and activated owners.
+
+Legacy Unissued and ClosedWithoutReplayResult descriptors retain their current
+meaning; the latter cannot authorize old-cycle polls. The completed-EVENT
+checkpoint must not admit an open BEGIN or an occlusion result without its
+independently complete contributing history. Native model/code negatives must
+cover stale cycle/epoch/identity, early completion, missing local END and
+double restoration. Actual Metal tests must cover checkpoint polling followed
+by reissue and warm recovery, and the original captured query/pixel oracles
+remain required for workload qualification.

@@ -14,6 +14,7 @@
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_replay_offload.hpp"
 #include "device_c_query_poll_policy.hpp"
+#include "device_c_render_tape_query_checkpoint.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
@@ -426,6 +427,10 @@ struct D9CQueryPollState {
   std::mutex mutex;
   dxmt9::core::QueryPollSnapshot snapshot;
   std::uint64_t rawOrdinal = 0;
+  bool checkpointTracking = false;
+  bool checkpointMappingValid = true;
+  dxmt9::d3d9::RenderTapeQueryCycleState checkpointCycle{};
+  std::uint64_t checkpointEpoch = 0u;
 };
 
 struct D9CQuery {
@@ -442,6 +447,9 @@ struct D9CQuery {
       : obj(std::move(o)), device(d) {
     replayDrainTarget = std::make_shared<dxmt9::d3d9::ReplayDrainTarget>();
     pollState = std::make_unique<D9CQueryPollState>();
+    pollState->checkpointTracking = obj &&
+        obj->type() == dxmt9::core::QueryType::Event &&
+        dxmt9::d3d9::renderTapeEventQueryCheckpointTrackingEnabled();
     if (device) {
       wireIdentity = device->wireObjects.insert(
           D9C_CHUNK_HANDLE_KIND_QUERY, this);

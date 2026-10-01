@@ -65,7 +65,136 @@ def fixture(*, metal=True):
     return inspection, evidence
 
 
+def checkpoint_fixture(*, metal=False):
+    inspection, evidence = fixture(metal=metal)
+    transcript = inspection["query_transcript"]
+    definition = transcript["definitions"][0]
+    definition.update(type=8, schema_version=3, initial_state=2, initial_issue_cycle=47,
+        checkpoint={"checkpoint_version": 1, "status": 1, "query_type": 8, "active": 0,
+                    "identity": copy.deepcopy(definition["identity"]), "issue_cycle": 47,
+                    "core_query_identity": 101, "device_epoch": 7, "issue_ordinal": 63,
+                    "raw_ordinal": 11, "queue_identity": 909, "end_sequence": 8,
+                    "initializer_sequence": 3, "completed_sequence": 8,
+                    "completed_initializer": 3, "result_code": 0, "reserved0": 0})
+    poll = transcript["polls"][0]
+    poll.update(issue_cycle=47, defined_bytes=0, captured_hex="")
+    second_poll = {**copy.deepcopy(poll), "event_index": 6, "event_ordinal": 7, "issue_cycle": 48}
+    transcript.update(issue_records=1, recorded_polls=2, polls=[poll, second_poll],
+                      issues=[{"event_ordinal": 6, "record_index": 0,
+                               "identity": copy.deepcopy(definition["identity"]),
+                               "flags": 1, "issue_cycle": 48}])
+    inspection["grammar"]["record_types"]["query_issue"] = 1
+    inspection["grammar"]["control_kinds"]["query_get_data"] = 2
+    row = evidence["rows"][0]
+    row.update(issue_cycle=47, defined_bytes=0, captured_hex="", replay_hex="",
+               replay_result=0, oracle_result=0, local_issue_ordinal=1,
+               local_sequence=0, local_initializer=0, completed_sequence=0,
+               completed_initializer=0, oracle_polls=0, result_matched=False,
+               result_substituted=False, supplemental=False)
+    second_row = {**copy.deepcopy(row), "event_index": 6, "event_ordinal": 7, "issue_cycle": 48,
+                  "local_issue_ordinal": 2, "local_sequence": 1, "completed_sequence": 1}
+    setup = {key: copy.deepcopy(row[key]) for key in (
+        "identity", "local_query_identity", "local_issue_ordinal", "local_device_epoch",
+        "local_queue", "local_sequence", "local_initializer", "completed_sequence", "completed_initializer")}
+    setup.update(captured_issue_cycle=47, captured_issue_ordinal=63, captured_device_epoch=7,
+                 setup_polls=1, setup_issued=True, completed=True, activated=True)
+    evidence.update(issue_records=1, replayed_issue_records=1, recorded_polls=2, replayed_polls=2,
+                    captured_ready=2, replay_ready=2, replay_pending=0, readiness_required=2,
+                    readiness_satisfied=2, required_results=0, matched_results=0,
+                    substituted_results=0, supplemental_polls=0, oracle_wall_ns=0,
+                    rows=[row, second_row], checkpoint_definitions=1, checkpoint_setup_ends=1,
+                    checkpoint_setup_publications=0, checkpoint_setup_polls=1,
+                    checkpoint_setup_waits=0, checkpoint_completed=1, checkpoint_activated=1,
+                    checkpoint_setup_wall_ns=17, checkpoints=[setup])
+    return inspection, evidence
+
+
+def checkpoint_receipts():
+    for metal in (False, True):
+        inspection, evidence = checkpoint_fixture(metal=metal)
+        def accepts(value=evidence, source=inspection, **kwargs):
+            return RUNNER.query_replay_accepts(value, source, backend=evidence["backend"], **kwargs)
+        assert accepts(), "completed EVENT imports a new local END, including an empty prefix"
+        zero_input, zero_evidence = checkpoint_fixture(metal=metal)
+        zero_input["grammar"]["record_types"]["query_issue"] = 0
+        zero_input["grammar"]["control_kinds"]["query_get_data"] = 0
+        zero_input["query_transcript"].update(issue_records=0, recorded_polls=0, issues=[], polls=[])
+        zero_evidence.update(issue_records=0, replayed_issue_records=0, recorded_polls=0,
+                             replayed_polls=0, captured_ready=0, replay_ready=0,
+                             readiness_required=0, readiness_satisfied=0, rows=[],
+                             gpu_result_oracle=False)
+        assert accepts(zero_evidence, zero_input), "setup is not a captured result/readiness comparison"
+        bad = copy.deepcopy(zero_evidence)
+        bad["checkpoints"] = []
+        assert not accepts(bad, zero_input), "unused imported state still requires setup/activation proof"
+        for field in ("checkpoint_definitions", "checkpoint_setup_ends", "checkpoint_completed",
+                      "checkpoint_activated", "checkpoint_setup_publications", "checkpoint_setup_polls",
+                      "checkpoint_setup_waits", "checkpoint_setup_wall_ns", "checkpoints"):
+            bad = copy.deepcopy(evidence)
+            bad.pop(field)
+            assert not accepts(bad), ("missing setup receipt", field)
+        for field in ("checkpoint_definitions", "checkpoint_setup_ends", "checkpoint_completed",
+                      "checkpoint_activated"):
+            for count in (0, 2):
+                bad = copy.deepcopy(evidence)
+                bad[field] = count
+                assert not accepts(bad), ("non-conserved restore", field, count)
+        for field, value in (("captured_issue_cycle", 48), ("captured_issue_ordinal", 47),
+                             ("captured_device_epoch", 8), ("local_query_identity", 0),
+                             ("local_issue_ordinal", 0), ("local_issue_ordinal", 2),
+                             ("local_device_epoch", 0), ("local_queue", 0), ("setup_polls", 0),
+                             ("setup_issued", False), ("completed", False), ("activated", False)):
+            bad = copy.deepcopy(evidence)
+            bad["checkpoints"][0][field] = value
+            assert not accepts(bad), ("invalid local setup", field, value)
+        bad = copy.deepcopy(evidence)
+        bad["checkpoints"][0]["local_sequence"] = 1
+        assert not accepts(bad), "publication without completed local obligations"
+        bad = copy.deepcopy(evidence)
+        bad["checkpoints"].append(copy.deepcopy(bad["checkpoints"][0]))
+        assert not accepts(bad), "duplicate checkpoint restoration"
+        bad = copy.deepcopy(evidence)
+        bad["rows"][0]["local_issue_ordinal"] = 2
+        assert not accepts(bad), "initial Ready needs exact retained setup END authority"
+        bad = copy.deepcopy(evidence)
+        bad["rows"][1]["local_issue_ordinal"] = 1
+        assert not accepts(bad), "reissue cannot consume the old checkpoint incarnation"
+        for field, value in (("schema_version", 2), ("type", 9), ("initial_state", 1),
+                             ("initial_issue_cycle", 48), ("checkpoint", None)):
+            bad = copy.deepcopy(inspection)
+            bad["query_transcript"]["definitions"][0][field] = value
+            assert not accepts(source=bad), ("unauthenticated checkpoint descriptor", field)
+        for field, value in (("issue_cycle", 48), ("device_epoch", 0), ("issue_ordinal", 0),
+                             ("issue_ordinal", 46),
+                             ("completed_sequence", 7), ("completed_initializer", 2),
+                             ("active", 1), ("status", 5), ("reserved0", 1)):
+            bad = copy.deepcopy(inspection)
+            bad["query_transcript"]["definitions"][0]["checkpoint"][field] = value
+            assert not accepts(source=bad), ("invalid captured checkpoint", field)
+        bad = copy.deepcopy(inspection)
+        bad["query_transcript"]["definitions"][0]["checkpoint"]["identity"]["generation"] += 1
+        assert not accepts(source=bad), "checkpoint must bind exact captured query generation"
+        measured = copy.deepcopy(evidence)
+        measured.update(mode="measurement", rows=[], checkpoints=[], events_sha256=inspection["events_sha256"])
+        assert accepts(measured, measurement=True), "measurement retains cheap setup conservation"
+        for field in ("checkpoint_setup_ends", "checkpoint_completed", "checkpoint_activated"):
+            bad = copy.deepcopy(measured)
+            bad[field] = 0
+            assert not accepts(bad, measurement=True), ("measurement loses setup proof", field)
+        bad = copy.deepcopy(measured)
+        bad["checkpoints"] = evidence["checkpoints"]
+        assert not accepts(bad, measurement=True), "measurement contains detailed setup observer rows"
+    empty_input = {"schema": "dxmt9.render_tape.v2", "valid": True,
+                   "grammar": {"descriptor_kinds": {}, "record_types": {}, "control_kinds": {}}}
+    empty = {"present": False, "query_definitions": 0, "issue_records": 0, "recorded_polls": 0, "rows": []}
+    assert RUNNER.query_replay_accepts(empty, empty_input, backend="cpu-controlled-production-queue")
+    empty["checkpoint_definitions"] = 1
+    assert not RUNNER.query_replay_accepts(empty, empty_input, backend="cpu-controlled-production-queue"), \
+        "query-free coverage cannot launder imported checkpoint declarations"
+
+
 def main():
+    checkpoint_receipts()
     for metal in (False, True):
         inspection, evidence = fixture(metal=metal)
         backend = evidence["backend"]

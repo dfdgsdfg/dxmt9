@@ -873,6 +873,10 @@ test('dxmt9-render-tape-cpu-query-transcript-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-query-spec'],
      env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-event-checkpoint-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-event-checkpoint-spec'],
+     env: dxmt9_native_test_env)
 test('dxmt9-render-tape-cpu-volume-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-volume-spec'],

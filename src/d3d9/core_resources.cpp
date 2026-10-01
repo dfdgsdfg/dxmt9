@@ -304,6 +304,15 @@ QueryPollSnapshot Device::captureQueryPollSnapshot(
   return snapshot;
 }
 
+bool Device::queryPollSnapshotCurrent(const QueryPollSnapshot& snapshot) const noexcept {
+  return snapshot.identity && snapshot.owner == this &&
+      snapshot.backend.get() == backend_.get() &&
+      !queryResetInProgress_.load(std::memory_order_acquire) &&
+      !deviceLost_.load(std::memory_order_acquire) &&
+      (!snapshot.issueOrdinal || snapshot.issueDeviceEpoch ==
+          queryDeviceEpoch_.load(std::memory_order_acquire));
+}
+
 bool Device::promotePublishedQueryPollSnapshot(QueryPollSnapshot &snapshot) const {
   const auto epoch = queryDeviceEpoch_.load(std::memory_order_acquire);
   if (!snapshot.identity || snapshot.owner != this ||

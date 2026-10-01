@@ -675,6 +675,63 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
             if (object.lifetime.textureAlias) {
                 continue;
             }
+            if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+                // Dormant queries need no bootstrap authority. A matching
+                // completed EVENT checkpoint is arm-local and can later be
+                // selected by exact-identity JIT materialization/GetData.
+                if (object.query.type == 8u && !object.query.active &&
+                    object.query.issueCycle != 0u && object.query.issueOrdinal != 0u) {
+                    const D9CRenderTapeEventQueryCheckpointRequest request{
+                        .identity = object.identity,
+                        .issueCycle = object.query.issueCycle,
+                        .issueOrdinal = object.query.issueOrdinal,
+                        .checkpointVersion =
+                            D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+                        .queryType = object.query.type,
+                    };
+                    D9CRenderTapeEventQueryCheckpointResult result{};
+                    const HRESULT hr = hr32(
+                        dxmt9c_device_capture_render_tape_event_query_checkpoint(
+                            dev_, &request, &result));
+                    if (SUCCEEDED(hr) &&
+                        dxmt9::d3d9::renderTapeEventQueryCheckpointResultMatches(
+                            request, result)) {
+                        const dxmt9::d3d9::RenderTapeQueryDescriptorV3 descriptor{
+                            .initialIssueCycle = object.query.issueCycle,
+                            .checkpoint = result,
+                        };
+                        const auto bytes = std::as_bytes(std::span(&descriptor, 1u));
+                        RenderTapeArmObjectSnapshot snapshot{
+                            .objectIndex = index,
+                            .armOrdinal = epoch.ordinal,
+                            .identity = object.identity,
+                            .descriptor = std::vector<std::byte>(bytes.begin(), bytes.end()),
+                        };
+                        peCaptureState_->renderTapeArmSnapshots.push_back(std::move(snapshot));
+                        dxmt9DeviceInfoLog(
+                            "render_tape_capture event_query_checkpoint complete "
+                            "generation=%u object_id=%llu issue_cycle=%llu "
+                            "issue_ordinal=%llu epoch=%llu end_sequence=%llu",
+                            object.identity.generation,
+                            static_cast<unsigned long long>(object.identity.objectId),
+                            static_cast<unsigned long long>(object.query.issueCycle),
+                            static_cast<unsigned long long>(object.query.issueOrdinal),
+                            static_cast<unsigned long long>(result.deviceEpoch),
+                            static_cast<unsigned long long>(result.endSequence));
+                    } else {
+                        dxmt9DeviceInfoLog(
+                            "render_tape_capture event_query_checkpoint unavailable "
+                            "generation=%u object_id=%llu issue_cycle=%llu "
+                            "issue_ordinal=%llu hr=0x%08x status=%u",
+                            object.identity.generation,
+                            static_cast<unsigned long long>(object.identity.objectId),
+                            static_cast<unsigned long long>(object.query.issueCycle),
+                            static_cast<unsigned long long>(object.query.issueOrdinal),
+                            static_cast<unsigned>(hr), result.status);
+                    }
+                }
+                continue;
+            }
             dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
             const bool standaloneD24 =
                 object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&

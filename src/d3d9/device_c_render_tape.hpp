@@ -282,6 +282,7 @@ struct RenderTapeQueryGetDataControl {
 };
 
 inline constexpr std::uint32_t kRenderTapeQueryTranscriptVersion2 = 2u;
+inline constexpr std::uint32_t kRenderTapeQueryDescriptorVersion3 = 3u;
 inline constexpr std::uint32_t kRenderTapeQueryMaxResultBytes = 8u;
 
 enum class RenderTapeQueryInitialState : std::uint32_t {
@@ -289,6 +290,7 @@ enum class RenderTapeQueryInitialState : std::uint32_t {
   // An old closed cycle supplies provenance only. Its result and END fence
   // are absent from this tape, so it cannot authorize a GetData observation.
   ClosedWithoutReplayResult = 1u,
+  CompletedEventCheckpoint = 2u,
 };
 
 struct RenderTapeQueryDescriptorV2 {
@@ -298,6 +300,38 @@ struct RenderTapeQueryDescriptorV2 {
   std::uint32_t initialState = 0u;
   std::uint64_t initialIssueCycle = 0u;
 };
+
+// Explicit V3 EVENT-only checkpoint. The POD provenance is validated against
+// ObjectDefine's identity; replay must establish its own local END authority.
+struct RenderTapeQueryDescriptorV3 {
+  std::uint32_t schemaVersion = kRenderTapeQueryDescriptorVersion3;
+  std::uint32_t type = 8u;
+  std::uint32_t dataBytes = 4u;
+  std::uint32_t initialState = static_cast<std::uint32_t>(
+      RenderTapeQueryInitialState::CompletedEventCheckpoint);
+  std::uint64_t initialIssueCycle = 0u;
+  D9CRenderTapeEventQueryCheckpointResult checkpoint{};
+};
+
+// Value-only normalized decoding shared by all structural/provider/CPU users.
+// V2 never supplies a checkpoint; its strict decoder remains separately usable.
+struct RenderTapeQueryDescriptorDecoded {
+  std::uint32_t schemaVersion = 0u;
+  std::uint32_t type = 0u;
+  std::uint32_t dataBytes = 0u;
+  std::uint32_t initialState = 0u;
+  std::uint64_t initialIssueCycle = 0u;
+  D9CRenderTapeEventQueryCheckpointResult checkpoint{};
+};
+
+bool renderTapeEventQueryCheckpointResultMatches(
+    const D9CRenderTapeEventQueryCheckpointRequest& request,
+    const D9CRenderTapeEventQueryCheckpointResult& result) noexcept;
+bool renderTapeLoadQueryDescriptor(std::span<const std::byte> bytes,
+                                   RenderTapeQueryDescriptorDecoded& out) noexcept;
+bool renderTapeQueryDescriptorIdentityMatches(
+    const RenderTapeQueryDescriptorDecoded& descriptor,
+    const D9CWireObjectIdentity& identity) noexcept;
 
 // controlBytes discriminates this complete transcript from the legacy
 // dataSize/seqId payload. result stores only bytes the successful call defined;
@@ -339,7 +373,21 @@ struct RenderTapeQueryCycleState {
   std::uint64_t issueCycle = 0u;
   bool active = false;
   bool capturedCycle = false;
+  // Separate public Issue ordinal: BEGIN and END both advance it, whereas
+  // issueCycle advances only at a replacement BEGIN or an END-only issue.
+  std::uint64_t issueOrdinal = 0u;
+  bool completedEventCheckpoint = false;
 };
+
+RenderTapeQueryCycleState renderTapeInitialQueryCycle(
+    const RenderTapeQueryDescriptorDecoded& descriptor) noexcept;
+bool renderTapeQueryPollCycleAdmitted(const RenderTapeQueryCycleState& state,
+                                    std::uint64_t issueCycle,
+                                    std::int32_t resultCode) noexcept;
+bool renderTapeEventQueryCheckpointMatchesCycle(
+    const RenderTapeQueryDescriptorDecoded& descriptor,
+    const D9CWireObjectIdentity& identity,
+    const RenderTapeQueryCycleState& state) noexcept;
 
 bool renderTapeAdvanceQueryCycle(RenderTapeQueryCycleState& state,
                                 std::uint32_t flags,

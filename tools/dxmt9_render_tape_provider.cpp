@@ -248,6 +248,14 @@ void printQueryReplay(const RenderTapeQueryReplayEvidence& evidence) {
             << ",\"substituted_results\":" << evidence.substitutedResults
             << ",\"supplemental_polls\":" << evidence.supplementalPolls
             << ",\"supplemental_drains\":" << evidence.supplementalDrains
+            << ",\"checkpoint_definitions\":" << evidence.checkpointDefinitions
+            << ",\"checkpoint_setup_ends\":" << evidence.checkpointSetupEnds
+            << ",\"checkpoint_setup_publications\":" << evidence.checkpointSetupPublications
+            << ",\"checkpoint_setup_polls\":" << evidence.checkpointSetupPolls
+            << ",\"checkpoint_setup_waits\":" << evidence.checkpointSetupWaits
+            << ",\"checkpoint_completed\":" << evidence.checkpointCompleted
+            << ",\"checkpoint_activated\":" << evidence.checkpointActivated
+            << ",\"checkpoint_setup_wall_ns\":" << evidence.checkpointSetupWallNanos
             << ",\"transcript_wall_ns\":" << evidence.transcriptWallNanos
             << ",\"oracle_wall_ns\":" << evidence.oracleWallNanos
             << ",\"max_oracle_polls\":" << evidence.maxOraclePolls
@@ -288,6 +296,29 @@ void printQueryReplay(const RenderTapeQueryReplayEvidence& evidence) {
               << ",\"readiness_satisfied\":" << boolean(row.readinessSatisfied)
               << ",\"result_substituted\":" << boolean(row.resultSubstituted)
               << ",\"supplemental\":" << boolean(row.supplemental) << '}';
+  }
+  std::cout << "],\"checkpoints\":[";
+  for (std::size_t index = 0u; index < evidence.checkpoints.size(); ++index) {
+    if (index) std::cout << ',';
+    const auto& row = evidence.checkpoints[index];
+    std::cout << "{\"identity\":{\"kind\":" << row.identity.kind
+              << ",\"generation\":" << row.identity.generation
+              << ",\"object_id\":\"" << row.identity.objectId << "\"}"
+              << ",\"captured_issue_cycle\":" << row.capturedIssueCycle
+              << ",\"captured_issue_ordinal\":" << row.capturedIssueOrdinal
+              << ",\"captured_device_epoch\":" << row.capturedDeviceEpoch
+              << ",\"local_query_identity\":" << row.localQueryIdentity
+              << ",\"local_issue_ordinal\":" << row.localIssueOrdinal
+              << ",\"local_device_epoch\":" << row.localDeviceEpoch
+              << ",\"local_queue\":" << row.localQueue
+              << ",\"local_sequence\":" << row.localSequence
+              << ",\"local_initializer\":" << row.localInitializer
+              << ",\"completed_sequence\":" << row.completedSequence
+              << ",\"completed_initializer\":" << row.completedInitializer
+              << ",\"setup_polls\":" << row.setupPolls
+              << ",\"setup_issued\":" << boolean(row.setupIssued)
+              << ",\"completed\":" << boolean(row.completed)
+              << ",\"activated\":" << boolean(row.activated) << '}';
   }
   std::cout << "]}";
 }

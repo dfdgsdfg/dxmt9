@@ -2417,6 +2417,9 @@ class Device : public std::enable_shared_from_this<Device> {
                        u32 flags);
   [[nodiscard]] QueryPollSnapshot captureQueryPollSnapshot(
       const std::shared_ptr<Query>& query) const;
+  // Cold capture recheck: atomic control/epoch only, never enters the backend
+  // queue while the caller holds replay-ledger or snapshot ownership locks.
+  bool queryPollSnapshotCurrent(const QueryPollSnapshot& snapshot) const noexcept;
   // Grant independent polling of an already captured, actually published
   // writer receipt without consulting the mutable public Query.
   bool promotePublishedQueryPollSnapshot(QueryPollSnapshot& snapshot) const;

@@ -736,14 +736,52 @@ void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
             [&](const auto &entry) {
                 return renderTapeSameIdentity(entry.identity, fixed.identity);
             });
+        bool checkpointAccepted = false;
+        if (query != peCaptureState_->renderTapeRegistry.objects.end() &&
+            query->query.issueCycle != 0u && !query->query.capturedCycle) {
+            const auto snapshot = std::find_if(
+                peCaptureState_->renderTapeArmSnapshots.begin(),
+                peCaptureState_->renderTapeArmSnapshots.end(),
+                [&](const auto& value) {
+                    return renderTapeSameIdentity(value.identity, fixed.identity);
+                });
+            dxmt9::d3d9::RenderTapeQueryDescriptorDecoded descriptor{};
+            checkpointAccepted =
+                snapshot != peCaptureState_->renderTapeArmSnapshots.end() &&
+                dxmt9::d3d9::renderTapeArmSnapshotEpochMatches(
+                    snapshot->armOrdinal,
+                    peCaptureState_->renderTapeArmSnapshotOrdinal) &&
+                dxmt9::d3d9::renderTapeLoadQueryDescriptor(
+                    snapshot->descriptor, descriptor) &&
+                dxmt9::d3d9::renderTapeEventQueryCheckpointMatchesCycle(
+                    descriptor, fixed.identity, query->query);
+        }
         if (query == peCaptureState_->renderTapeRegistry.objects.end() ||
             payload.size() != sizeof(queryControl) ||
-            (query->query.issueCycle != 0u && !query->query.capturedCycle)) {
+            (query->query.issueCycle != 0u && !query->query.capturedCycle &&
+             !checkpointAccepted)) {
+            const bool queryPresent =
+                query != peCaptureState_->renderTapeRegistry.objects.end();
+            const bool payloadValid = payload.size() == sizeof(queryControl);
+            if (payloadValid)
+                std::memcpy(&queryControl, payload.data(), sizeof(queryControl));
             dxmt9DeviceInfoLog(
                 "render_tape_capture query rejected reason=query_uncaptured_cycle "
-                "kind=%u generation=%u object_id=%llu",
+                "kind=%u generation=%u object_id=%llu registry_present=%d "
+                "query_type=%u issue_cycle=%llu active=%d captured_cycle=%d "
+                "flags=%u hr=0x%08x data_size=%llu has_output=%u "
+                "defined_bytes=%u payload_bytes=%zu payload_valid=%d",
                 fixed.identity.kind, fixed.identity.generation,
-                static_cast<unsigned long long>(fixed.identity.objectId));
+                static_cast<unsigned long long>(fixed.identity.objectId),
+                queryPresent ? 1 : 0, queryPresent ? query->query.type : 0u,
+                static_cast<unsigned long long>(
+                    queryPresent ? query->query.issueCycle : 0u),
+                queryPresent && query->query.active ? 1 : 0,
+                queryPresent && query->query.capturedCycle ? 1 : 0,
+                queryControl.flags, static_cast<unsigned>(fixed.resultCode),
+                static_cast<unsigned long long>(queryControl.dataSize),
+                queryControl.hasOutput, queryControl.definedBytes,
+                payload.size(), payloadValid ? 1 : 0);
             abortRenderTapeCapture("query_uncaptured_cycle");
             return;
         }

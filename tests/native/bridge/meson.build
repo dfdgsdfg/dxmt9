@@ -1,5 +1,15 @@
 # Wine/PE bridge chunk-record, ops-dispatch, and setBytes wiring specs.
 
+render_tape_event_checkpoint_authority_spec = executable(
+  'dxmt9-render-tape-event-checkpoint-authority-spec',
+  'render_tape_event_checkpoint_authority_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-event-checkpoint-authority-spec',
+     render_tape_event_checkpoint_authority_spec, env: dxmt9_native_test_env)
+
 pe_retainer_spec = executable(
   'dxmt9-pe-retainer-spec',
   'pe_retainer_spec.cpp',
@@ -476,6 +486,21 @@ test('dxmt9-render-tape-query-metal-oracle',
      args: ['--test-query-oracle'],
      env: render_tape_query_test_env,
      timeout: 120)
+render_tape_event_checkpoint_test_env = environment()
+render_tape_event_checkpoint_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
+render_tape_event_checkpoint_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
+render_tape_event_checkpoint_test_env.set('DXMT9_ASYNC_QUERY_FENCES', '1')
+render_tape_event_checkpoint_test_env.set('DXMT9_RENDER_TAPE_CAPTURE', '1')
+render_tape_event_checkpoint_test_env.set('MTL_DEBUG_LAYER', '1')
+if host_machine.system() == 'darwin' and dxmt9_wine_install_path != ''
+  render_tape_event_checkpoint_test_env.set('DYLD_LIBRARY_PATH', dxmt9_wine_unix_runtime_path)
+endif
+test('dxmt9-render-tape-event-checkpoint-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-event-checkpoint-oracle'],
+     env: render_tape_event_checkpoint_test_env,
+     is_parallel: false,
+     timeout: 60)
 test('dxmt9-render-tape-volume-metal-oracle',
      render_tape_provider_fixture_spec,
      args: ['--test-volume-oracle'],

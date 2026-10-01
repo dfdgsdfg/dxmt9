@@ -18,6 +18,7 @@
 #include "render_tape_cpu_alias_fixture.hpp"
 #include "render_tape_cpu_mipmap_fixture.hpp"
 #include "render_tape_cpu_query_fixture.hpp"
+#include "render_tape_cpu_event_checkpoint_fixture.hpp"
 #include "render_tape_cpu_d24s8_fixture.hpp"
 #include "render_tape_cpu_volume_fixture.hpp"
 #include "render_tape_cpu_bootstrap_pages_fixture.hpp"
@@ -8348,6 +8349,14 @@ void printCpuQueryReplay(const dxmt9::d3d9::RenderTapeQueryReplayEvidence& evide
             << R"(,"substituted_results":)" << evidence.substitutedResults
             << R"(,"supplemental_polls":)" << evidence.supplementalPolls
             << R"(,"supplemental_drains":)" << evidence.supplementalDrains
+            << R"(,"checkpoint_definitions":)" << evidence.checkpointDefinitions
+            << R"(,"checkpoint_setup_ends":)" << evidence.checkpointSetupEnds
+            << R"(,"checkpoint_setup_publications":)" << evidence.checkpointSetupPublications
+            << R"(,"checkpoint_setup_polls":)" << evidence.checkpointSetupPolls
+            << R"(,"checkpoint_setup_waits":)" << evidence.checkpointSetupWaits
+            << R"(,"checkpoint_completed":)" << evidence.checkpointCompleted
+            << R"(,"checkpoint_activated":)" << evidence.checkpointActivated
+            << R"(,"checkpoint_setup_wall_ns":)" << evidence.checkpointSetupWallNanos
             << R"(,"transcript_wall_ns":)" << evidence.transcriptWallNanos
             << R"(,"oracle_wall_ns":)" << evidence.oracleWallNanos
             << R"(,"max_oracle_polls":)" << evidence.maxOraclePolls
@@ -8389,6 +8398,29 @@ void printCpuQueryReplay(const dxmt9::d3d9::RenderTapeQueryReplayEvidence& evide
               << R"(,"readiness_satisfied":)" << boolean(row.readinessSatisfied)
               << R"(,"result_substituted":)" << boolean(row.resultSubstituted)
               << R"(,"supplemental":)" << boolean(row.supplemental) << '}';
+  }
+  std::cout << R"(],"checkpoints":[)";
+  for (std::size_t index = 0u; index < evidence.checkpoints.size(); ++index) {
+    if (index) std::cout << ',';
+    const auto& row = evidence.checkpoints[index];
+    std::cout << R"({"identity":{"kind":)" << row.identity.kind
+              << R"(,"generation":)" << row.identity.generation
+              << R"(,"object_id":")" << row.identity.objectId << R"("})"
+              << R"(,"captured_issue_cycle":)" << row.capturedIssueCycle
+              << R"(,"captured_issue_ordinal":)" << row.capturedIssueOrdinal
+              << R"(,"captured_device_epoch":)" << row.capturedDeviceEpoch
+              << R"(,"local_query_identity":)" << row.localQueryIdentity
+              << R"(,"local_issue_ordinal":)" << row.localIssueOrdinal
+              << R"(,"local_device_epoch":)" << row.localDeviceEpoch
+              << R"(,"local_queue":)" << row.localQueue
+              << R"(,"local_sequence":)" << row.localSequence
+              << R"(,"local_initializer":)" << row.localInitializer
+              << R"(,"completed_sequence":)" << row.completedSequence
+              << R"(,"completed_initializer":)" << row.completedInitializer
+              << R"(,"setup_polls":)" << row.setupPolls
+              << R"(,"setup_issued":)" << boolean(row.setupIssued)
+              << R"(,"completed":)" << boolean(row.completed)
+              << R"(,"activated":)" << boolean(row.activated) << '}';
   }
   std::cout << "]}";
 }
@@ -9104,6 +9136,142 @@ void generalCpuQueryTranscriptUsesControlledQueue() {
         }
       }
     }
+  }
+}
+
+void generalCpuEventCheckpointUsesNewLocalEnd() {
+  namespace tape = dxmt9::d3d9;
+  namespace runtime = tape::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Fault = tape::test::CpuEventCheckpointFixtureFault;
+  for (auto fault : {Fault::StaleCycle, Fault::StaleIdentity, Fault::MissingEpoch,
+                     Fault::PendingCompletion, Fault::OpenBegin, Fault::Occlusion}) {
+    const auto fixture = tape::test::makeGeneralCpuEventCheckpointFixture(fault);
+    check(!fixture.tape.empty(), "EVENT checkpoint negative contains actual tape bytes");
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    check(!runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan).complete() &&
+              plan.events.empty(), "wrong captured checkpoint rejects transactionally");
+  }
+  // Concrete production binding distinguishes empty valid END from unissued
+  // state, then exercises nonempty reissue, early completion and reset.
+  {
+    RuntimeFixture fixture(false, false, true, false);
+    fixture.routing->controlledQueries = true;
+    auto* query = dxmt9c_device_create_query(fixture.cDevice.get(), 8u);
+    check(query && dxmt9c_query_issue(query, 1u) == D3D_OK,
+          "EVENT checkpoint has a real local production END");
+    const auto initial = fixture.cDevice->dev().captureQueryPollSnapshot(query->obj);
+    const auto prefix = initial.backendFence.snapshot();
+    std::uint32_t sentinel = 0xdeadbeefu;
+    check(initial.issueOrdinal == 1u && initial.issueDeviceEpoch != 0u &&
+              prefix.queue != 0u && prefix.sequence == 0u &&
+              fixture.cDevice->dev().pollQuerySnapshot(initial, &sentinel, 4u, 0u) == D3D_OK &&
+              sentinel == 0xdeadbeefu,
+          "empty END is ready by real local authority and defines no EVENT result bytes");
+    fixture.routing->submitClear(ClearDesc{});
+    check(dxmt9c_query_issue(query, 1u) == D3D_OK && Access::publishWriting(fixture.routing->queue_),
+          "recorded EVENT reissue publishes its actual nonempty prefix");
+    const auto reissued = fixture.cDevice->dev().captureQueryPollSnapshot(query->obj);
+    const auto ready = Access::peekReadyCompletion(fixture.routing->queue_);
+    const tape::RenderTapeCompletionKey key{
+        1u, ready.seqId, ready.source.id.index, 0u, ready.source.id.generation};
+    tape::RenderTapeCompletionSchedule schedule;
+    bool earlyAcknowledgment = false;
+    check(schedule.append({key}).accepted() && schedule.beginIteration(1u).accepted(),
+          "EVENT nonempty END binds a bounded production completion schedule");
+    check(reissued.issueOrdinal == 2u && reissued.issueOrdinal != initial.issueOrdinal &&
+              fixture.cDevice->dev().pollQuerySnapshot(reissued, &sentinel, 4u, 1u) == S_FALSE &&
+              !schedule.release(key, [&] { earlyAcknowledgment = true; return true; }).accepted() &&
+              !earlyAcknowledgment,
+          "old completed checkpoint cannot satisfy reissued END or early acknowledgment");
+    check(schedule.submit(key).accepted() &&
+              Access::submitOneWithheld(fixture.routing->queue_).submitted &&
+              fixture.cDevice->dev().pollQuerySnapshot(reissued, &sentinel, 4u, 0u) == S_FALSE &&
+              schedule.release(key, [&] { return Access::acknowledgeOne(fixture.routing->queue_); }).accepted() &&
+              Access::finishQueue(fixture.routing->queue_) &&
+              fixture.cDevice->dev().pollQuerySnapshot(reissued, &sentinel, 4u, 0u) == D3D_OK &&
+              sentinel == 0xdeadbeefu,
+          "submission alone is Pending; controlled completion establishes EVENT readiness");
+    dxmt9c_query_release(query);
+    PresentParameters reset{};
+    reset.backBufferWidth = reset.backBufferHeight = 16u;
+    reset.backBufferFormat = Format::A8R8G8B8;
+    reset.backBufferCount = 1u;
+    reset.windowed = true;
+    check(fixture.cDevice->dev().reset(reset) == D3D_OK &&
+              fixture.cDevice->dev().pollQuerySnapshot(initial, &sentinel, 4u, 0u) == D3DERR_DEVICELOST &&
+              sentinel == 0xdeadbeefu, "device reset invalidates retained checkpoint authority");
+  }
+  const auto captured = tape::test::makeGeneralCpuEventCheckpointFixture();
+  std::vector<tape::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  check(runtime::buildGeneralReplayPlan(captured.tape, blobs, plan).complete(),
+        "EVENT checkpoint fixture passes shared structural preflight");
+  const auto admission = runtime::admitGeneralCpuPlan(plan);
+  check(admission.accepted() && admission.counts.queryIssues == 1u &&
+            admission.counts.queryPolls == 2u,
+        "no fabricated captured END enters the original transcript: " +
+            std::string(runtime::generalCpuAdmissionReasonName(admission.reason)));
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "EVENT tape needs CPU-visible draw resources only");
+  std::uint64_t semantic = 0u, querySemantic = 0u;
+  for (bool measured : {false, true})
+    for (bool compatibility : {true, false}) {
+      RuntimeFixture fixture(false, false, true, false, WMT::Device{resourceDevice.handle});
+      Executor executor(fixture, plan, blobs, {
+          .route = compatibility ? tape::ProviderReplayPolicy::Compatibility
+                                 : tape::ProviderReplayPolicy::ProductionSlot,
+          .measurement = measured});
+      const auto result = executor.run();
+      check(result.complete && result.resetOk, "EVENT checkpoint CPU replay: " + result.failure);
+      const auto& evidence = result.queryReplay;
+      check(evidence.checkpointDefinitions == 1u && evidence.checkpointSetupEnds == 1u &&
+                evidence.checkpointSetupPublications == 0u && evidence.checkpointSetupPolls == 1u &&
+                evidence.checkpointSetupWaits == 0u && evidence.checkpointCompleted == 1u &&
+                evidence.checkpointActivated == 1u && evidence.replayedIssueRecords == 1u &&
+                evidence.replayedPolls == 2u && evidence.readinessSatisfied == 2u &&
+                evidence.requiredResults == 0u && evidence.matchedResults == 0u &&
+                !evidence.actualMetal && !evidence.gpuResultOracle &&
+                result.commands == admission.counts.records + admission.counts.bootstrapRecords &&
+                result.resourcesCreated == result.resourcesReleased &&
+                result.submitted == result.completed && result.completed == result.reclaimed,
+            "setup conservation is separate from original command/source/query obligations");
+      if (measured) {
+        check(evidence.rows.empty() && evidence.checkpoints.empty() && result.fullOracleCalls == 0u &&
+                  result.querySemanticDigest == 0u,
+              "measurement retains cheap checkpoint counts without semantic scans");
+      } else {
+        check(evidence.checkpoints.size() == 1u && evidence.checkpoints[0].activated &&
+                  evidence.checkpoints[0].capturedIssueCycle == 47u &&
+                  evidence.checkpoints[0].capturedIssueOrdinal == 63u &&
+                  evidence.checkpoints[0].localIssueOrdinal == 1u &&
+                  evidence.rows.size() == 2u && evidence.rows[0].issueCycle == 47u &&
+                  evidence.rows[0].localIssueOrdinal == 1u && evidence.rows[0].localSequence == 0u &&
+                  evidence.rows[1].issueCycle == 48u && evidence.rows[1].localIssueOrdinal == 2u &&
+                  evidence.rows[1].flags == 1u && evidence.rows[0].definedBytes == 0u &&
+                  evidence.rows[1].definedBytes == 0u,
+              "JIT activation preserves absolute captured cycles and new local reissue authority");
+        if (!semantic) { semantic = result.digest; querySemantic = result.querySemanticDigest; }
+        check(result.digest == semantic && result.querySemanticDigest == querySemantic,
+              "both production routes preserve draw and original query transcript semantics");
+      }
+    }
+  for (auto fault : {Executor::CheckpointFault::MissingEnd, Executor::CheckpointFault::StaleLocalIssue,
+                     Executor::CheckpointFault::DoubleRestore}) {
+    RuntimeFixture fixture(false, false, true, false, WMT::Device{resourceDevice.handle});
+    Executor executor(fixture, plan, blobs, {.checkpointFault = fault});
+    const auto result = executor.run();
+    check(!result.complete && result.resetOk && result.commands == 0u &&
+              result.queryReplay.checkpointActivated == 0u &&
+              result.failure == "general-executor-checkpoint-local-authority",
+          "missing/stale/double local END rejects before the transcript and cleans hidden owners");
   }
 }
 
@@ -10937,6 +11105,7 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-attachment-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-query-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-event-checkpoint-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-d24s8-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-volume-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-bootstrap-pages-spec" ||
@@ -10969,6 +11138,8 @@ int main(int argc, char** argv) {
       } else if (std::string_view(argv[1]) == "--general-cpu-query-spec") {
         controlledQueryFenceRefinementAndLifetime();
         generalCpuQueryTranscriptUsesControlledQueue();
+      } else if (std::string_view(argv[1]) == "--general-cpu-event-checkpoint-spec") {
+        generalCpuEventCheckpointUsesNewLocalEnd();
       } else if (std::string_view(argv[1]) == "--general-cpu-d24s8-spec") {
         generalCpuD24S8CheckpointRetainsBothLogicalPlanes();
       } else if (std::string_view(argv[1]) == "--general-cpu-volume-spec") {
@@ -11003,6 +11174,7 @@ int main(int argc, char** argv) {
     if (argc == 3 && (std::string_view(argv[1]) == "--write-general-cpu-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-query-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-event-checkpoint-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-d24s8-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-volume-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-bootstrap-pages-fixture" ||
@@ -11026,6 +11198,8 @@ int main(int argc, char** argv) {
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuMipmapFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-query-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuQueryFixture());
+      else if (std::string_view(argv[1]) == "--write-general-cpu-event-checkpoint-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuEventCheckpointFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-d24s8-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuD24S8Fixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-volume-fixture")

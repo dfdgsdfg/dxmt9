@@ -6,6 +6,7 @@
 #include "device_c_render_tape_provider.hpp"
 #include "device_c_render_tape_source_plan.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
+#include "d3d9_pe_wire_handle.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
@@ -1217,6 +1218,92 @@ struct GeneralIndexedFixture {
                    : kGeneralExpectedDigest)
             : RenderTapeDigest{},
         std::as_bytes(std::span(&oracle, 1u)));
+    tape = builder.seal();
+  }
+};
+
+struct EventCheckpointPixelFixture {
+  GeneralIndexedFixture source;
+  std::vector<std::byte> badShader{};
+  std::vector<RenderTapeProviderBlob> blobsValue{};
+  std::vector<std::byte> tape{};
+
+  EventCheckpointPixelFixture(const D9CRenderTapeEventQueryCheckpointResult& proof,
+      std::uint32_t background, std::uint32_t failurePlacement = 0u,
+      bool texturePrestage = false)
+      : source(3u, true, false, true, false, false, texturePrestage ? 22u : 0u,
+               false, false, false, background) {
+    blobsValue = source.blobsValue;
+    RenderTapeDigest badDigest{};
+    if (failurePlacement) {
+      // Creation validates only the bounded token layout; an unknown opcode
+      // followed by END is accepted for lazy compilation. A fully allocated
+      // no-END stream instead reaches the production walker's rejection bound.
+      std::vector<std::uint32_t> invalidWords(1u << 16u, 0u);
+      invalidWords[0] = 0xfffe0200u;
+      std::size_t rejectedWords = 0u;
+      check(!devicec::computeShaderBytecodeWordCount(
+                invalidWords.data(), &rejectedWords),
+            "shader failure fixture rejected by production creation layout walker");
+      const auto invalidBytes = std::as_bytes(std::span(invalidWords));
+      badShader.assign(invalidBytes.begin(), invalidBytes.end());
+      badDigest = RenderTapeCaptureSession::sha256(badShader);
+      blobsValue.push_back({badDigest, badShader});
+    }
+    RenderTapeBuilder builder;
+    const auto appendFailure = [&] {
+      const RenderTapeShaderDescriptor descriptor{.stage = 0u,
+          .bytecodeBytes = static_cast<std::uint32_t>(badShader.size())};
+      builder.appendObjectDefine({D9C_CHUNK_HANDLE_KIND_SHADER, 91u, 812u},
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
+          spanBytes(descriptor), badShader.size(), badDigest);
+    };
+    const auto appendPoll = [&](std::uint64_t cycle) {
+      const RenderTapeQueryGetDataControlV2 control{.flags = 1u,
+          .hasOutput = 1u, .definedBytes = 0u, .dataSize = 4u,
+          .issueCycle = cycle};
+      builder.appendOrderedControl({.identity = proof.identity,
+          .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+          .disposition = static_cast<std::uint32_t>(RenderTapeControlDisposition::Completed),
+          .resultCode = 0, .controlBytes = sizeof(control)}, spanBytes(control));
+    };
+    ImportedRenderTapeView original;
+    check(importPrevalidatedRenderTape(source.tape, original), "EVENT source imports");
+    bool inserted = false;
+    for (std::uint32_t i = 0u; i < original.events.size(); ++i) {
+      const auto event = original.event(i);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::PresentComplete) {
+        RenderTapePresentCompleteHeader complete{};
+        std::memcpy(&complete, event.payload.data(), sizeof(complete));
+        builder.appendPresentComplete(builder.eventCount(), complete.completionOrdinal,
+            static_cast<RenderTapeDigestValidity>(complete.digestValidity),
+            complete.expectedDigest, event.payload.subspan(sizeof(complete)));
+      } else builder.appendRawEvent(type, event.payload);
+      if (type != RenderTapeEventType::CommandChunk || inserted) continue;
+      inserted = true;
+      if (failurePlacement == 1u) appendFailure();
+      const RenderTapeQueryDescriptorV3 descriptor{
+          .initialIssueCycle = proof.issueCycle, .checkpoint = proof};
+      // JIT definition after real captured work distinguishes pre-transcript
+      // setup from a forbidden extra publication at activation.
+      builder.appendObjectDefine(proof.identity,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+          spanBytes(descriptor), 0u, {});
+      if (failurePlacement == 2u) appendFailure();
+      appendPoll(proof.issueCycle);
+      const auto issue = makeChunk(std::array{Record{
+          .type = D9C_COMMAND_RECORD_QUERY_ISSUE,
+          .payload = bytesOf(D9CCommandChunkWireQueryIssue{
+              .queryHandleIndex = 0u, .flags = 1u}),
+          .handles = {{proof.identity.kind, proof.identity.generation,
+                       proof.identity.objectId}},
+      }});
+      builder.appendCommandChunk({.recordCount = 1u, .handleCount = 1u}, issue);
+      appendPoll(proof.issueCycle + 1u);
+      builder.appendObjectDestroy(proof.identity);
+    }
+    check(inserted, "EVENT checkpoint has captured commands before JIT activation");
     tape = builder.seal();
   }
 };
@@ -3624,6 +3711,251 @@ void synchronousReferenceRejectsSeedBeforeEffects() {
             rejected.conservation.objectsCreated == 0u &&
             rejected.queryReplay.failure == RenderTapeQueryReplayFailure::BackendUnavailable,
         "signal-only initializer reference rejects seed before tape effects");
+}
+
+void nativeMetalCompletedEventCheckpointOracle() {
+  using namespace dxmt9::core;
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  D9CRenderTapeEventQueryCheckpointResult proof{};
+  {
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+        dxmt9c_factory_create(), dxmt9c_factory_release);
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> wire(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+        dxmt9c_device_release);
+    check(bool(wire), "EVENT capture production device");
+    auto upper = wire->dev().upperDevice();
+    check(upper && upper->usesAsyncQueryFences(), "EVENT capture actual async backend");
+    upper->flush();
+    std::unique_ptr<D9CQuery, decltype(&dxmt9c_query_release)> query(
+        dxmt9c_device_create_query(wire.get(), 8u), dxmt9c_query_release);
+    check(query && query->pollState->checkpointTracking,
+          "EVENT capture bookkeeping enabled before first Issue");
+    const auto issue = [&](std::uint32_t flags) {
+      const auto bytes = makeChunk(std::array{Record{
+          .type = D9C_COMMAND_RECORD_QUERY_ISSUE,
+          .payload = bytesOf(D9CCommandChunkWireQueryIssue{
+              .queryHandleIndex = 0u, .flags = flags}),
+          .handles = {{query->wireIdentity.kind, query->wireIdentity.generation,
+                       query->wireIdentity.objectId}},
+      }});
+      const D9CCommandChunk chunk{.version = D9C_COMMAND_CHUNK_VERSION,
+          .recordCount = 1u, .recordBytes = static_cast<std::uint32_t>(bytes.size()),
+          .records = toWireHandle(bytes.data()), .handleCount = 1u};
+      check(dxmt9c_device_commit_chunk(wire.get(), &chunk) == D3D_OK &&
+                drainDeferredReplay(wire.get(), "EVENT checkpoint oracle Issue"),
+            "recorded EVENT Issue reaches actual production query");
+    };
+    struct CompletionGate {
+      WMT::Reference<WMT::SharedEvent> event;
+      ~CompletionGate() { if (event) event.signalValue(1u); }
+    } gate{upper->queue().device().newSharedEvent()};
+    check(bool(gate.event), "EVENT checkpoint deterministic completion gate");
+    auto blocker = upper->queue().newCommandBuffer();
+    blocker.encodeWaitForEvent(WMT::Event{gate.event.handle}, 1u);
+    blocker.commit();
+    ClearDesc clear{};
+    clear.clearColor = true;
+    clear.color = {0.25f, 0.5f, 0.75f, 1.f};
+    check(wire->dev().clear(clear) == D3D_OK, "EVENT has a real GPU completion prefix");
+    issue(1u);
+    check(dxmt9c_query_get_data(query.get(), nullptr, 0u, 1u) == S_FALSE,
+          "actual queued GPU gate keeps EVENT Pending");
+    D9CRenderTapeEventQueryCheckpointRequest request{
+        .identity = query->wireIdentity, .issueCycle = 1u, .issueOrdinal = 1u,
+        .checkpointVersion = D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1,
+        .queryType = 8u};
+    D9CRenderTapeEventQueryCheckpointResult captured{};
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &request, &captured) == S_FALSE &&
+              captured.status == D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_PENDING,
+          "capture does not FLUSH/wait Pending into completed initial state");
+    gate.event.signalValue(1u);
+    upper->flush();
+    std::uint32_t untouched = 0xdeadbeefu;
+    check(dxmt9c_query_get_data(query.get(), &untouched, sizeof(untouched), 0u) == S_OK &&
+              untouched == 0xdeadbeefu,
+          "completed EVENT preserves existing zero-defined-result-byte contract");
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &request, &captured) == D3D_OK &&
+              renderTapeEventQueryCheckpointResultMatches(request, captured),
+          "bridge authenticates actual completed current EVENT");
+    const auto old = wire->dev().captureQueryPollSnapshot(query->obj);
+    issue(2u);
+    auto open = request;
+    open.issueCycle = 2u;
+    open.issueOrdinal = 2u;
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &open, &captured) != D3D_OK,
+          "open EVENT BEGIN cannot seed a completed checkpoint");
+    issue(1u);
+    upper->flush();
+    request.issueCycle = 2u;
+    request.issueOrdinal = 3u;
+    auto staleCycle = request;
+    staleCycle.issueCycle = 1u;
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &staleCycle, &captured) != D3D_OK &&
+              captured.status == D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_ISSUE,
+          "current ordinal with stale cycle cannot be echoed into authority");
+    check(wire->dev().pollQuerySnapshot(old, nullptr, 0u, 0u) == S_OK,
+          "old independent receipt stays complete without becoming current authority");
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &request, &proof) == D3D_OK && proof.issueCycle == 2u &&
+              proof.issueOrdinal == 3u,
+          "BEGIN/END history independently binds absolute cycle and Issue ordinal");
+    auto staleIdentity = request;
+    ++staleIdentity.identity.generation;
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &staleIdentity, &captured) != D3D_OK &&
+              captured.status == D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_GENERATION,
+          "stale generation cannot retain a completed EVENT");
+    check(dxmt9c_device_reset(wire.get(), &params) == D3D_OK,
+          "EVENT checkpoint reset negative");
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &request, &captured) != D3D_OK &&
+              captured.status != D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_COMPLETE,
+          "old epoch after actual reset cannot authenticate a completed checkpoint");
+    wire->replayDrainLedger.publishFailure();
+    check(dxmt9c_device_capture_render_tape_event_query_checkpoint(
+              wire.get(), &request, &captured) != D3D_OK &&
+              captured.status == D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED,
+          "terminal replay wins over earlier successful GPU completion");
+  }
+  std::uint32_t checked = 0u;
+  for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                           RenderTapePreparedRoute::ProductionSlot}) {
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+        dxmt9c_factory_create(), dxmt9c_factory_release);
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+        dxmt9c_device_release);
+    for (std::uint32_t iteration = 0u; iteration < 8u; ++iteration) {
+      const bool auditTexturePrestage = iteration >= 5u;
+      const auto failure = iteration == 1u || iteration == 5u ? 1u
+          : iteration == 3u || iteration == 6u ? 2u : 0u;
+      const auto background = iteration == 2u ? 0xff403020u : kGpuVisibleBackgroundColorARGB;
+      const EventCheckpointPixelFixture fixture(
+          proof, background, failure, auditTexturePrestage);
+      const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+      check(prepared.valid() && prepared.preflight().queryReplay.checkpointDefinitions == 1u &&
+                prepared.preflight().queryReplay.issueRecords == 1u &&
+                prepared.preflight().queryReplay.recordedPolls == 2u,
+            "EVENT checkpoint grammar preserves original query counts");
+      std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> auditDevice(
+          auditTexturePrestage
+              ? dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr)
+              : nullptr,
+          dxmt9c_device_release);
+      check(!auditTexturePrestage || bool(auditDevice),
+            "combined EVENT texture prestage audit has a genuinely fresh device");
+      auto* replayDevice = auditTexturePrestage ? auditDevice.get() : device.get();
+      const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto replay = replayPreparedRenderTapeIdentity(replayDevice, prepared, {
+          .route = route,
+          .reset = iteration == 0u || auditTexturePrestage
+              ? RenderTapePreparedReset::FreshDevice : RenderTapePreparedReset::WarmDevice,
+          .auditTexturePrestage = auditTexturePrestage});
+      const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto& evidence = replay.queryReplay;
+      check(replay.conservation.objectsCreated == replay.conservation.objectsReleased &&
+                evidence.checkpointSetupEnds == 1u && evidence.checkpointCompleted == 1u &&
+                evidence.checkpoints.size() == 1u && evidence.checkpoints[0].setupIssued &&
+                evidence.checkpoints[0].completed && evidence.checkpoints[0].localIssueOrdinal == 1u &&
+                evidence.checkpoints[0].localQueue != 0u && after.gpuErrors == before.gpuErrors,
+            "hidden/active checkpoint owner conserves exact new local END on success/failure");
+      const auto& checkpoint = evidence.checkpoints[0];
+      const bool emptyPrefix = checkpoint.localSequence == 0u &&
+          checkpoint.localInitializer == 0u;
+      check(evidence.checkpointSetupPublications == 0u &&
+                evidence.checkpointSetupPolls >= 1u &&
+                evidence.checkpointSetupPolls <= evidence.maxOraclePolls &&
+                checkpoint.setupPolls == evidence.checkpointSetupPolls &&
+                evidence.checkpointSetupPolls == evidence.checkpointSetupWaits + 1u &&
+                evidence.checkpointSetupWallNanos <= evidence.maxOracleWallNanos &&
+                checkpoint.completedSequence >= checkpoint.localSequence &&
+                checkpoint.completedInitializer >= checkpoint.localInitializer &&
+                (!emptyPrefix || (evidence.checkpointSetupWaits == 0u &&
+                                  evidence.checkpointSetupPolls == 1u)),
+            "setup settles only its authentic published prefix within the original bounds");
+      if (auditTexturePrestage) {
+        const auto& audit = replay.texturePrestageAudit;
+        check(audit.requested && audit.attempted && audit.complete &&
+                  audit.candidateObjects == 1u && audit.candidateSubresources == 1u &&
+                  audit.activatedObjects == 1u && audit.consumedSeeds == 1u &&
+                  audit.hiddenObjectsCreated == 1u && audit.hiddenObjectsReleased == 0u &&
+                  audit.activeObjectsCreated + 1u == replay.conservation.objectsCreated &&
+                  audit.activeObjectsReleased == replay.conservation.objectsReleased &&
+                  audit.physicalObjectsCreated == replay.conservation.objectsCreated &&
+                  audit.physicalObjectsReleased == replay.conservation.objectsReleased &&
+                  audit.physicalConservation,
+              "combined texture prestage and hidden/active EVENT owners conserve physical wrappers");
+      }
+      if (failure) {
+        check(replay.status == FrameTapeReplayStatus::ObjectCreationFailed &&
+                  evidence.checkpointActivated == (failure == 2u ? 1u : 0u),
+              "injected production creation failure cleans hidden and activated checkpoint owners");
+      } else {
+        check(replay.complete() && evidence.checkpointActivated == 1u &&
+                  evidence.rows.size() == 2u && evidence.rows[0].localIssueOrdinal == 1u &&
+                  evidence.rows[0].localQueryIdentity == checkpoint.localQueryIdentity &&
+                  evidence.rows[0].localDeviceEpoch == checkpoint.localDeviceEpoch &&
+                  evidence.rows[0].localQueue == checkpoint.localQueue &&
+                  evidence.rows[0].localSequence == checkpoint.localSequence &&
+                  evidence.rows[0].localInitializer == checkpoint.localInitializer &&
+                  evidence.rows[0].replayResult == S_OK &&
+                  evidence.rows[0].oracleResult == S_OK &&
+                  evidence.rows[0].oraclePolls == 0u && !evidence.rows[0].supplemental &&
+                  evidence.rows[1].localIssueOrdinal == 2u &&
+                  evidence.rows[0].issueCycle == proof.issueCycle &&
+                  evidence.rows[1].issueCycle == proof.issueCycle + 1u &&
+                  evidence.replayedIssueRecords == 1u && evidence.replayedPolls == 2u &&
+                  evidence.substitutedResults == 0u && replay.validity.expectedDigestMatched &&
+                  replay.outputPixels == gpuVisibleUniformExpectedPixels(background) &&
+                  replay.sourcePixels == replay.outputPixels,
+              std::string("JIT activation inserts no END/wait and reissue/warm recovery preserve original pixels") +
+                  ": iteration=" + std::to_string(iteration) +
+                  " audit=" + std::to_string(auditTexturePrestage) +
+                  " status=" + frameTapeReplayStatusName(replay.status) +
+                  " setup_publications=" + std::to_string(evidence.checkpointSetupPublications) +
+                  " setup_waits=" + std::to_string(evidence.checkpointSetupWaits) +
+                  " setup_polls=" + std::to_string(evidence.checkpointSetupPolls) +
+                  " local_sequence=" + std::to_string(evidence.checkpoints[0].localSequence) +
+                  " local_initializer=" + std::to_string(evidence.checkpoints[0].localInitializer) +
+                  " rows=" + std::to_string(evidence.rows.size()) +
+                  " digest_match=" + std::to_string(replay.validity.expectedDigestMatched) +
+                  " output_match=" + std::to_string(
+                      replay.outputPixels == gpuVisibleUniformExpectedPixels(background)) +
+                  " source_match=" + std::to_string(replay.sourcePixels == replay.outputPixels));
+        if (auditTexturePrestage) {
+          std::cout << "EVENT checkpoint combined setup: route="
+                    << (route == RenderTapePreparedRoute::Compatibility ? "compatibility" : "slot")
+                    << " sequence=" << checkpoint.localSequence
+                    << " initializer=" << checkpoint.localInitializer
+                    << " completed_sequence=" << checkpoint.completedSequence
+                    << " completed_initializer=" << checkpoint.completedInitializer
+                    << " texture_initializer=" << replay.texturePrestageAudit.initializerUploadValue
+                    << " texture_deferred=" << replay.texturePrestageAudit.deferredUploadSubresources
+                    << " publications=" << evidence.checkpointSetupPublications
+                    << " polls=" << evidence.checkpointSetupPolls
+                    << " waits=" << evidence.checkpointSetupWaits << '\n';
+        }
+        const auto direct = after.directLeaseDraws - before.directLeaseDraws;
+        const auto compatibility = after.compatibilityDraws - before.compatibilityDraws;
+        check(route == RenderTapePreparedRoute::Compatibility
+                  ? compatibility == 3u && direct == 0u
+                  : direct == 3u && compatibility == 0u,
+              "EVENT checkpoint executes actual selected provider route");
+      }
+      ++checked;
+    }
+  }
+    std::cout << "EVENT checkpoint Metal oracle: bridge Pending/current/stale cycle/generation/"
+               "epoch/terminal and BEGIN+END authority; " << checked
+            << " actual provider replays, hidden/active failure cleanup, combined texture prestage, "
+               "reissue and warm A/B/A pixels\n";
 }
 
 void nativeMetalCapturedQueryTapeOracle() {
@@ -6866,6 +7198,12 @@ int main(int argc, char** argv) {
       completedBackbufferSeedAdmissionTruthTable();
       nativeMetalCapturedQueryTapeOracle();
       nativeMetalRetainedQueryResultSurvivesReuseAndRelease();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-event-checkpoint-oracle") {
+      check(::setenv("DXMT9_RENDER_TAPE_CAPTURE", "1", 1) == 0,
+            "EVENT checkpoint mapping tracks complete history before first Query");
+      nativeMetalCompletedEventCheckpointOracle();
       return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--test-seed-reference-rejection") {

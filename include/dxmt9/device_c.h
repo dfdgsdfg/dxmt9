@@ -1096,6 +1096,49 @@ typedef struct D9CRenderTapeD24S8SnapshotResult {
     uint64_t byteCount;
 } D9CRenderTapeD24S8SnapshotResult;
 
+/* Capture-only completed EVENT checkpoint. Both absolute counters bind the
+ * current public issue; captured queue labels are provenance, never replay
+ * completion authority. A successful result owns no borrowed pointers. */
+enum { D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_VERSION_1 = 1u };
+
+typedef enum D9CRenderTapeEventQueryCheckpointStatus {
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_NONE = 0,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_COMPLETE = 1,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_GENERATION = 2,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_STALE_ISSUE = 3,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_UNSUPPORTED = 4,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_PENDING = 5,
+    D9C_RENDER_TAPE_EVENT_QUERY_CHECKPOINT_FAILED = 6,
+} D9CRenderTapeEventQueryCheckpointStatus;
+
+typedef struct D9CRenderTapeEventQueryCheckpointRequest {
+    D9CWireObjectIdentity identity;
+    uint64_t issueCycle;
+    uint64_t issueOrdinal;
+    uint32_t checkpointVersion;
+    uint32_t queryType;
+} D9CRenderTapeEventQueryCheckpointRequest;
+
+typedef struct D9CRenderTapeEventQueryCheckpointResult {
+    uint32_t checkpointVersion;
+    uint32_t status;
+    uint32_t queryType;
+    uint32_t active;
+    D9CWireObjectIdentity identity;
+    uint64_t issueCycle;
+    uint64_t coreQueryIdentity;
+    uint64_t deviceEpoch;
+    uint64_t issueOrdinal;
+    uint64_t rawOrdinal;
+    uint64_t queueIdentity;
+    uint64_t endSequence;
+    uint64_t initializerSequence;
+    uint64_t completedSequence;
+    uint64_t completedInitializer;
+    int32_t resultCode;
+    uint32_t reserved0;
+} D9CRenderTapeEventQueryCheckpointResult;
+
 /* Capture-only, synchronous color resource snapshot. The identity names an
  * exact generation-qualified standalone X8R8G8B8 surface or a supported
  * texture subresource (X8R8G8B8 2D or R32F cube face). Version 1 is the
@@ -1296,6 +1339,9 @@ DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24s8_snapshot(
     D9CDevice*, const D9CRenderTapeD24S8SnapshotRequest* request,
     D9CRenderTapeD24S8SnapshotResult* out, void* bytes, uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_event_query_checkpoint(
+    D9CDevice*, const D9CRenderTapeEventQueryCheckpointRequest* request,
+    D9CRenderTapeEventQueryCheckpointResult* out);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     D9CDevice*, const D9CRenderTapeColorSnapshotRequest* request,
     D9CRenderTapeColorSnapshotResult* out, void* bytes, uint64_t capacity);

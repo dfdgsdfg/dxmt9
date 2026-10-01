@@ -1155,6 +1155,37 @@ def _source_replay_is_default(value: Any) -> bool:
         "empty_source_count", "present_source_count"))
 
 
+def query_event_checkpoint(definition: Any) -> dict[str, Any] | None:
+    """Validate captured provenance, never treat its queue as replay authority."""
+    if (not isinstance(definition, dict) or definition.get("schema_version") != 3
+            or type(definition.get("schema_version")) is not int
+            or definition.get("initial_state") != 2 or definition.get("type") != 8
+            or definition.get("data_bytes") != 4):
+        return None
+    checkpoint = definition.get("checkpoint")
+    if (not isinstance(checkpoint, dict) or checkpoint.get("identity") != definition.get("identity")
+            or any(type(checkpoint.get(key)) is not int for key in (
+                "checkpoint_version", "status", "query_type", "active", "result_code", "reserved0"))
+            or checkpoint["checkpoint_version"] != 1 or checkpoint["status"] != 1
+            or checkpoint["query_type"] != 8 or checkpoint["active"] != 0
+            or checkpoint["result_code"] != 0 or checkpoint["reserved0"] != 0):
+        return None
+    for key in ("issue_cycle", "core_query_identity", "device_epoch", "issue_ordinal",
+                "raw_ordinal", "queue_identity", "end_sequence", "initializer_sequence",
+                "completed_sequence", "completed_initializer"):
+        if type(checkpoint.get(key)) is not int or not 0 <= checkpoint[key] <= 0xffffffffffffffff:
+            return None
+    if (any(checkpoint[key] == 0 for key in (
+            "issue_cycle", "core_query_identity", "device_epoch", "issue_ordinal",
+            "raw_ordinal", "queue_identity"))
+            or checkpoint["issue_cycle"] != definition.get("initial_issue_cycle")
+            or checkpoint["issue_ordinal"] < checkpoint["issue_cycle"]
+            or checkpoint["completed_sequence"] < checkpoint["end_sequence"]
+            or checkpoint["completed_initializer"] < checkpoint["initializer_sequence"]):
+        return None
+    return checkpoint
+
+
 def query_input_transcript(inspection: Any) -> dict[str, Any] | None:
     """Read query coverage only from the independent authenticated inspector."""
     if (not isinstance(inspection, dict) or inspection.get("valid") is not True
@@ -1211,6 +1242,13 @@ def query_input_transcript(inspection: Any) -> dict[str, Any] | None:
         key = tuple(identity.get(field) for field in ("kind", "generation", "object_id"))
         if key in definitions:
             return None
+        state, cycle = row.get("initial_state"), row.get("initial_issue_cycle")
+        if (type(state) is not int or state not in (0, 1, 2)
+                or type(cycle) is not int or not 0 <= cycle <= 0xffffffffffffffff
+                or (state == 0 and cycle != 0) or (state != 0 and cycle == 0)
+                or (state == 2 and query_event_checkpoint(row) is None)
+                or (state != 2 and row.get("schema_version", 2) != 2)):
+            return None
         definitions[key] = row
     issues_by_identity: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     previous_issue = (0, -1)
@@ -1253,14 +1291,17 @@ def query_input_transcript(inspection: Any) -> dict[str, Any] | None:
                 or row["captured_disposition"] != (1 if row["captured_result"] == 0
                                                    else 2 if row["captured_result"] == 1 else 3)):
             return None
-        if row["captured_result"] == 0 and row["issue_cycle"] > 0:
+        if row["issue_cycle"] > 0:
             # A readiness obligation belongs to the latest END of this exact
             # captured object/cycle, not any END or Ready with matching totals.
             key = tuple(identity.get(field) for field in ("kind", "generation", "object_id"))
             latest = next((issue for issue in reversed(issues_by_identity.get(key, []))
                            if issue["event_ordinal"] < row["event_ordinal"]), None)
-            if (latest is None or latest["flags"] != 1
-                    or latest["issue_cycle"] != row["issue_cycle"]):
+            initial_checkpoint = (latest is None and query_event_checkpoint(definition) is not None
+                                  and row["issue_cycle"] == definition["initial_issue_cycle"])
+            if (not initial_checkpoint and (latest is None
+                    or latest["issue_cycle"] != row["issue_cycle"]
+                    or row["captured_result"] == 0 and latest["flags"] != 1)):
                 return None
         defined = (definition["data_bytes"] if row["captured_result"] == 0
                    and row["has_output"] and definition["type"] != 8
@@ -1287,6 +1328,12 @@ def query_replay_accepts(evidence: Any, inspection: Any, *, backend: str,
         return (isinstance(evidence, dict) and evidence.get("present") is False
                 and all(type(evidence.get(key)) is int and evidence[key] == 0
                         for key in counts)
+                and all(type(evidence.get(key, 0)) is int and evidence.get(key, 0) == 0
+                        for key in ("checkpoint_definitions", "checkpoint_setup_ends",
+                                    "checkpoint_setup_publications", "checkpoint_setup_polls",
+                                    "checkpoint_setup_waits", "checkpoint_completed",
+                                    "checkpoint_activated", "checkpoint_setup_wall_ns"))
+                and evidence.get("checkpoints", []) == []
                 and evidence.get("rows") == [])
     if counts["query_definitions"] == 0:
         return False
@@ -1347,13 +1394,73 @@ def query_replay_accepts(evidence: Any, inspection: Any, *, backend: str,
                 "supplemental_polls", "supplemental_drains", "oracle_wall_ns")))):
         return False
     rows = evidence.get("rows")
+    checkpoint_definitions = {
+        tuple(row["identity"].get(key) for key in ("kind", "generation", "object_id")): row
+        for row in transcript["definitions"] if row.get("initial_state") == 2}
+    checkpoint_count = len(checkpoint_definitions)
+    checkpoint_fields = ("checkpoint_definitions", "checkpoint_setup_ends", "checkpoint_completed",
+                         "checkpoint_activated", "checkpoint_setup_publications",
+                         "checkpoint_setup_polls", "checkpoint_setup_waits", "checkpoint_setup_wall_ns")
+    for key in checkpoint_fields:
+        value = evidence.get(key, 0 if not checkpoint_count else None)
+        if type(value) is not int or not 0 <= value <= 0xffffffffffffffff:
+            return False
+        if not checkpoint_count and value != 0:
+            return False
+    if any(evidence.get(key, 0) != checkpoint_count for key in (
+            "checkpoint_definitions", "checkpoint_setup_ends", "checkpoint_completed", "checkpoint_activated")):
+        return False
+    if checkpoint_count and (evidence["checkpoint_setup_polls"] < checkpoint_count
+            or evidence["checkpoint_setup_polls"] > checkpoint_count * 262145
+            or evidence["checkpoint_setup_waits"] > evidence["checkpoint_setup_polls"]):
+        return False
+    checkpoints = evidence.get("checkpoints", [] if not checkpoint_count else None)
     if measurement:
         # Input hashing happens at admission, before measured repetitions. The
         # detailed qualification is rebound by the existing policy aggregate.
-        return (rows == [] and isinstance(inspection.get("events_sha256"), str)
+        return (rows == [] and checkpoints == [] and isinstance(inspection.get("events_sha256"), str)
                 and re.fullmatch(r"[0-9a-f]{64}", inspection["events_sha256"]) is not None
                 and evidence.get("events_sha256") == inspection["events_sha256"])
     if not isinstance(rows, list) or len(rows) != len(polls):
+        return False
+    if not isinstance(checkpoints, list) or len(checkpoints) != checkpoint_count:
+        return False
+    checkpoint_authorities = {}
+    setup_polls = 0
+    for checkpoint in checkpoints:
+        identity = checkpoint.get("identity") if isinstance(checkpoint, dict) else None
+        if not isinstance(identity, dict):
+            return False
+        identity_key = tuple(identity.get(key) for key in ("kind", "generation", "object_id"))
+        definition = checkpoint_definitions.get(identity_key)
+        captured = query_event_checkpoint(definition)
+        if captured is None or identity_key in checkpoint_authorities:
+            return False
+        for local, source in (("captured_issue_cycle", "issue_cycle"),
+                              ("captured_issue_ordinal", "issue_ordinal"),
+                              ("captured_device_epoch", "device_epoch")):
+            if type(checkpoint.get(local)) is not int or checkpoint[local] != captured[source]:
+                return False
+        for key in ("local_query_identity", "local_issue_ordinal", "local_device_epoch", "local_queue",
+                    "local_sequence", "local_initializer", "completed_sequence", "completed_initializer",
+                    "setup_polls"):
+            if type(checkpoint.get(key)) is not int or not 0 <= checkpoint[key] <= 0xffffffffffffffff:
+                return False
+        if (any(checkpoint[key] == 0 for key in (
+                "local_query_identity", "local_device_epoch", "local_queue", "setup_polls"))
+                or checkpoint["local_issue_ordinal"] != 1
+                or checkpoint["completed_sequence"] < checkpoint["local_sequence"]
+                or checkpoint["completed_initializer"] < checkpoint["local_initializer"]
+                or any(checkpoint.get(key) is not True for key in ("setup_issued", "completed", "activated"))):
+            return False
+        authority = tuple(checkpoint[key] for key in (
+            "local_query_identity", "local_issue_ordinal", "local_device_epoch",
+            "local_queue", "local_sequence", "local_initializer"))
+        if authority in checkpoint_authorities.values():
+            return False
+        checkpoint_authorities[identity_key] = authority
+        setup_polls += checkpoint["setup_polls"]
+    if setup_polls != evidence.get("checkpoint_setup_polls", 0):
         return False
     captured_fields = ("event_index", "event_ordinal", "identity", "issue_cycle", "flags",
                        "has_output", "data_size", "captured_result", "defined_bytes", "captured_hex")
@@ -1397,6 +1504,16 @@ def query_replay_accepts(evidence: Any, inspection: Any, *, backend: str,
             return False
         cycle_key = (*identity_key, row["issue_cycle"])
         local_key = tuple(row[key] for key in ("local_query_identity", "local_issue_ordinal", "local_device_epoch"))
+        checkpoint_authority = checkpoint_authorities.get(identity_key)
+        initial_checkpoint = (checkpoint_authority is not None and
+                              row["issue_cycle"] == definition["initial_issue_cycle"])
+        if checkpoint_authority is not None:
+            row_authority = tuple(row[key] for key in (
+                "local_query_identity", "local_issue_ordinal", "local_device_epoch",
+                "local_queue", "local_sequence", "local_initializer"))
+            if (initial_checkpoint and row_authority != checkpoint_authority
+                    or not initial_checkpoint and local_key == checkpoint_authority[:3]):
+                return False
         if cycle_key in local_cycles and local_cycles[cycle_key] != local_key:
             return False
         if cycle_key not in local_cycles and local_key in local_cycles.values():
@@ -1427,7 +1544,8 @@ def query_replay_accepts(evidence: Any, inspection: Any, *, backend: str,
             if row["oracle_result"] != 0:
                 return False
             if row["issue_cycle"] != 0 and definition.get("type") in (8, 9):
-                if (row["local_queue"] == 0 or (row["local_sequence"] == 0 and row["local_initializer"] == 0)
+                if (row["local_queue"] == 0 or (row["local_sequence"] == 0 and row["local_initializer"] == 0
+                                               and not initial_checkpoint)
                         or row["completed_sequence"] < row["local_sequence"]
                         or row["completed_initializer"] < row["local_initializer"]):
                     return False

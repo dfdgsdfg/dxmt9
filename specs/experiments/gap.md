@@ -177,6 +177,41 @@ visual qualification is claimed. Query issue history across the capture cut
 is now the next actual-input gate. Query type and pre-cut phase must be
 established before selecting a bootstrap or retained-history contract; dropping
 the poll or inventing an issue/result is not a valid workaround.
+Retry 07 adds failure-only PE query diagnostics without changing semantics.
+It identifies both alternating queries as EVENT (type 8), closed, with absolute
+cycles 589/590 in the sampled failures. The real call is GetData(FLUSH), S_OK,
+four requested output bytes but zero defined bytes under the current EVENT
+contract. No open BEGIN or missing occlusion samples are implicated by this
+failure. The verified benchmark process was stopped after repeated identical
+rejection. R-HARN-REPLAY-9.9 now requires an authenticated completed-EVENT
+checkpoint and a separately accounted local production END on replay.
+The implementation now uses explicit V3 descriptors, independent Unix
+cycle/Issue-ordinal history, current device-epoch revalidation, and an arm-local
+overlay without changing durable query state. CPU and Metal replay restore one
+real local END before the transcript, then activate the same hidden owner at
+ObjectDefine; sequence-zero empty prefixes remain valid. Setup counters and
+timing are separate from original Issues, polls and measured transcript work.
+Native schema/capture/authority/current-epoch tests pass, including 512 bounded
+authority states. CPU tests and independently inspected, exported synthetic
+receipts pass both Compatibility and ProductionSlot verify/measure routes.
+The Metal oracle passes sixteen actual provider executions covering Pending
+rejection, current/stale cycle/generation/epoch/terminal authority, reissue,
+warm A/B/A pixels, returned creation failures before/after activation, and
+combined texture-prestage physical ownership conservation. Ten serial native
+oracle repetitions pass. A real prestage initializer may require setup polls:
+only a witnessed empty sequence/initializer prefix requires zero waits. The
+first transcript poll must consume the exact completed setup incarnation with
+no supplemental wait or additional END; original Issue/poll counts and exact
+pixels remain unchanged.
+Main's final native matrix passes 11 tests; the Rosetta matrix passes five,
+including the actual Metal oracle and Unix install-name audit. Both PE builds
+and the full canonical x86_64 Unix build complete with the same bridge schema.
+Ownership is also guarded across exceptions, but actual allocation-throw
+injection remains unexecuted; returned creation failure is not that evidence.
+The existing 227-configuration TLA regression passes, not a new proof of the
+entire checkpoint protocol. No actual STALKER Tape is published yet; actual
+capture, production query/pixel qualification and repeated policy measurements
+remain open. These synthetic results establish no FPS benefit.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

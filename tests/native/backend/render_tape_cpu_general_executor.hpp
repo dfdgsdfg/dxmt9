@@ -353,6 +353,13 @@ class CpuGeneralTapeExecutor {
     StorageGeneration,
   };
 
+  enum class CheckpointFault : std::uint8_t {
+    None,
+    MissingEnd,
+    StaleLocalIssue,
+    DoubleRestore,
+  };
+
   struct Options {
     dxmt9::d3d9::ProviderReplayPolicy route =
         dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
@@ -367,6 +374,7 @@ class CpuGeneralTapeExecutor {
     bool deferOneObjectReleaseForResetTest = false;
     bool dropRetiredAliasReceiptForTest = false;
     PendingIdentityFault pendingIdentityFault = PendingIdentityFault::None;
+    CheckpointFault checkpointFault = CheckpointFault::None;
     // Measurement keeps production replay and lifetime work intact while
     // omitting the cold semantic/resource oracle.  It is intentionally
     // constrained to immediate, single-source publication until the caller
@@ -406,7 +414,8 @@ class CpuGeneralTapeExecutor {
          options_.corruptRetainedBytesAfterMutationForTest ||
          options_.deferOneObjectReleaseForResetTest ||
          options_.dropRetiredAliasReceiptForTest ||
-         options_.pendingIdentityFault != PendingIdentityFault::None)) {
+         options_.pendingIdentityFault != PendingIdentityFault::None ||
+         options_.checkpointFault != CheckpointFault::None)) {
       result.failure = "general-executor-measurement-policy";
       return result;
     }
@@ -509,6 +518,21 @@ class CpuGeneralTapeExecutor {
     };
     std::vector<QueryCycle> queryCycles;
     queryCycles.reserve(queryAdmission.counts.queryDefinitions);
+    struct HiddenCheckpoint {
+      dxmt9::d3d9::render_tape_runtime::OwnedObject object{};
+      QueryCycle cycle{};
+      std::size_t evidenceIndex = 0u;
+      bool activated = false;
+    };
+    std::vector<HiddenCheckpoint> hiddenCheckpoints;
+    hiddenCheckpoints.reserve(queryAdmission.counts.queryDefinitions);
+    struct CheckpointCleanup {
+      std::vector<HiddenCheckpoint>& owners;
+      ~CheckpointCleanup() {
+        for (auto& owner : owners)
+          dxmt9::d3d9::render_tape_runtime::releaseOwnedObject(owner.object);
+      }
+    } checkpointCleanup{hiddenCheckpoints};
     receipts.reserve(plan_.mutations.size());
     result.tombstones.reserve(plan_.definitions.size());
     auto& tombstones = result.tombstones;
@@ -1449,8 +1473,8 @@ class CpuGeneralTapeExecutor {
         return fail(event, name);
       };
       if (!wrapped || !wrapped->obj || cycle == queryCycles.end() ||
-          cycle->state.issueCycle != poll.issueCycle ||
-          (poll.issueCycle != 0u && !cycle->state.capturedCycle))
+          !d3d9::renderTapeQueryPollCycleAdmitted(cycle->state, poll.issueCycle,
+                                                fixed.resultCode))
         return queryFail(Failure::CycleMismatch, "general-executor-query-cycle-mismatch");
       const auto snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(wrapped->obj);
       if (!snapshot.eligible || snapshot.identity != wrapped->obj->identity() ||
@@ -1620,18 +1644,38 @@ class CpuGeneralTapeExecutor {
             return false;
           }
           const auto& definition = plan_.definitions[replayEvent.index];
-          void* value = create(definition);
+          auto hidden = std::find_if(hiddenCheckpoints.begin(), hiddenCheckpoints.end(),
+              [&](const auto& owner) {
+                return detail::cpuGeneralSameIdentity(owner.object.identity,
+                                                     definition.fixed.identity);
+              });
+          if (hidden != hiddenCheckpoints.end() && (hidden->activated || !hidden->object.value))
+            return fail(event, "general-executor-checkpoint-double-activation");
+          void* value = hidden == hiddenCheckpoints.end()
+              ? create(definition) : std::exchange(hidden->object.value, nullptr);
           if (!value) {
             fail(event, "general-executor-object-create-failed");
             return false;
           }
           objects.push_back({.identity = definition.fixed.identity, .value = value});
           if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
-            d3d9::RenderTapeQueryDescriptorV2 desc{};
-            if (!d3d9::renderTapeLoadQueryDescriptorV2(definition.descriptor, desc))
+            d3d9::RenderTapeQueryDescriptorDecoded desc{};
+            if (!d3d9::renderTapeLoadQueryDescriptor(definition.descriptor, desc) ||
+                !d3d9::renderTapeQueryDescriptorIdentityMatches(desc, definition.fixed.identity))
               return fail(event, "general-executor-query-descriptor");
-            queryCycles.push_back({.identity = definition.fixed.identity,
-                .state = {.type = desc.type, .issueCycle = desc.initialIssueCycle}});
+            if (hidden != hiddenCheckpoints.end()) {
+              hidden->activated = true;
+              queryCycles.push_back(hidden->cycle);
+              ++result.queryReplay.checkpointActivated;
+              if (!options_.measurement)
+                result.queryReplay.checkpoints[hidden->evidenceIndex].activated = true;
+            } else {
+              if (desc.initialState == static_cast<std::uint32_t>(
+                      d3d9::RenderTapeQueryInitialState::CompletedEventCheckpoint))
+                return fail(event, "general-executor-checkpoint-setup-missing");
+              queryCycles.push_back({.identity = definition.fixed.identity,
+                  .state = d3d9::renderTapeInitialQueryCycle(desc)});
+            }
           }
           ++result.resourcesCreated;
           break;
@@ -1761,7 +1805,10 @@ class CpuGeneralTapeExecutor {
         evidence.transcriptComplete = evidence.replayedIssueRecords == evidence.issueRecords &&
             evidence.replayedPolls == evidence.recordedPolls;
         evidence.oracleComplete = evidence.transcriptComplete &&
-            evidence.readinessRequired == evidence.readinessSatisfied;
+            evidence.readinessRequired == evidence.readinessSatisfied &&
+            evidence.checkpointDefinitions == evidence.checkpointSetupEnds &&
+            evidence.checkpointDefinitions == evidence.checkpointCompleted &&
+            evidence.checkpointDefinitions == evidence.checkpointActivated;
         if (!evidence.oracleComplete)
           return fail(plan_.events.back().eventIndex, "general-executor-query-incomplete");
       }
@@ -1769,7 +1816,108 @@ class CpuGeneralTapeExecutor {
     };
     diagnostic.set(CpuDiagnosticPhase::Bookkeeping);
     try {
-    result.complete = executeEvents();
+    const auto restoreCheckpoints = [&]() {
+      CpuDiagnosticLedger::Scope phase(options_.diagnostic, CpuDiagnosticPhase::HarnessSetup);
+      auto& evidence = result.queryReplay;
+      std::chrono::steady_clock::time_point setupBegin{};
+      struct SetupTiming {
+        d3d9::RenderTapeQueryReplayEvidence& evidence;
+        std::chrono::steady_clock::time_point& begin;
+        ~SetupTiming() {
+          if (evidence.checkpointDefinitions)
+            evidence.checkpointSetupWallNanos = elapsed(begin);
+        }
+      } setupTiming{evidence, setupBegin};
+      for (const auto& definition : plan_.definitions) {
+        if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+        d3d9::RenderTapeQueryDescriptorDecoded descriptor{};
+        if (!d3d9::renderTapeLoadQueryDescriptor(definition.descriptor, descriptor))
+          return fail(0xffffffffu, "general-executor-checkpoint-descriptor");
+        if (descriptor.initialState != static_cast<std::uint32_t>(
+                d3d9::RenderTapeQueryInitialState::CompletedEventCheckpoint)) continue;
+        if (evidence.checkpointDefinitions++ == 0u) setupBegin = std::chrono::steady_clock::now();
+        if (!d3d9::renderTapeQueryDescriptorIdentityMatches(descriptor, definition.fixed.identity))
+          return fail(0xffffffffu, "general-executor-checkpoint-identity");
+        auto* query = static_cast<D9CQuery*>(create(definition));
+        if (!query || !query->obj)
+          return fail(0xffffffffu, "general-executor-checkpoint-create");
+        hiddenCheckpoints.push_back({
+            .object = {.identity = definition.fixed.identity, .value = query},
+            .cycle = {.identity = definition.fixed.identity,
+                      .state = d3d9::renderTapeInitialQueryCycle(descriptor)},
+            .evidenceIndex = evidence.checkpoints.size()});
+        auto& owner = hiddenCheckpoints.back();
+        const auto before = fixture_.routing->queryProgress();
+        if (options_.checkpointFault != CheckpointFault::MissingEnd) {
+          if (dxmt9c_query_issue(query, 1u) != core::D3D_OK)
+            return fail(0xffffffffu, "general-executor-checkpoint-end");
+          ++evidence.checkpointSetupEnds;
+        }
+        if (options_.checkpointFault == CheckpointFault::DoubleRestore) {
+          (void)dxmt9c_query_issue(query, 1u);
+          ++evidence.checkpointSetupEnds;
+        }
+        owner.cycle.snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+        if (options_.checkpointFault == CheckpointFault::StaleLocalIssue) {
+          (void)dxmt9c_query_issue(query, 1u);
+          ++evidence.checkpointSetupEnds;
+        }
+        owner.cycle.expectedLocalIssueOrdinal = 1u;
+        const auto& snapshot = owner.cycle.snapshot;
+        const auto fence = snapshot.backendFence.snapshot();
+        const auto after = fixture_.routing->queryProgress();
+        evidence.checkpointSetupPublications += static_cast<std::uint32_t>(after.published - before.published);
+        d3d9::RenderTapeQueryCheckpointReplayRow row{
+            .identity = definition.fixed.identity,
+            .capturedIssueCycle = descriptor.checkpoint.issueCycle,
+            .capturedIssueOrdinal = descriptor.checkpoint.issueOrdinal,
+            .capturedDeviceEpoch = descriptor.checkpoint.deviceEpoch,
+            .localQueryIdentity = snapshot.identity,
+            .localIssueOrdinal = snapshot.issueOrdinal,
+            .localDeviceEpoch = snapshot.issueDeviceEpoch,
+            .localQueue = fence.queue, .localSequence = fence.sequence,
+            .localInitializer = fence.initializer,
+            .setupIssued = options_.checkpointFault != CheckpointFault::MissingEnd};
+        const auto current = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+        if (!snapshot.eligible || snapshot.active || snapshot.identity != query->obj->identity() ||
+            snapshot.issueOrdinal != 1u || !snapshot.issueDeviceEpoch || !fence.queue ||
+            current.issueOrdinal != snapshot.issueOrdinal ||
+            current.issueDeviceEpoch != snapshot.issueDeviceEpoch)
+          return fail(0xffffffffu, "general-executor-checkpoint-local-authority");
+        ++row.setupPolls;
+        ++evidence.checkpointSetupPolls;
+        auto hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
+        while (hr == core::S_FALSE && row.setupPolls <= options_.maxQueryOraclePolls) {
+          // Both production dequeue and acknowledgment can wait. In this
+          // single-thread controller, only an existing ready source may be
+          // submitted; initializer-only Pending cannot invent queue work.
+          if (!Access::peekReadyCompletion(fixture_.routing->queue_).seqId) {
+            evidence.failure = d3d9::RenderTapeQueryReplayFailure::ProgressExhausted;
+            evidence.progressLimit = d3d9::RenderTapeQueryProgressLimit::PollBudget;
+            return fail(0xffffffffu, "general-executor-checkpoint-progress-unavailable");
+          }
+          const auto source = Access::submitOneWithheld(fixture_.routing->queue_);
+          if (!source.submitted || !Access::acknowledgeOne(fixture_.routing->queue_) ||
+              !Access::finishQueue(fixture_.routing->queue_))
+            return fail(0xffffffffu, "general-executor-checkpoint-completion");
+          ++evidence.checkpointSetupWaits;
+          ++row.setupPolls;
+          ++evidence.checkpointSetupPolls;
+          hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
+        }
+        const auto progress = fixture_.routing->queryProgress();
+        row.completedSequence = progress.completed;
+        row.completedInitializer = progress.initializerCompleted;
+        if (hr != core::D3D_OK ||
+            dxmt9::query::classifyEnd(snapshot.backendFence, progress) != dxmt9::query::Poll::Complete)
+          return fail(0xffffffffu, "general-executor-checkpoint-premature-result");
+        row.completed = true;
+        ++evidence.checkpointCompleted;
+        if (!options_.measurement) evidence.checkpoints.push_back(row);
+      }
+      return true;
+    };
+    result.complete = restoreCheckpoints() && executeEvents();
     } catch (...) {
       if (result.failure.empty()) {
         result.failure = "general-executor-exception";
@@ -1794,6 +1942,8 @@ class CpuGeneralTapeExecutor {
             !Access::finishQueue(fixture_.routing->queue_)) break;
       }
     }
+    for (auto& owner : hiddenCheckpoints)
+      dxmt9::d3d9::render_tape_runtime::releaseOwnedObject(owner.object);
     dxmt9::d3d9::render_tape_runtime::OwnedObject* deferredResetObject = nullptr;
     for (auto it = objects.rbegin(); it != objects.rend(); ++it) {
       if (!it->value) continue;

@@ -1553,11 +1553,14 @@ FrameTapeReplayResult buildGeneralPlan(
         }
         referenceBlob(fixed.immutablePayloadDigest);
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
-        RenderTapeQueryDescriptorV2 query{};
-        if (!renderTapeLoadQueryDescriptorV2(descriptor, query))
+        RenderTapeQueryDescriptorDecoded query{};
+        if (!renderTapeLoadQueryDescriptor(descriptor, query) ||
+            !renderTapeQueryDescriptorIdentityMatches(query, fixed.identity))
           goto unsupported;
         result.queryReplay.present = true;
         ++result.queryReplay.queryDefinitions;
+        if (query.schemaVersion == kRenderTapeQueryDescriptorVersion3)
+          ++result.queryReplay.checkpointDefinitions;
         // Absolute timestamps are fresh-execution-dependent. No implicit
         // normalization may substitute for a qualified relational oracle.
         if (query.type == 10u) {
@@ -2168,8 +2171,10 @@ void* createRenderTapeObject(
         : nullptr;
   }
   if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
-    RenderTapeQueryDescriptorV2 desc{};
-    if (!renderTapeLoadQueryDescriptorV2(descriptor, desc)) return nullptr;
+    RenderTapeQueryDescriptorDecoded desc{};
+    if (!renderTapeLoadQueryDescriptor(descriptor, desc) ||
+        !renderTapeQueryDescriptorIdentityMatches(desc, fixed.identity))
+      return nullptr;
     auto* query = dxmt9c_device_create_query(device, desc.type);
     if (query && dxmt9c_query_get_data_size(query) != desc.dataBytes) {
       dxmt9c_query_release(query);
@@ -2817,8 +2822,8 @@ FrameTapeReplayResult replayGeneralPlan(
     }
     for (const auto& definition : plan.definitions) {
       if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
-      RenderTapeQueryDescriptorV2 query{};
-      if (!renderTapeLoadQueryDescriptorV2(definition.descriptor, query) ||
+      RenderTapeQueryDescriptorDecoded query{};
+      if (!renderTapeLoadQueryDescriptor(definition.descriptor, query) ||
           (query.type == 9u && !upper->usesMetalOcclusion())) {
         result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
         result.status = FrameTapeReplayStatus::QueryOracleUnsupported;
@@ -2867,6 +2872,9 @@ FrameTapeReplayResult replayGeneralPlan(
   struct QueryState {
     D9CWireObjectIdentity identity{};
     RenderTapeQueryCycleState cycle{};
+    std::uint64_t localQueryIdentity = 0u;
+    std::uint64_t localIssueOrdinal = 0u;
+    std::uint64_t localDeviceEpoch = 0u;
   };
   struct QueryObligation {
     std::size_t rowIndex = 0u;
@@ -2874,6 +2882,11 @@ FrameTapeReplayResult replayGeneralPlan(
   };
   std::vector<QueryState> queryStates;
   std::vector<QueryObligation> queryObligations;
+  struct CheckpointQuery {
+    OwnedObject object{};
+    std::size_t evidenceIndex = 0u;
+  };
+  std::vector<CheckpointQuery> checkpointQueries;
   if (result.queryReplay.present) {
     // No transcript or result-owner storage is first allocated after an
     // original polling call has already produced an externally visible effect.
@@ -2881,6 +2894,10 @@ FrameTapeReplayResult replayGeneralPlan(
       queryStates.reserve(result.queryReplay.queryDefinitions);
       queryObligations.reserve(result.queryReplay.recordedPolls);
       result.queryReplay.rows.reserve(result.queryReplay.recordedPolls);
+      result.queryReplay.checkpoints.reserve(result.queryReplay.checkpointDefinitions);
+      checkpointQueries.reserve(result.queryReplay.checkpointDefinitions);
+      objects.reserve(plan.definitions.size());
+      definitions.reserve(plan.definitions.size());
     } catch (...) {
       result.status = FrameTapeReplayStatus::ObjectCreationFailed;
       return result;
@@ -3089,6 +3106,12 @@ FrameTapeReplayResult replayGeneralPlan(
       if (texturePrestageAudit) {
         ++texturePrestageAudit->hiddenObjectsReleased;
       }
+    }
+    for (auto& checkpoint : checkpointQueries) {
+      if (!checkpoint.object.value) continue;
+      render_tape_runtime::releaseOwnedObject(checkpoint.object);
+      ++result.conservation.objectsReleased;
+      if (texturePrestageAudit) ++texturePrestageAudit->activeObjectsReleased;
     }
     if (texturePrestageAudit) {
       texturePrestageAudit->physicalObjectsCreated =
@@ -3408,6 +3431,113 @@ FrameTapeReplayResult replayGeneralPlan(
     }
   }
 
+  // Completed initial EVENTs have no captured resource dependencies. Restore
+  // them before transcript work, even when their ObjectDefine is materialized
+  // lazily after a captured command. Activation only transfers this owner;
+  // it must never insert a new mid-transcript END/publication or drain.
+  try {
+    for (const auto& definition : plan.definitions) {
+      if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+      RenderTapeQueryDescriptorDecoded descriptor{};
+      if (!renderTapeLoadQueryDescriptor(definition.descriptor, descriptor))
+        return fail(FrameTapeReplayStatus::QueryOracleUnsupported, 0xffffffffu);
+      if (descriptor.schemaVersion != kRenderTapeQueryDescriptorVersion3) continue;
+      const auto started = std::chrono::steady_clock::now();
+      const auto finishSetup = [&] {
+        result.queryReplay.checkpointSetupWallNanos += elapsedNanos(
+            started, std::chrono::steady_clock::now());
+      };
+      auto* query = static_cast<D9CQuery*>(render_tape_runtime::createRenderTapeObject(
+          device, definition.fixed, definition.descriptor, blobs, {}));
+      if (!query) {
+        finishSetup();
+        return fail(FrameTapeReplayStatus::ObjectCreationFailed, 0xffffffffu);
+      }
+      checkpointQueries.push_back({
+          .object = {.identity = definition.fixed.identity, .value = query},
+          .evidenceIndex = result.queryReplay.checkpoints.size(),
+      });
+      ++result.conservation.objectsCreated;
+      // The audit's hidden category is exclusively texture prestage. Query
+      // setup is a non-prestage physical acquisition, counted once here;
+      // transcript activation transfers ownership without acquiring again.
+      if (texturePrestageAudit) ++texturePrestageAudit->activeObjectsCreated;
+      result.queryReplay.checkpoints.push_back({
+          .identity = definition.fixed.identity,
+          .capturedIssueCycle = descriptor.initialIssueCycle,
+          .capturedIssueOrdinal = descriptor.checkpoint.issueOrdinal,
+          .capturedDeviceEpoch = descriptor.checkpoint.deviceEpoch,
+      });
+      auto& row = result.queryReplay.checkpoints.back();
+      const auto before = replayUpper->queryProgress();
+      if (dxmt9c_query_issue(query, 1u) != core::D3D_OK) {
+        finishSetup();
+        result.queryReplay.failure = RenderTapeQueryReplayFailure::PollFailed;
+        return fail(FrameTapeReplayStatus::QueryOracleFailed, 0xffffffffu);
+      }
+      row.setupIssued = true;
+      ++result.queryReplay.checkpointSetupEnds;
+      auto snapshot = device->dev().captureQueryPollSnapshot(query->obj);
+      if (snapshot.type != core::QueryType::Event || snapshot.issueOrdinal != 1u ||
+          snapshot.active || snapshot.failed || !snapshot.backendFence.valid() ||
+          (!snapshot.eligible &&
+           !device->dev().promotePublishedQueryPollSnapshot(snapshot))) {
+        finishSetup();
+        result.queryReplay.failure = RenderTapeQueryReplayFailure::SnapshotUnavailable;
+        return fail(FrameTapeReplayStatus::QueryOracleFailed, 0xffffffffu);
+      }
+      bool complete = false;
+      while (result.queryReplay.checkpointSetupPolls < result.queryReplay.maxOraclePolls) {
+        const auto elapsed = elapsedNanos(started, std::chrono::steady_clock::now());
+        if (result.queryReplay.checkpointSetupWallNanos >=
+                result.queryReplay.maxOracleWallNanos ||
+            elapsed >= result.queryReplay.maxOracleWallNanos -
+                result.queryReplay.checkpointSetupWallNanos) break;
+        ++row.setupPolls;
+        ++result.queryReplay.checkpointSetupPolls;
+        const auto polled = device->dev().pollQuerySnapshot(
+            snapshot, nullptr, 0u, core::QUERY_GETDATA_FLUSH);
+        if (polled == core::S_OK) { complete = true; break; }
+        if (polled != core::S_FALSE) {
+          finishSetup();
+          result.queryReplay.failure = RenderTapeQueryReplayFailure::PollFailed;
+          return fail(FrameTapeReplayStatus::QueryOracleFailed, 0xffffffffu);
+        }
+        ++result.queryReplay.checkpointSetupWaits;
+        std::this_thread::yield();
+      }
+      const auto fence = snapshot.backendFence.snapshot();
+      const auto after = replayUpper->queryProgress();
+      row.localQueryIdentity = snapshot.identity;
+      row.localIssueOrdinal = snapshot.issueOrdinal;
+      row.localDeviceEpoch = snapshot.issueDeviceEpoch;
+      row.localQueue = fence.queue;
+      row.localSequence = fence.sequence;
+      row.localInitializer = fence.initializer;
+      row.completedSequence = after.completed;
+      row.completedInitializer = after.initializerCompleted;
+      if (after.published < before.published ||
+          after.published - before.published > std::numeric_limits<std::uint32_t>::max())
+        complete = false;
+      else result.queryReplay.checkpointSetupPublications +=
+          static_cast<std::uint32_t>(after.published - before.published);
+      finishSetup();
+      if (!complete || dxmt9::query::classifyEnd(snapshot.backendFence, after) !=
+              dxmt9::query::Poll::Complete) {
+        result.queryReplay.failure = complete
+            ? RenderTapeQueryReplayFailure::PollFailed
+            : RenderTapeQueryReplayFailure::ProgressExhausted;
+        return fail(complete ? FrameTapeReplayStatus::QueryOracleFailed
+                             : FrameTapeReplayStatus::QueryProgressExhausted,
+                    0xffffffffu);
+      }
+      row.completed = true;
+      ++result.queryReplay.checkpointCompleted;
+    }
+  } catch (...) {
+    return fail(FrameTapeReplayStatus::ObjectCreationFailed, 0xffffffffu);
+  }
+
   try {
     for (const auto& replayEvent : plan.events) {
       const auto eventIndex = replayEvent.eventIndex;
@@ -3436,8 +3566,20 @@ FrameTapeReplayResult replayGeneralPlan(
         auto* staged = texturePrestageAudit
             ? findPrestage(definition.fixed.identity)
             : nullptr;
+        const auto checkpoint = std::find_if(checkpointQueries.begin(),
+            checkpointQueries.end(), [&](const auto& entry) {
+              return sameIdentity(entry.object.identity, definition.fixed.identity);
+            });
         void* value = nullptr;
-        if (staged) {
+        bool ordinaryAcquisition = false;
+        if (checkpoint != checkpointQueries.end()) {
+          if (!checkpoint->object.value ||
+              checkpoint->evidenceIndex >= result.queryReplay.checkpoints.size() ||
+              !result.queryReplay.checkpoints[checkpoint->evidenceIndex].completed ||
+              result.queryReplay.checkpoints[checkpoint->evidenceIndex].activated)
+            return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+          value = checkpoint->object.value;
+        } else if (staged) {
           if (staged->active || staged->hiddenIndex >= hiddenObjects.size() ||
               !hiddenObjects[staged->hiddenIndex].value) {
             return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
@@ -3448,11 +3590,30 @@ FrameTapeReplayResult replayGeneralPlan(
               device, definition.fixed, definition.descriptor, blobs, objects);
           if (!value)
             return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+          ordinaryAcquisition = true;
+          ++result.conservation.objectsCreated;
           if (texturePrestageAudit) ++texturePrestageAudit->activeObjectsCreated;
         }
+        // A freshly acquired wrapper is not yet visible to cleanup(). Keep a
+        // transient owner until every metadata append succeeds; both hidden
+        // checkpoint and texture owners already have their owning tables.
+        const auto releaseTransient = [&](void* pointer) {
+          OwnedObject acquired{.identity = definition.fixed.identity, .value = pointer};
+          render_tape_runtime::releaseOwnedObject(acquired);
+          ++result.conservation.objectsReleased;
+          if (texturePrestageAudit) ++texturePrestageAudit->activeObjectsReleased;
+        };
+        std::unique_ptr<void, decltype(releaseTransient)> transient(
+            ordinaryAcquisition ? value : nullptr, releaseTransient);
         definitions.push_back(definition);
         if (freshSeedDrainAudit) definitionEpochs.push_back(commandEpoch);
         objects.push_back({.identity = definition.fixed.identity, .value = value});
+        transient.release();
+        if (checkpoint != checkpointQueries.end()) {
+          checkpoint->object.value = nullptr;
+          result.queryReplay.checkpoints[checkpoint->evidenceIndex].activated = true;
+          ++result.queryReplay.checkpointActivated;
+        }
         if (staged) {
           // Publish the active bookkeeping before transferring ownership of the
           // hidden wrapper.  If a bookkeeping allocation throws, cleanup still
@@ -3461,15 +3622,19 @@ FrameTapeReplayResult replayGeneralPlan(
           staged->active = true;
           ++texturePrestageAudit->activatedObjects;
         }
-        ++result.conservation.objectsCreated;
+        if (staged) ++result.conservation.objectsCreated;
         if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
-          RenderTapeQueryDescriptorV2 desc{};
-          if (!renderTapeLoadQueryDescriptorV2(definition.descriptor, desc))
+          RenderTapeQueryDescriptorDecoded desc{};
+          if (!renderTapeLoadQueryDescriptor(definition.descriptor, desc))
             return fail(FrameTapeReplayStatus::QueryOracleUnsupported, eventIndex);
+          const auto local = device->dev().captureQueryPollSnapshot(
+              static_cast<D9CQuery*>(value)->obj);
           queryStates.push_back({
               .identity = definition.fixed.identity,
-              .cycle = {.type = desc.type,
-                        .issueCycle = desc.initialIssueCycle},
+              .cycle = renderTapeInitialQueryCycle(desc),
+              .localQueryIdentity = local.identity,
+              .localIssueOrdinal = local.issueOrdinal,
+              .localDeviceEpoch = local.issueDeviceEpoch,
           });
         }
         break;
@@ -3673,6 +3838,10 @@ FrameTapeReplayResult replayGeneralPlan(
               result.queryReplay.failure = RenderTapeQueryReplayFailure::CycleMismatch;
               return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
             }
+            ++state->localIssueOrdinal;
+            state->localDeviceEpoch = static_cast<D9CQuery*>(
+                render_tape_runtime::findExactObject(objects, identity))
+                ->obj->issueDeviceEpoch();
             ++result.queryReplay.replayedIssueRecords;
           }
         }
@@ -3774,7 +3943,8 @@ FrameTapeReplayResult replayGeneralPlan(
               [&](const auto& value) { return sameIdentity(value.identity, fixed.identity); });
           if (bytes.size() != sizeof(captured) || !load(bytes, 0u, captured) ||
               !query || !query->obj || state == queryStates.end() ||
-              captured.issueCycle != state->cycle.issueCycle) {
+              !renderTapeQueryPollCycleAdmitted(state->cycle, captured.issueCycle,
+                                               fixed.resultCode)) {
             result.queryReplay.failure = RenderTapeQueryReplayFailure::CycleMismatch;
             return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
           }
@@ -3783,6 +3953,12 @@ FrameTapeReplayResult replayGeneralPlan(
               query, captured.hasOutput ? &staged : nullptr,
               static_cast<std::uint32_t>(captured.dataSize), captured.flags);
           auto snapshot = device->dev().captureQueryPollSnapshot(query->obj);
+          if (snapshot.identity != state->localQueryIdentity ||
+              snapshot.issueOrdinal != state->localIssueOrdinal ||
+              snapshot.issueDeviceEpoch != state->localDeviceEpoch) {
+            result.queryReplay.failure = RenderTapeQueryReplayFailure::CycleMismatch;
+            return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+          }
           const auto fence = snapshot.backendFence.snapshot();
           RenderTapeQueryReplayRow row{
               .eventIndex = eventIndex,
@@ -3865,7 +4041,7 @@ FrameTapeReplayResult replayGeneralPlan(
     // Staged owners are deliberately still visible to cleanup if any
     // bookkeeping allocation or backend wrapper operation throws while the
     // logical event stream is being consumed.
-    if (!texturePrestageAudit) throw;
+    if (!texturePrestageAudit && checkpointQueries.empty()) throw;
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     cleanup();
     return result;
