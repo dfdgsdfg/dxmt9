@@ -163,10 +163,10 @@ bool readbackSurface(CommandQueue& queue,
                       const core::ReadbackDesc& desc,
                       core::ReadbackPixels& pixels);
 
-// Cold raw RGBA16Float checkpoint. Holds the existing completion/exclusive
-// producer lease through lookup, both initializer/ordinary drain, and the
-// exact same-format blit. Ordinary readback does not acquire this policy.
-bool captureRenderTapeRgba16Float(CommandQueue& queue, resources::Pool& pool,
+// Cold raw DEFAULT A8R8G8B8/RGBA16Float texture checkpoint. Holds the existing
+// completion/exclusive producer lease through lookup, initializer/ordinary
+// drain, and exact same-format blit. Ordinary readback does not acquire this policy.
+bool captureRenderTapeColorTexture(CommandQueue& queue, resources::Pool& pool,
                                WMT::Reference<WMT::Device> device,
                                core::SurfaceHandle source,
                                core::ReadbackPixels& pixels);

@@ -318,6 +318,23 @@ The observed access is binding-only, not a terminal-write proof, so the
 existing rejection remains correct. The run was deliberately terminated;
 no Tape was published. Investigate this snapshot omission before claiming
 original workload capture or policy qualification.
+R-HARN-REPLAY-9.11 now declares exact DEFAULT A8R8G8B8 2D RT arm snapshots.
+Both shared gates admit that shape; the provider reuses the exclusive raw
+checkpoint lease with exact BGRA8 physical storage and meaningful alpha.
+Native capture/tape tests pass (2/2); existing TLA regression passes all 227
+configurations. PE32, PE64 and canonical Unix builds pass. Actual Metal
+verification passes 5/5: initializer-only alpha-aware A8 A/B/A, RGBA16F,
+D24S8, completed EVENT checkpoint, and the install-name audit. The A8 oracle
+checks six restores across both routes, exact bytes/digests, and alias
+ownership. Actual workload retry remains required; synthetic oracle success
+does not establish production-capture qualification.
+Capture `app-d3d9-stkcop-bench-tape-h430-query-volume-15` confirms the real
+format-21 owner 4294967306 snapshot completes (1280x720, pitch 5120,
+3,686,400 bytes) and arming succeeds. It then repeatedly aborts at
+`jit_resource_mutation`; the current caller log does not distinguish blob
+admission from mutation-event rejection. The game was deliberately terminated
+without publishing a Tape. Add identity-qualified phase/status/exception
+provenance before attributing this new failure or changing content ownership.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

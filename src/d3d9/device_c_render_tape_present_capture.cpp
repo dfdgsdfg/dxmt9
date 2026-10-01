@@ -851,15 +851,17 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
-    const bool rawRgba16Float = layout.encodingVersion ==
-        D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2;
-    if (!rawRgba16Float) upper->flush();
+    const bool leasedColorTexture = layout.encodingVersion ==
+        D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 ||
+        (textureIdentity && actual.resourceType == 3u && actual.pool == 0u &&
+         actual.usage == 1u && actual.format == 21u);
+    if (!leasedColorTexture) upper->flush();
     dxmt9::core::ReadbackPixels pixels;
     std::vector<std::byte> tight;
     const auto coreFormat = dxmt9::d3d9::devicec::fmtFromD3D(actual.format);
     const bool captured = coreFormat != dxmt9::core::Format::Unknown &&
-        (rawRgba16Float
-             ? upper->pool() && dxmt9::encoders::captureRenderTapeRgba16Float(
+        (leasedColorTexture
+             ? upper->pool() && dxmt9::encoders::captureRenderTapeColorTexture(
                    upper->queue(), *upper->pool(), upper->queue().device(),
                    surface->obj->handle(), pixels)
              : upper->readbackSurface(

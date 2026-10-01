@@ -171,7 +171,8 @@ inline constexpr bool renderTapeDeriveColorSnapshotLayout(
   const bool rgba16Float =
       renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface);
   const bool texture2d = surface.resourceType == 3u &&
-      ((surface.pool == 0u && surface.usage == 1u && surface.format == 22u) ||
+      ((surface.pool == 0u && surface.usage == 1u &&
+        (surface.format == 21u || surface.format == 22u)) ||
        (surface.pool == 1u && surface.usage == 0u && surface.format == 21u));
   const bool cube = surface.resourceType == 5u && surface.pool == 0u &&
                     surface.usage == 1u && surface.format == 114u;
@@ -828,8 +829,8 @@ inline bool renderTapeLoadTextureDescriptorV2(
 
 // Arm-boundary GPU snapshots deliberately support only the exact shapes
 // observed in GT2/STALKER: the existing DEFAULT-pool render-target shapes,
-// the single MANAGED shader texture atlas, and the single-level RGBA16Float
-// 2D DEFAULT-pool render target. This policy is shared by PE capture,
+// the single MANAGED shader texture atlas, and single-level A8R8G8B8 and
+// RGBA16Float 2D DEFAULT-pool render targets. This policy is shared by PE capture,
 // unix readback, validation, and provider replay so CompleteSeed cannot widen
 // accidentally to arbitrary textures.
 inline bool renderTapeArmColorSnapshotTextureSupported(
@@ -861,7 +862,7 @@ inline bool renderTapeArmColorSnapshotTextureSupported(
     }
     const bool defaultRenderTarget =
         !cube && surface.pool == 0u && surface.usage == 1u &&
-        (surface.format == 22u ||
+        (surface.format == 21u || surface.format == 22u ||
          renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface));
     const bool managedShaderTexture =
         !cube && surface.pool == 1u && surface.usage == 0u &&

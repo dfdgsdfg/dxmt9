@@ -6015,6 +6015,250 @@ void nativeMetalRgba16FloatSnapshotReplayBits() {
             << "borrowed admission/physical backing/terminal rejection=3\n";
 }
 
+void nativeMetalA8R8G8B8SnapshotReplayBytes() {
+  using dxmt9::core::D3D_OK;
+  constexpr std::uint32_t width = 7u, height = 5u, pitch = width * 4u;
+  constexpr std::array<std::uint8_t, 6u> alpha{0u, 1u, 127u, 128u, 254u, 255u};
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+      dxmt9c_factory_create(), dxmt9c_factory_release);
+  check(bool(factory), "A8R8G8B8 oracle factory");
+  std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> sourceDevice(
+      dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+      dxmt9c_device_release);
+  check(bool(sourceDevice), "A8R8G8B8 oracle source device");
+  std::unique_ptr<D9CTexture, decltype(&dxmt9c_texture_release)> sourceTexture(
+      dxmt9c_device_create_texture(sourceDevice.get(), width, height, 1u, 1u, 21u, 0u),
+      dxmt9c_texture_release);
+  check(bool(sourceTexture), "A8R8G8B8 oracle exact single-level DEFAULT RT texture");
+  std::unique_ptr<D9CSurface, decltype(&dxmt9c_surface_release)> sourceLevel(
+      dxmt9c_texture_get_surface_level(sourceTexture.get(), 0u), dxmt9c_surface_release);
+  check(bool(sourceLevel) && sourceLevel->obj && sourceLevel->ownerTex == sourceTexture.get(),
+        "A8R8G8B8 capture retains the exact alias and its parent owner");
+  D9CWireObjectIdentity identity{};
+  check(dxmt9c_texture_get_wire_identity(sourceTexture.get(), &identity) == D3D_OK,
+        "A8R8G8B8 source has an actual retained generation");
+  const D9CSurfaceDesc surface{.format = 21u, .resourceType = 3u,
+      .usage = 1u, .pool = 0u, .width = width, .height = height, .depth = 1u};
+  const D9CRenderTapeColorSnapshotRequest request{.identity = identity,
+      .surface = surface, .encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1};
+  const auto upper = sourceDevice->dev().upperDevice();
+  check(upper && upper->pool(), "A8R8G8B8 source has actual Metal backing");
+  std::vector<std::byte> rejectionBytes((width + 1u) * (height + 1u) * 4u, std::byte{0x5au});
+  const auto rejectionSentinel = rejectionBytes;
+  const auto rejects = [&](const D9CRenderTapeColorSnapshotRequest& candidate,
+                           std::uint64_t capacity, std::uint32_t status) {
+    rejectionBytes = rejectionSentinel;
+    D9CRenderTapeColorSnapshotResult rejected{};
+    return capacity <= rejectionBytes.size() &&
+        dxmt9c_device_capture_render_tape_color_snapshot(sourceDevice.get(), &candidate,
+            &rejected, rejectionBytes.data(), capacity) != D3D_OK &&
+        rejected.status == status && rejectionBytes == rejectionSentinel;
+  };
+  RenderTapeDigest firstDigest{}, middleDigest{};
+  std::uint32_t checked = 0u;
+  for (std::uint32_t iteration = 0u; iteration < 3u; ++iteration) {
+    std::vector<std::byte> expected(pitch * height);
+    for (std::uint32_t y = 0u; y < height; ++y) {
+      for (std::uint32_t x = 0u; x < width; ++x) {
+        const auto offset = y * pitch + x * 4u;
+        const auto altered = iteration == 1u ? 1u : 0u;
+        expected[offset] = std::byte((17u + x * 29u + y * 11u + altered * 7u) & 0xffu);
+        expected[offset + 1u] = std::byte((31u + x * 13u + y * 37u + altered * 19u) & 0xffu);
+        expected[offset + 2u] = std::byte((47u + x * 41u + y * 5u + altered * 23u) & 0xffu);
+        expected[offset + 3u] = std::byte(alpha[(x + y * 2u + altered) % alpha.size()]);
+      }
+    }
+    D9CLockedRect locked{};
+    check(dxmt9c_texture_lock_rect(sourceTexture.get(), 0u, &locked, nullptr, 0u) == D3D_OK &&
+              locked.bits && locked.pitch >= static_cast<std::int32_t>(pitch),
+          "A8R8G8B8 source lock exposes bounded BGRA rows");
+    for (std::uint32_t y = 0u; y < height; ++y)
+      std::memcpy(static_cast<std::byte*>(locked.bits) +
+                      static_cast<std::size_t>(y) * locked.pitch,
+                  expected.data() + static_cast<std::size_t>(y) * pitch, pitch);
+    check(dxmt9c_texture_unlock_rect(sourceTexture.get(), 0u) == D3D_OK &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::
+                  hasPendingInitializerWithoutOrdinaryCommands(upper->queue()),
+          "A8R8G8B8 capture begins with initializer-only upload, without manual flush or wait");
+    if (iteration == 0u) {
+      dxmt9::core::SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = 1u;
+      capacity.clearRecords = 1u;
+      auto admission = upper->queue().beginDirectChunkSlotReplay(
+          1u, capacity, sizeof(dxmt9::core::ClearDesc));
+      check(admission.status == dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
+                admission.lease && rejects(request, expected.size(),
+                    D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED) &&
+                dxmt9::CommandQueueArenaLeaseTestAccess::
+                    hasPendingInitializerWithoutOrdinaryCommands(upper->queue()) &&
+                admission.lease->rollbackPreEffect(),
+            "A8R8G8B8 borrowed admission rejects without caller writes or publishing pending initializer");
+    }
+    std::vector<std::byte> captured(expected.size(), std::byte{0xacu});
+    D9CRenderTapeColorSnapshotResult result{};
+    const auto beforeCapture = dxmt9::perf::snapshotRenderTapeReplay();
+    check(dxmt9c_device_capture_render_tape_color_snapshot(sourceDevice.get(), &request,
+              &result, captured.data(), captured.size()) == D3D_OK &&
+              renderTapeColorSnapshotResultMatches(request, result, captured.size()) &&
+              result.pitch == pitch && captured == expected &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::initializerCompleted(upper->queue()) &&
+              dxmt9::perf::snapshotRenderTapeReplay().gpuErrors == beforeCapture.gpuErrors,
+          "A8R8G8B8 capture itself completes GPU upload and preserves every BGRA byte including alpha0/127/128/255");
+    const auto digest = RenderTapeCaptureSession::sha256(captured);
+    if (iteration == 0u) firstDigest = digest;
+    else if (iteration == 1u) {
+      middleDigest = digest;
+      check(middleDigest != firstDigest, "A8R8G8B8 B bytes have a distinct exact digest");
+    } else check(digest == firstDigest, "A8R8G8B8 A/B/A captures restore the original alpha-aware digest");
+    if (iteration == 0u) {
+      auto invalid = request;
+      invalid.encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2;
+      check(rejects(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED) &&
+                rejects(request, captured.size() - 1u,
+                    D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH),
+            "A8R8G8B8 invalid encoding/capacity leave caller bytes unchanged");
+      invalid = request;
+      ++invalid.identity.generation;
+      check(rejects(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION),
+            "A8R8G8B8 stale parent generation rejects unchanged");
+      invalid = request;
+      ++invalid.surface.width;
+      check(rejects(invalid, (width + 1u) * height * 4u,
+                D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH),
+            "A8R8G8B8 substituted descriptor extent rejects unchanged");
+      for (const auto field : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        invalid = request;
+        switch (field) {
+        case 0u: invalid.surface.resourceType = 1u; break;
+        case 1u: invalid.surface.resourceType = 5u; break;
+        case 2u: invalid.surface.pool = 1u; break;
+        case 3u: invalid.surface.usage = 0u; break;
+        case 4u: invalid.surface.multiSampleType = 2u; break;
+        case 5u: invalid.surface.multiSampleQuality = 1u; break;
+        }
+        check(rejects(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED),
+              "A8R8G8B8 invalid storage/pool/usage/MSAA descriptors reject unchanged");
+      }
+      WMTTextureInfo wrongInfo{.pixel_format = WMTPixelFormatRGBA16Float,
+          .width = width, .height = height, .depth = 1u, .array_length = 1u,
+          .type = WMTTextureType2D, .mipmap_level_count = 1u, .sample_count = 1u,
+          .usage = WMTTextureUsageRenderTarget, .options = WMTResourceStorageModePrivate};
+      auto wrongBacking = upper->queue().device().newTexture(wrongInfo);
+      check(bool(wrongBacking), "A8R8G8B8 physical negative creates actual RGBA16Float backing");
+      wrongBacking.setLabel(WMT::String::string(
+          "Rejected A8R8G8B8 checkpoint RGBA16Float backing", WMTUTF8StringEncoding));
+      WMT::Reference<WMT::Texture> originalBacking;
+      {
+        std::lock_guard lock(upper->queue().mutex_);
+        auto* record = upper->pool()->findSurface(sourceLevel->obj->handle().value);
+        check(record && record->texture, "A8R8G8B8 physical negative retains exact live surface");
+        originalBacking = record->texture;
+        record->texture = wrongBacking;
+      }
+      const bool rejectedPhysical = rejects(request, captured.size(),
+          D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED);
+      {
+        std::lock_guard lock(upper->queue().mutex_);
+        upper->pool()->findSurface(sourceLevel->obj->handle().value)->texture = originalBacking;
+      }
+      check(rejectedPhysical, "A8R8G8B8 wrong physical backing rejects before raw transfer/caller write");
+      std::unique_ptr<D9CTexture, decltype(&dxmt9c_texture_release)> mipTexture(
+          dxmt9c_device_create_texture(sourceDevice.get(), width, height, 2u, 1u, 21u, 0u),
+          dxmt9c_texture_release);
+      invalid = request;
+      check(mipTexture && dxmt9c_texture_get_wire_identity(mipTexture.get(), &invalid.identity) == D3D_OK &&
+                rejects(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH),
+            "A8R8G8B8 actual multiple-mip parent rejects unchanged");
+    }
+    const GeneralIndexedFixture source(3u, true, false, true);
+    auto blobs = source.blobsValue;
+    blobs.push_back({digest, captured});
+    const auto textureDescriptor = texture2DDescriptor(surface);
+    const RenderTapeSurfaceDescriptorV2 alias{
+        .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource),
+        .initialContentDisposition = static_cast<std::uint32_t>(RenderTapeInitialContentDisposition::Unavailable),
+        .parentTexture = kSnapshotTexture2D,
+        .surface = D9CSurfaceDesc{.format = 21u, .resourceType = 1u, .usage = 1u,
+            .width = width, .height = height, .depth = 1u}};
+    ImportedRenderTapeView original;
+    check(importPrevalidatedRenderTape(source.tape, original), "A8R8G8B8 original pixel fixture imports");
+    RenderTapeBuilder builder;
+    bool inserted = false;
+    for (std::uint32_t eventIndex = 0u; eventIndex < original.events.size(); ++eventIndex) {
+      const auto event = original.event(eventIndex);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::CommandChunk && !inserted) {
+        inserted = true;
+        builder.appendObjectDefine(kSnapshotTexture2D,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+            textureDescriptor, 0u, {}, captured.size(), 1u);
+        builder.appendObjectDefine(kSnapshotColorSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface), spanBytes(alias), 0u, {});
+        builder.appendResourceMutation(kSnapshotTexture2D, RenderTapeMutationKind::Upload,
+            0u, 0u, captured.size(), digest);
+        const auto target = [](D9CWireObjectIdentity object, std::uint32_t handleIndex) {
+          const D9CCommandChunkWireRenderTargetBinding binding{
+              .slot = 0u, .valid = 1u, .handleIndex = handleIndex};
+          const std::array section{std::pair<std::uint16_t, std::span<const std::byte>>{
+              D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, spanBytes(binding)}};
+          return Record{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+              .payload = sparsePayload({}, section),
+              .handles = {{object.kind, object.generation, object.objectId}}};
+        };
+        const auto aliasBind = makeChunk(std::array{
+            target(kSnapshotColorSurface, 0u), target(kOutput, 1u)});
+        builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 2u, .handleCount = 2u},
+                                   aliasBind);
+      }
+      if (type == RenderTapeEventType::PresentComplete) {
+        RenderTapePresentCompleteHeader complete{};
+        std::memcpy(&complete, event.payload.data(), sizeof(complete));
+        builder.appendPresentComplete(builder.eventCount(), complete.completionOrdinal,
+            static_cast<RenderTapeDigestValidity>(complete.digestValidity),
+            complete.expectedDigest, event.payload.subspan(sizeof(complete)));
+      } else builder.appendRawEvent(type, event.payload);
+    }
+    const auto prepared = prepareRenderTapeIdentity(builder.seal(), blobs);
+    check(inserted && prepared.valid(), "A8R8G8B8 seed and first bound alias preflight through exact parent ownership");
+    for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                             RenderTapePreparedRoute::ProductionSlot}) {
+      std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> replayDevice(
+          dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr), dxmt9c_device_release);
+      check(bool(replayDevice), "A8R8G8B8 provider restore uses a fresh local device");
+      const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto replay = replayPreparedRenderTapeIdentity(replayDevice.get(), prepared,
+          {.route = route, .reset = RenderTapePreparedReset::FreshDevice, .auditInitialSeeds = true});
+      const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto& audit = replay.initialSeedAudit;
+      const auto entry = std::find_if(audit.entries.begin(), audit.entries.end(),
+          [&](const auto& value) { return renderTapeSameWireObject(value.identity, kSnapshotTexture2D); });
+      check(replay.complete() && replay.validity.expectedDigestMatched &&
+                replay.outputPixels == gpuVisibleUniformExpectedPixels() &&
+                replay.conservation.objectsCreated == 8u && replay.conservation.objectsReleased == 8u &&
+                audit.requested && audit.attempted && audit.complete && entry != audit.entries.end() &&
+                entry->supported && entry->match && entry->bytes == captured.size() &&
+                entry->expectedDigest == digest && entry->actualDigest == digest &&
+                after.gpuErrors == before.gpuErrors,
+            "A8R8G8B8 capture/provider upload/GPU digest preserves alpha and conserves exact bound alias parent");
+      const auto direct = after.directLeaseDraws - before.directLeaseDraws;
+      const auto compatibility = after.compatibilityDraws - before.compatibilityDraws;
+      check(route == RenderTapePreparedRoute::Compatibility
+                ? compatibility == 3u && direct == 0u : direct == 3u && compatibility == 0u,
+            "A8R8G8B8 exact restore exercises selected actual provider route");
+      ++checked;
+    }
+  }
+  upper->queue().failStopReplaySourceExecution();
+  check(rejects(request, pitch * height, D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED),
+        "A8R8G8B8 terminal capture rejects without caller writes or false completion");
+  std::cout << "A8R8G8B8 DEFAULT RT Metal oracle:7x5 exact BGRA/alpha0/127/128/255; "
+            << checked << " provider restores, initializer-only A/B/A, bound alias ownership, unchanged pixels; "
+            << "descriptor/admission/physical/terminal negatives\n";
+}
+
 void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
   const auto descriptor = [](RenderTapeTextureDimension dimension,
                              std::uint32_t format) {
@@ -7522,6 +7766,10 @@ int main(int argc, char** argv) {
       nativeMetalRgba16FloatSnapshotReplayBits();
       return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-a8r8g8b8-oracle") {
+      nativeMetalA8R8G8B8SnapshotReplayBytes();
+      return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-oracle") {
       check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
             "retained query oracle uses actual GPU visibility");
@@ -7598,7 +7846,8 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_provider_spec "
           "[--test-event-ordering|--test-query-oracle|--test-seed-reference-rejection|"
-          "--test-volume-oracle|--test-rgba16f-oracle|--test-retained-query-oracle|--test-retained-query-budget|"
+          "--test-volume-oracle|--test-rgba16f-oracle|--test-a8r8g8b8-oracle|"
+          "--test-retained-query-oracle|--test-retained-query-budget|"
           "--write-production-fixture dir|"
           "--write-projection-fixture dir|--write-sequence-fixture dir|"
           "--write-gpu-policy-fixture dir|"

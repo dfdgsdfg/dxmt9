@@ -1505,3 +1505,21 @@ the ordinary queue has no source. It must hold exclusive checkpoint producer
 admission through raw transfer completion; retaining the physical texture alone
 does not exclude intervening writes. A caller-side upload flush/wait must not
 be a hidden precondition of the accepted checkpoint oracle.
+
+**R-HARN-REPLAY-9.11** The version-1 four-byte arm checkpoint also supports
+single-level, single-subresource, non-MSAA DEFAULT-pool 2D render-target
+textures with `D3DFMT_A8R8G8B8` and render-target usage only. All four bytes,
+including meaningful non-opaque alpha, must survive snapshot and restoration
+exactly. X8 alpha normalization remains exclusive to `D3DFMT_X8R8G8B8`.
+The parent texture owns the seed; subresource aliases retain the authenticated
+parent rather than receiving independent initial contents. This extension
+does not admit standalone A8 surfaces, multi-mip, cube, volume, MSAA, or other
+pool/usage combinations. Missing initial contents still require an actual
+terminal-write proof; binding alone remains insufficient. Native shape/layout
+negatives and actual Metal nonuniform A/B/A snapshot/restoration tests must
+cover alpha preservation and parent/alias ownership before workload retry.
+The exact DEFAULT A8 checkpoint must reuse exclusive producer admission from
+pending-initializer publication through GPU transfer completion and host copy,
+as required by R-HARN-REPLAY-9.10. It must validate physical BGRA8 storage and
+must not require an external preflush, an ordinary source, or an oracle-only
+upload wait. This does not change ordinary application readback policy.

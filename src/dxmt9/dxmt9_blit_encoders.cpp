@@ -129,20 +129,25 @@ void emitUseHeap(WMT::BlitCommandEncoder& blit, const UsedHeapSet& set) {
   }
 }
 
-bool readbackRawRgba16Float(CommandQueue& queue, resources::Pool& pool,
+bool readbackRawColorTexture(CommandQueue& queue, resources::Pool& pool,
                           WMT::Reference<WMT::Device> device,
                           core::SurfaceHandle source,
                           WMT::Reference<WMT::Texture> sourceTexture,
+                          WMTPixelFormat expectedFormat,
                           core::Rect sourceRect, std::uint32_t sourceLevel,
                           core::ReadbackPixels& pixels) {
-  if (!sourceTexture || sourceTexture.pixelFormat() != WMTPixelFormatRGBA16Float ||
+  if ((expectedFormat != WMTPixelFormatBGRA8Unorm &&
+       expectedFormat != WMTPixelFormatRGBA16Float) ||
+      !sourceTexture || sourceTexture.pixelFormat() != expectedFormat ||
       sourceRect.left < 0 || sourceRect.top < 0 ||
       sourceRect.right <= sourceRect.left || sourceRect.bottom <= sourceRect.top)
     return false;
   const auto width = static_cast<std::uint32_t>(sourceRect.right - sourceRect.left);
   const auto height = static_cast<std::uint32_t>(sourceRect.bottom - sourceRect.top);
-  if (width > std::numeric_limits<std::uint32_t>::max() / 8u) return false;
-  const auto pitch = width * 8u;
+  const std::uint32_t bytesPerPixel =
+      expectedFormat == WMTPixelFormatRGBA16Float ? 8u : 4u;
+  if (width > std::numeric_limits<std::uint32_t>::max() / bytesPerPixel) return false;
+  const auto pitch = width * bytesPerPixel;
   const auto byteCount = static_cast<std::uint64_t>(pitch) * height;
   if (byteCount > std::numeric_limits<std::size_t>::max()) return false;
   WMTBufferInfo info{};
@@ -156,7 +161,8 @@ bool readbackRawRgba16Float(CommandQueue& queue, resources::Pool& pool,
   auto blit = command.blitCommandEncoder();
   if (!blit) return false;
   blit.setLabel(labels::makeLabelStringFmt(
-      "Blit[ReadbackSurface RGBA16Float raw src=0x%llx]",
+      "Blit[ReadbackSurface %s raw src=0x%llx]",
+      expectedFormat == WMTPixelFormatRGBA16Float ? "RGBA16Float" : "BGRA8Unorm",
       static_cast<unsigned long long>(source.value)));
   UsedHeapSet set;
   considerSurface(pool, source, set);
@@ -773,8 +779,9 @@ bool readbackSurface(CommandQueue& queue,
   }
 
   if (format == core::Format::A16B16G16R16F)
-    return readbackRawRgba16Float(queue, pool, device, desc.source,
-                                 sourceTexture, sourceRect, sourceLevel, pixels);
+    return readbackRawColorTexture(queue, pool, device, desc.source,
+                                  sourceTexture, WMTPixelFormatRGBA16Float,
+                                  sourceRect, sourceLevel, pixels);
 
   WMTTextureInfo stagingInfo{};
   stagingInfo.type = WMTTextureType2D;
@@ -869,7 +876,7 @@ bool readbackSurface(CommandQueue& queue,
   return true;
 }
 
-bool captureRenderTapeRgba16Float(CommandQueue& queue, resources::Pool& pool,
+bool captureRenderTapeColorTexture(CommandQueue& queue, resources::Pool& pool,
                                WMT::Reference<WMT::Device> device,
                                core::SurfaceHandle source,
                                core::ReadbackPixels& pixels) {
@@ -881,16 +888,22 @@ bool captureRenderTapeRgba16Float(CommandQueue& queue, resources::Pool& pool,
   if (!device || !lease) return false;
   const auto* record = pool.findSurface(source.value);
   if (!record || !record->texture || record->resolveTexture ||
-      record->desc.format != core::Format::A16B16G16R16F ||
+      (record->desc.format != core::Format::A8R8G8B8 &&
+       record->desc.format != core::Format::A16B16G16R16F) ||
       record->desc.pool != core::Pool::Default || !record->desc.renderTarget ||
       record->desc.depthStencil ||
       record->desc.multiSampleType != core::MultiSampleType::None ||
       record->desc.width == 0u || record->desc.height == 0u ||
-      record->desc.width > std::numeric_limits<std::int32_t>::max() / 8u ||
       record->desc.height > std::numeric_limits<std::int32_t>::max())
     return false;
+  const bool rgba16Float = record->desc.format == core::Format::A16B16G16R16F;
+  const std::uint32_t bytesPerPixel = rgba16Float ? 8u : 4u;
+  const auto physicalFormat =
+      rgba16Float ? WMTPixelFormatRGBA16Float : WMTPixelFormatBGRA8Unorm;
+  if (record->desc.width >
+      std::numeric_limits<std::int32_t>::max() / bytesPerPixel) return false;
   WMT::Reference<WMT::Texture> texture = record->texture;
-  if (texture.pixelFormat() != WMTPixelFormatRGBA16Float ||
+  if (texture.pixelFormat() != physicalFormat ||
       texture.textureType() != WMTTextureType2D || texture.depth() != 1u ||
       texture.arrayLength() != 1u || texture.mipmapLevelCount() != 1u ||
       texture.width() != record->desc.width || texture.height() != record->desc.height)
@@ -899,8 +912,8 @@ bool captureRenderTapeRgba16Float(CommandQueue& queue, resources::Pool& pool,
                                   static_cast<std::int32_t>(record->desc.height)};
   // The exact retained backing and exclusive lease survive GPU completion
   // and the host copy. No format conversion or numeric operation is involved.
-  return readbackRawRgba16Float(queue, pool, device, source, texture, rectangle,
-                               0u, pixels);
+  return readbackRawColorTexture(queue, pool, device, source, texture,
+                                physicalFormat, rectangle, 0u, pixels);
 }
 
 namespace {

@@ -481,6 +481,12 @@ test('dxmt9-render-tape-rgba16f-metal-oracle',
      env: render_tape_d24s8_test_env,
      is_parallel: false,
      timeout: 60)
+test('dxmt9-render-tape-a8r8g8b8-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-a8r8g8b8-oracle'],
+     env: render_tape_d24s8_test_env,
+     is_parallel: false,
+     timeout: 60)
 render_tape_query_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
 render_tape_query_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
 render_tape_query_test_env.set('DXMT9_METAL_OCCLUSION', '1')
