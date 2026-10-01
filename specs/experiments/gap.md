@@ -166,6 +166,17 @@ float precision or pixel oracle was relaxed. Existing
 TLA regression passes all 227 configurations; it does not establish the new
 exclusive checkpoint transfer protocol. Do not treat these intermediate build
 and capability results as a published STALKER Tape or a performance result.
+Actual retry `app-d3d9-stkcop-bench-tape-h430-query-volume-06` passes the new
+ABI handshake, snapshots the bound 1280x720 D24S8 attachment as exactly
+4,608,000 bytes on physical format 260, and completes six-record paged state
+bootstrap plus resource closure. It then repeatedly rejects
+`query_uncaptured_cycle` for query identities kind 5, generation 1, objects
+4294968943 and 4294968944. The verified benchmark process was intentionally
+terminated after repeated rejection; no Tape was published and no FPS or
+visual qualification is claimed. Query issue history across the capture cut
+is now the next actual-input gate. Query type and pre-cut phase must be
+established before selecting a bootstrap or retained-history contract; dropping
+the poll or inventing an issue/result is not a valid workaround.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
