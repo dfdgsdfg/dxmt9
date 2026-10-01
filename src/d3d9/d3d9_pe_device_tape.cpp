@@ -13,6 +13,9 @@
 #include <new>
 #include <stdexcept>
 
+static_assert(dxmt9::d3d9::render_tape_d3d_format::A16B16G16R16F ==
+              D3DFMT_A16B16G16R16F);
+
 void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
     if (!peCaptureState_ || !peCaptureState_->renderTapeCapture.enabled()) {
         return;
@@ -720,6 +723,58 @@ bool D3D9DeviceImpl::advanceRenderTapeArmBoundary(
 bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
     if (!peCaptureState_ || peCaptureState_->renderTapeRegistry.invalid)
         return false;
+    const char *exceptionPhase = "snapshot_reset";
+    D9CWireObjectIdentity exceptionIdentity{};
+    D9CSurfaceDesc exceptionSurface{};
+    std::size_t exceptionObjectIndex = std::numeric_limits<std::size_t>::max();
+    std::size_t exceptionDescriptorBytes = 0u;
+    std::uint32_t exceptionContentCount = 0u;
+    std::uint32_t exceptionSubresource =
+        std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t exceptionEncodingVersion = 0u;
+    std::uint64_t exceptionExpectedBytes = 0u;
+    const auto logSnapshotException = [&](const char *kind, const char *detail) {
+        // Inspect owned-byte totals only on failure. The arm pass does not
+        // need another full resource copy or per-resource accounting buffer.
+        std::uint64_t retainedSnapshotBytes = 0u;
+        std::uint64_t durableContentBytes = 0u;
+        bool byteTotalsValid = true;
+        const auto addBytes = [&](std::uint64_t &total, std::size_t bytes) {
+            if (bytes > std::numeric_limits<std::uint64_t>::max() - total) {
+                byteTotalsValid = false;
+            } else {
+                total += bytes;
+            }
+        };
+        for (const auto &snapshot : peCaptureState_->renderTapeArmSnapshots)
+            for (const auto &bytes : snapshot.content)
+                addBytes(retainedSnapshotBytes, bytes.size());
+        for (const auto &object : peCaptureState_->renderTapeRegistry.objects)
+            for (const auto &bytes : object.content)
+                addBytes(durableContentBytes, bytes.size());
+        dxmt9DeviceInfoLog(
+            "render_tape_capture arm_snapshot rejected reason=exception "
+            "exception_kind=%s phase=%s kind=%u generation=%u object_id=%llu "
+            "object_index=%zu descriptor_bytes=%zu content_count=%u subresource=%u "
+            "encoding=%u format=%u width=%u height=%u depth=%u resource_type=%u "
+            "usage=%u pool=%u expected_bytes=%llu completed_snapshots=%zu "
+            "retained_snapshot_bytes=%llu durable_content_bytes=%llu "
+            "byte_totals_valid=%d detail=%s",
+            kind, exceptionPhase, exceptionIdentity.kind,
+            exceptionIdentity.generation,
+            static_cast<unsigned long long>(exceptionIdentity.objectId),
+            exceptionObjectIndex, exceptionDescriptorBytes,
+            exceptionContentCount, exceptionSubresource, exceptionEncodingVersion,
+            exceptionSurface.format, exceptionSurface.width,
+            exceptionSurface.height, exceptionSurface.depth,
+            exceptionSurface.resourceType, exceptionSurface.usage,
+            exceptionSurface.pool,
+            static_cast<unsigned long long>(exceptionExpectedBytes),
+            peCaptureState_->renderTapeArmSnapshots.size(),
+            static_cast<unsigned long long>(retainedSnapshotBytes),
+            static_cast<unsigned long long>(durableContentBytes),
+            byteTotalsValid ? 1 : 0, detail ? detail : "unknown");
+    };
     try {
         peCaptureState_->renderTapeArmSnapshots.clear();
         const auto epoch = dxmt9::d3d9::renderTapeNextArmSnapshotEpoch(
@@ -734,6 +789,14 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
             if (object.lifetime.textureAlias) {
                 continue;
             }
+            exceptionIdentity = object.identity;
+            exceptionSurface = {};
+            exceptionObjectIndex = index;
+            exceptionDescriptorBytes = object.descriptor.size();
+            exceptionContentCount = object.contentCount;
+            exceptionSubresource = std::numeric_limits<std::uint32_t>::max();
+            exceptionEncodingVersion = 0u;
+            exceptionExpectedBytes = 0u;
             if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
                 // Dormant queries need no bootstrap authority. A matching
                 // completed EVENT checkpoint is arm-local and can later be
@@ -749,6 +812,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                         .queryType = object.query.type,
                     };
                     D9CRenderTapeEventQueryCheckpointResult result{};
+                    exceptionPhase = "event_query_checkpoint_provider";
                     const HRESULT hr = hr32(
                         dxmt9c_device_capture_render_tape_event_query_checkpoint(
                             dev_, &request, &result));
@@ -760,12 +824,15 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                             .checkpoint = result,
                         };
                         const auto bytes = std::as_bytes(std::span(&descriptor, 1u));
+                        exceptionDescriptorBytes = bytes.size();
+                        exceptionPhase = "event_query_descriptor_copy";
                         RenderTapeArmObjectSnapshot snapshot{
                             .objectIndex = index,
                             .armOrdinal = epoch.ordinal,
                             .identity = object.identity,
                             .descriptor = std::vector<std::byte>(bytes.begin(), bytes.end()),
                         };
+                        exceptionPhase = "snapshot_append";
                         peCaptureState_->renderTapeArmSnapshots.push_back(std::move(snapshot));
                         dxmt9DeviceInfoLog(
                             "render_tape_capture event_query_checkpoint complete "
@@ -836,6 +903,14 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                 !colorTexture && !presentOutputColor)
                 continue;
 
+            exceptionSurface = surface.surface;
+            if (colorTexture)
+                (void)renderTapeTextureSubresourceDescriptor(
+                    object.descriptor, 0u, exceptionSurface);
+            exceptionContentCount =
+                standaloneD24 || standaloneD24S8 || standaloneColor || presentOutputColor
+                    ? 1u : object.contentCount;
+            exceptionPhase = "snapshot_metadata_copy";
             RenderTapeArmObjectSnapshot snapshot{
                 .objectIndex = index,
                 .armOrdinal = epoch.ordinal,
@@ -862,6 +937,10 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     byteCount > std::numeric_limits<std::size_t>::max()) {
                     return false;
                 }
+                exceptionSubresource = 0u;
+                exceptionEncodingVersion = D9C_RENDER_TAPE_D24X8_ENCODING_FLOAT32_LE_V1;
+                exceptionExpectedBytes = byteCount;
+                exceptionPhase = "d24x8_content_allocate";
                 snapshot.content[0].resize(
                     static_cast<std::size_t>(byteCount));
                 const D9CRenderTapeD24X8SnapshotRequest request{
@@ -872,6 +951,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     .reserved0 = 0u,
                 };
                 D9CRenderTapeD24X8SnapshotResult result{};
+                exceptionPhase = "d24x8_snapshot_provider";
                 const HRESULT hr = hr32(
                     dxmt9c_device_capture_render_tape_d24x8_snapshot(
                         dev_, &request, &result,
@@ -902,6 +982,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     static_cast<std::uint32_t>(dxmt9::d3d9::
                         RenderTapeInitialContentDisposition::
                             CompleteDepthFloat32V1);
+                exceptionPhase = "snapshot_descriptor_update";
                 snapshot.descriptor.assign(
                     std::as_bytes(std::span(&surface, 1u)).begin(),
                     std::as_bytes(std::span(&surface, 1u)).end());
@@ -923,6 +1004,11 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     layout.byteCount > std::numeric_limits<std::size_t>::max()) {
                     return false;
                 }
+                exceptionSubresource = 0u;
+                exceptionEncodingVersion =
+                    D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1;
+                exceptionExpectedBytes = layout.byteCount;
+                exceptionPhase = "d24s8_content_allocate";
                 snapshot.content[0].resize(
                     static_cast<std::size_t>(layout.byteCount));
                 const D9CRenderTapeD24S8SnapshotRequest request{
@@ -933,6 +1019,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     .reserved0 = 0u,
                 };
                 D9CRenderTapeD24S8SnapshotResult result{};
+                exceptionPhase = "d24s8_snapshot_provider";
                 const HRESULT hr = hr32(
                     dxmt9c_device_capture_render_tape_d24s8_snapshot(
                         dev_, &request, &result, snapshot.content[0].data(),
@@ -954,6 +1041,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     static_cast<std::uint32_t>(dxmt9::d3d9::
                         RenderTapeInitialContentDisposition::
                             CompleteDepthStencilFloat32UInt8V1);
+                exceptionPhase = "snapshot_descriptor_update";
                 snapshot.descriptor.assign(
                     std::as_bytes(std::span(&surface, 1u)).begin(),
                     std::as_bytes(std::span(&surface, 1u)).end());
@@ -976,6 +1064,7 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                         static_cast<std::uint32_t>(dxmt9::d3d9::
                             RenderTapeInitialContentDisposition::
                                 CompleteSeed);
+                    exceptionPhase = "snapshot_descriptor_update";
                     snapshot.descriptor.assign(
                         std::as_bytes(std::span(&surface, 1u)).begin(),
                         std::as_bytes(std::span(&surface, 1u)).end());
@@ -997,43 +1086,45 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                             snapshot.descriptor, subresource, desc)) {
                         return false;
                     }
+                    exceptionSurface = desc;
+                    exceptionSubresource = subresource;
+                    dxmt9::d3d9::RenderTapeColorSnapshotLayout layout{};
+                    if (!dxmt9::d3d9::renderTapeDeriveColorSnapshotLayout(
+                            desc, layout)) {
+                        return false;
+                    }
                     const auto expected = dxmt9::d3d9::
                         renderTapeDeriveExpectedSurfaceContent(desc);
                     if (expected.status != dxmt9::d3d9::
                             RenderTapeExpectedContentStatus::Accepted ||
                         expected.bytes == 0u ||
+                        expected.bytes != layout.byteCount ||
                         expected.bytes >
                             std::numeric_limits<std::size_t>::max()) {
                         return false;
                     }
+                    exceptionEncodingVersion = layout.encodingVersion;
+                    exceptionExpectedBytes = expected.bytes;
+                    exceptionPhase = "color_content_allocate";
                     snapshot.content[subresource].resize(
                         static_cast<std::size_t>(expected.bytes));
                     const D9CRenderTapeColorSnapshotRequest request{
                         .identity = object.identity,
                         .surface = desc,
                         .subresource = subresource,
-                        .encodingVersion =
-                            D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+                        .encodingVersion = layout.encodingVersion,
                     };
                     D9CRenderTapeColorSnapshotResult result{};
+                    exceptionPhase = "color_snapshot_provider";
                     const HRESULT hr = hr32(
                         dxmt9c_device_capture_render_tape_color_snapshot(
                             dev_, &request, &result,
                             snapshot.content[subresource].data(),
                             snapshot.content[subresource].size()));
-                    const std::uint32_t expectedPitch = desc.width * 4u;
-                    if (FAILED(hr) || result.status !=
-                            D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE ||
-                        result.encodingVersion !=
-                            D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 ||
-                        result.subresource != subresource ||
-                        result.width != desc.width ||
-                        result.height != desc.height ||
-                        result.pitch != expectedPitch ||
-                        result.format != desc.format ||
-                        result.reserved0 != 0u ||
-                        result.byteCount !=
-                            snapshot.content[subresource].size()) {
+                    if (FAILED(hr) ||
+                        !dxmt9::d3d9::renderTapeColorSnapshotResultMatches(
+                            request, result,
+                            snapshot.content[subresource].size())) {
                         dxmt9DeviceInfoLog(
                             "render_tape_capture color_snapshot rejected "
                             "reason=provider_result hr=0x%08x status=%u "
@@ -1048,24 +1139,34 @@ bool D3D9DeviceImpl::snapshotRenderTapeResourcesAtArmBoundary() noexcept {
                     dxmt9DeviceInfoLog(
                         "render_tape_capture color_snapshot complete kind=%u "
                         "generation=%u object_id=%llu subresource=%u "
-                        "encoding=1 format=%u width=%u height=%u pitch=%u "
+                        "encoding=%u format=%u width=%u height=%u pitch=%u "
                         "bytes=%zu",
                         snapshot.identity.kind,
                         snapshot.identity.generation,
                         static_cast<unsigned long long>(
                             snapshot.identity.objectId),
-                        subresource, desc.format, desc.width, desc.height,
+                        subresource, layout.encodingVersion, desc.format,
+                        desc.width, desc.height,
                         result.pitch,
                         snapshot.content[subresource].size());
                 }
             }
+            exceptionPhase = "snapshot_append";
             peCaptureState_->renderTapeArmSnapshots.push_back(std::move(snapshot));
         }
         return advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::SnapshotComplete);
+    } catch (const std::bad_alloc &exception) {
+        logSnapshotException("bad_alloc", exception.what());
+        return false;
+    } catch (const std::length_error &exception) {
+        logSnapshotException("length_error", exception.what());
+        return false;
+    } catch (const std::exception &exception) {
+        logSnapshotException("std_exception", exception.what());
+        return false;
     } catch (...) {
-        dxmt9DeviceInfoLog(
-            "render_tape_capture arm_snapshot rejected reason=exception");
+        logSnapshotException("unknown", nullptr);
         return false;
     }
 }

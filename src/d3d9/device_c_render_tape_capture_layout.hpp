@@ -150,6 +150,7 @@ inline constexpr std::uint32_t A8L8 = 51u;
 inline constexpr std::uint32_t V8U8 = 60u;
 inline constexpr std::uint32_t Q8W8V8U8 = 63u;
 inline constexpr std::uint32_t L16 = 81u;
+inline constexpr std::uint32_t A16B16G16R16F = 113u;
 inline constexpr std::uint32_t R32F = 114u;
 inline constexpr std::uint32_t A32B32G32R32F = 116u;
 inline constexpr std::uint32_t D24S8 = 75u;
@@ -588,6 +589,13 @@ bool copyRenderTapeLinearRows(const void* bits,
 bool writeRenderTapeLinearRows(std::span<const std::byte> tightBytes,
                                void* bits,
                                const RenderTapeLinearLockLayout& layout) noexcept;
+
+// Snapshot-only raw RGBA16Float upload; it does not admit this format to
+// ordinary PE locks. The caller validates the owning CompleteSeed descriptor
+// (single-level 2D) and locks only its exact subresource zero backing.
+bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
+                                      void* bits, std::int32_t pitch,
+                                      const D9CSurfaceDesc& surface) noexcept;
 
 RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
     const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,

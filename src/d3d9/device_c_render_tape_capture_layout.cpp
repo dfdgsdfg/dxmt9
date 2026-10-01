@@ -48,6 +48,19 @@ RenderTapeExpectedContentContract expectedContentForSurface(
   if (desc.width == 0u || desc.height == 0u || desc.depth != 1u)
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
 
+  // Raw half-float bytes are admitted only for the exact arm-snapshot RT
+  // texture shape. Keep the general lock/volume BPP table unchanged.
+  if (desc.format == render_tape_d3d_format::A16B16G16R16F) {
+    RenderTapeColorSnapshotLayout layout{};
+    if (!renderTapeArmColorSnapshotRgba16FloatTextureSupported(desc))
+      return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedFormat);
+    if (!renderTapeDeriveColorSnapshotLayout(desc, layout))
+      return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+    return {.status = RenderTapeExpectedContentStatus::Accepted,
+            .bytes = layout.byteCount,
+            .count = 1u};
+  }
+
   const auto blockSize = blockBytes(desc.format);
   const auto bytesPerPixel = renderTapeLinearBytesPerPixel(desc.format);
   if (blockSize == 0u && bytesPerPixel == 0u)
@@ -95,6 +108,11 @@ RenderTapeExpectedContentContract expectedContentForTexture(
   if (texture.initialContentDisposition != static_cast<std::uint32_t>(
           RenderTapeInitialContentDisposition::CompleteSeed))
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+  D9CSurfaceDesc level0{};
+  if (renderTapeTextureSubresourceDescriptor(descriptor, 0u, level0) &&
+      level0.format == render_tape_d3d_format::A16B16G16R16F &&
+      !renderTapeArmColorSnapshotTextureSupported(descriptor))
+    return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedFormat);
   if (!subresourceBytes.empty() && subresourceBytes.size() < texture.subresourceCount)
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
 
@@ -210,6 +228,13 @@ RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
       return result;
     }
     result.descriptorStatus = RenderTapeMissingSeedDescriptorStatus::Accepted;
+    if (result.missingSurface.format ==
+            render_tape_d3d_format::A16B16G16R16F &&
+        !renderTapeArmColorSnapshotTextureSupported(descriptor)) {
+      result.expectedContentStatus =
+          RenderTapeExpectedContentStatus::UnsupportedFormat;
+      return result;
+    }
     const auto expected =
         renderTapeDeriveExpectedTextureSubresourceContent(result.missingSurface);
     result.expectedContentStatus = expected.status;
@@ -1080,6 +1105,35 @@ bool writeRenderTapeLinearRows(std::span<const std::byte> tightBytes,
                 layout.rowBytes);
   }
   return true;
+}
+
+bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
+                                      void* bits, std::int32_t pitch,
+                                      const D9CSurfaceDesc& surface) noexcept {
+  RenderTapeColorSnapshotLayout snapshot{};
+  if (!renderTapeDeriveColorSnapshotLayout(surface, snapshot) ||
+      snapshot.encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 ||
+      pitch <= 0 || static_cast<std::uint32_t>(pitch) < snapshot.pitch ||
+      tightBytes.size() != snapshot.byteCount)
+    return false;
+  std::uint64_t destinationBytes = 0u;
+  if (!checkedMul(static_cast<std::uint32_t>(pitch), surface.height - 1u,
+                  destinationBytes) ||
+      !checkedAdd(destinationBytes, snapshot.pitch, destinationBytes) ||
+      destinationBytes > std::numeric_limits<std::size_t>::max())
+    return false;
+  const RenderTapeLinearLockLayout layout{
+      .bytesPerPixel = 8u,
+      .fullRowBytes = snapshot.pitch,
+      .fullRows = surface.height,
+      .rowBytes = snapshot.pitch,
+      .rows = surface.height,
+      .pitch = static_cast<std::uint32_t>(pitch),
+      .tightBytes = snapshot.byteCount,
+      .sourceBytes = destinationBytes,
+      .subresourceSourceBytes = destinationBytes,
+      .fullSubresource = true};
+  return writeRenderTapeLinearRows(tightBytes, bits, layout);
 }
 
 RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(

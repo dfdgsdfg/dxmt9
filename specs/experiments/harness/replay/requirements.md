@@ -1468,3 +1468,23 @@ cover stale cycle/epoch/identity, early completion, missing local END and
 double restoration. Actual Metal tests must cover checkpoint polling followed
 by reissue and warm recovery, and the original captured query/pixel oracles
 remain required for workload qualification.
+
+**R-HARN-REPLAY-9.10** A single-level, single-sample DEFAULT-pool 2D
+A16B16G16R16F render-target texture may carry an exact arm-boundary initial
+checkpoint. Its explicit version-2 color encoding must preserve the raw
+little-endian RGBA16Float bits, with checked pitch `8 * width` and byte count
+`8 * width * height`. Version-1 four-byte color encoding must retain its
+existing meaning. Capture and replay must use matching physical RGBA16Float
+storage without quantization or float-value conversion. Identity, descriptor,
+encoding, pitch and extent must be validated before admitting completeness;
+surface aliases must resolve to the authenticated parent texture/subresource.
+Binding alone does not prove a captured pass overwrites missing initial
+contents. Unsupported shapes, stale identities, transfer failures and
+incomplete drains remain fail-closed. Native layout/encoding negatives and
+actual Metal nonuniform bit-exact checkpoint/restoration evidence are required;
+synthetic tests do not replace original-workload query and pixel qualification.
+Capture itself must publish and complete pending initializer uploads even when
+the ordinary queue has no source. It must hold exclusive checkpoint producer
+admission through raw transfer completion; retaining the physical texture alone
+does not exclude intervening writes. A caller-side upload flush/wait must not
+be a hidden precondition of the accepted checkpoint oracle.

@@ -2427,6 +2427,215 @@ void testArmColorSnapshotDescriptorTruthTable() {
         "multi-mip cube snapshots remain fail-closed");
 }
 
+void testRgba16FloatSnapshotContract() {
+  static_assert(D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 == 1u);
+  static_assert(D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 == 2u);
+  const D9CWireObjectIdentity parent{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 1u, .objectId = 4294967304u};
+  const D9CSurfaceDesc shape{
+      .format = render_tape_d3d_format::A16B16G16R16F,
+      .resourceType = 3u, .usage = 1u, .pool = 0u,
+      .width = 1280u, .height = 720u, .depth = 1u};
+  const auto makeDescriptor = [](const D9CSurfaceDesc &surface,
+                                 std::uint32_t levels = 1u) {
+    auto descriptor = versionedTextureDescriptor(
+        surface.resourceType == 5u ? RenderTapeTextureDimension::Cube
+            : surface.resourceType == 4u ? RenderTapeTextureDimension::Volume
+                                        : RenderTapeTextureDimension::Texture2D,
+        levels, surface.format, surface.width, surface.height);
+    RenderTapeTextureDescriptorV2 header{};
+    std::memcpy(&header, descriptor.data(), sizeof(header));
+    for (std::uint32_t subresource = 0u;
+         subresource < header.subresourceCount; ++subresource) {
+      auto current = surface;
+      const auto mip = subresource % levels;
+      current.width = renderTapeTextureMipExtent(surface.width, mip);
+      current.height = renderTapeTextureMipExtent(surface.height, mip);
+      current.depth = surface.resourceType == 4u
+          ? renderTapeTextureMipExtent(surface.depth, mip) : 1u;
+      std::memcpy(descriptor.data() + sizeof(header) +
+                      subresource * sizeof(current),
+                  &current, sizeof(current));
+    }
+    return descriptor;
+  };
+  const auto descriptor = makeDescriptor(shape);
+  RenderTapeColorSnapshotLayout layout{};
+  check(renderTapeArmColorSnapshotTextureSupported(descriptor) &&
+            renderTapeDeriveColorSnapshotLayout(shape, layout) &&
+            layout.encodingVersion ==
+                D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 &&
+            layout.pitch == 10240u && layout.byteCount == 7372800u,
+        "STALKER RGBA16F single-level DEFAULT RT derives raw V2 8WH bytes");
+  std::array<std::uint64_t, 1u> extents{};
+  const auto contract = renderTapeDeriveExpectedContentContract(
+      parent.kind, descriptor, extents);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.count == 1u && contract.bytes == layout.byteCount &&
+            extents[0] == layout.byteCount,
+        "RGBA16F parent CompleteSeed uses the same exact snapshot extent");
+  const auto missing = renderTapeDescribeMissingSeed(parent, descriptor, 0u, {});
+  check(missing.expectedContentStatus == RenderTapeExpectedContentStatus::Accepted &&
+            missing.expectedTightBytesValid &&
+            missing.expectedTightBytes == layout.byteCount,
+        "RGBA16F missing-seed diagnostic resolves the parent raw byte extent");
+
+  const D9CRenderTapeColorSnapshotRequest request{
+      .identity = parent, .surface = shape, .subresource = 0u,
+      .encodingVersion = layout.encodingVersion};
+  const D9CRenderTapeColorSnapshotResult result{
+      .status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE,
+      .encodingVersion = layout.encodingVersion, .subresource = 0u,
+      .width = shape.width, .height = shape.height, .pitch = layout.pitch,
+      .format = shape.format, .reserved0 = 0u, .byteCount = layout.byteCount};
+  check(renderTapeColorSnapshotResultMatches(request, result, layout.byteCount),
+        "exact eight-byte RGBA16F result is authenticated as V2");
+  auto v1Request = request;
+  v1Request.encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1;
+  check(!renderTapeColorSnapshotResultMatches(v1Request, result, layout.byteCount),
+        "V1 four-byte request cannot authenticate RGBA16F V2 pixels");
+  auto wrongResult = result;
+  wrongResult.encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1;
+  check(!renderTapeColorSnapshotResultMatches(request, wrongResult, layout.byteCount),
+        "V1 result cannot be substituted for RGBA16F V2");
+  wrongResult = result;
+  wrongResult.pitch = shape.width * 4u;
+  check(!renderTapeColorSnapshotResultMatches(request, wrongResult, layout.byteCount),
+        "four-byte row pitch cannot truncate RGBA16F");
+  wrongResult = result;
+  --wrongResult.byteCount;
+  check(!renderTapeColorSnapshotResultMatches(request, wrongResult, layout.byteCount) &&
+            !renderTapeColorSnapshotResultMatches(request, result, layout.byteCount - 1u),
+        "partial RGBA16F extent or destination capacity remains fail-closed");
+  wrongResult = result;
+  wrongResult.reserved0 = 1u;
+  check(!renderTapeColorSnapshotResultMatches(request, wrongResult, layout.byteCount),
+        "RGBA16F result rejects unknown reserved provenance");
+  auto wrongRequest = request;
+  wrongRequest.identity.kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+  check(!renderTapeColorSnapshotResultMatches(wrongRequest, result, layout.byteCount),
+        "RGBA16F texture snapshot cannot authenticate an independent surface identity");
+  wrongRequest = request;
+  wrongRequest.subresource = 1u;
+  check(!renderTapeColorSnapshotResultMatches(wrongRequest, result, layout.byteCount),
+        "RGBA16F snapshot cannot name an extra subresource");
+
+  auto aliasSurface = shape;
+  aliasSurface.resourceType = 1u;
+  const RenderTapeSurfaceDescriptorV2 alias{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .subresource = 0u, .parentTexture = parent, .surface = aliasSurface};
+  const auto aliasContract = renderTapeDeriveExpectedContentContract(
+      D9C_CHUNK_HANDLE_KIND_SURFACE, std::as_bytes(std::span(&alias, 1u)));
+  check(renderTapeSurfaceAliasMatchesTextureSubresource(descriptor, parent, alias) &&
+            aliasContract.status == RenderTapeExpectedContentStatus::NotRequired &&
+            aliasContract.bytes == 0u && aliasContract.count == 0u,
+        "RGBA16F surface alias resolves its complete parent, not independent content");
+  const auto noSeed = renderTapeClassifyCommandAdmission({
+      .originAccepted = true, .registryPresent = true, .liveObject = true,
+      .producedDescriptorSupported = true, .producedProofAccepted = false});
+  const auto completeSeed = renderTapeClassifyCommandAdmission({
+      .originAccepted = true, .registryPresent = true, .liveObject = true,
+      .contentComplete = true,
+      .producedDescriptorSupported = true, .producedProofAccepted = false});
+  check(noSeed.status == RenderTapeCommandAdmissionStatus::ProducedProofRejected &&
+            completeSeed.accepted() && !completeSeed.usesProducedProof,
+        "binding-only still rejects Produced proof; complete arm bytes independently admit");
+
+  auto standalone = shape;
+  standalone.resourceType = 1u;
+  auto cube = shape;
+  cube.resourceType = 5u;
+  auto managed = shape;
+  managed.pool = 1u;
+  auto shaderTexture = shape;
+  shaderTexture.usage = 0u;
+  auto volume = shape;
+  volume.resourceType = 4u;
+  volume.depth = 2u;
+  auto msaa = shape;
+  msaa.multiSampleType = 2u;
+  auto msaaQuality = shape;
+  msaaQuality.multiSampleQuality = 1u;
+  for (const auto &unsupported :
+       {standalone, cube, managed, shaderTexture, volume, msaa, msaaQuality}) {
+    RenderTapeColorSnapshotLayout rejected{};
+    check(!renderTapeDeriveColorSnapshotLayout(unsupported, rejected) &&
+              rejected.encodingVersion == 0u && rejected.pitch == 0u &&
+              rejected.byteCount == 0u &&
+              !renderTapeArmColorSnapshotTextureSupported(makeDescriptor(unsupported)) &&
+              renderTapeDeriveExpectedSurfaceContent(unsupported).status !=
+                  RenderTapeExpectedContentStatus::Accepted,
+          "RGBA16F unsupported storage/pool/usage/sample routes remain fail-closed");
+  }
+  const auto multiMip = makeDescriptor(shape, 2u);
+  check(!renderTapeArmColorSnapshotTextureSupported(multiMip) &&
+            renderTapeDeriveExpectedContentContract(parent.kind, multiMip).status ==
+                RenderTapeExpectedContentStatus::UnsupportedFormat,
+        "valid multi-mip RGBA16F descriptor is outside the snapshot/CompleteSeed shape");
+  auto tooWide = shape;
+  tooWide.width = static_cast<std::uint32_t>(
+      std::numeric_limits<std::int32_t>::max()) / 8u + 1u;
+  check(!renderTapeDeriveColorSnapshotLayout(tooWide, layout) &&
+            renderTapeDeriveExpectedSurfaceContent(tooWide).status ==
+                RenderTapeExpectedContentStatus::Overflow,
+        "RGBA16F snapshot row cannot exceed downstream signed D3D9 lock pitch");
+  auto v1Shape = shape;
+  v1Shape.format = 22u;
+  check(renderTapeDeriveColorSnapshotLayout(v1Shape, layout) &&
+            layout.encodingVersion == D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 &&
+            layout.pitch == 5120u && layout.byteCount == 3686400u,
+        "existing X8 snapshot retains exactly the four-byte V1 layout");
+  v1Shape.width = static_cast<std::uint32_t>(
+      std::numeric_limits<std::int32_t>::max()) / 4u + 1u;
+  check(!renderTapeDeriveColorSnapshotLayout(v1Shape, layout),
+        "V1 snapshot also rejects a tight row unrepresentable by signed replay lock pitch");
+  RenderTapeLinearLockLayout linear{};
+  RenderTapeVolumeLockLayout volumeLayout{};
+  check(renderTapeLinearBytesPerPixel(shape.format) == 0u &&
+            renderTapeLinearLockLayout(shape, 10240, nullptr, linear) ==
+                RenderTapeLinearLayoutStatus::UnsupportedFormat &&
+            renderTapeVolumeContentLayout(volume, volumeLayout) ==
+                RenderTapeVolumeLayoutStatus::UnsupportedFormat,
+        "RGBA16F snapshot support does not widen general PE LockRect/BPP/LockBox gates");
+
+  auto smallShape = shape;
+  smallShape.width = 2u;
+  smallShape.height = 2u;
+  constexpr std::array<std::byte, 32u> rawHalves{
+      std::byte{0x00u}, std::byte{0x80u}, std::byte{0x00u}, std::byte{0x3cu},
+      std::byte{0x00u}, std::byte{0x7cu}, std::byte{0x01u}, std::byte{0x7eu},
+      std::byte{0x00u}, std::byte{0xbcu}, std::byte{0x01u}, std::byte{0x00u},
+      std::byte{0x00u}, std::byte{0xfcu}, std::byte{0x23u}, std::byte{0xfeu},
+      std::byte{0x55u}, std::byte{0x35u}, std::byte{0xaau}, std::byte{0xbau},
+      std::byte{0xffu}, std::byte{0x7bu}, std::byte{0xffu}, std::byte{0xfbu},
+      std::byte{0x00u}, std::byte{0x00u}, std::byte{0x00u}, std::byte{0x40u},
+      std::byte{0x00u}, std::byte{0xc0u}, std::byte{0x00u}, std::byte{0x38u}};
+  std::array<std::byte, 48u> padded{};
+  padded.fill(std::byte{0xccu});
+  check(writeRenderTapeColorSnapshotRows(rawHalves, padded.data(), 24, smallShape) &&
+            std::equal(rawHalves.begin(), rawHalves.begin() + 16u, padded.begin()) &&
+            std::equal(rawHalves.begin() + 16u, rawHalves.end(), padded.begin() + 24u) &&
+            std::all_of(padded.begin() + 16u, padded.begin() + 24u,
+                        [](std::byte value) { return value == std::byte{0xccu}; }) &&
+            std::all_of(padded.begin() + 40u, padded.end(),
+                        [](std::byte value) { return value == std::byte{0xccu}; }),
+        "snapshot upload preserves raw half NaNs/signs/lanes and leaves row padding untouched");
+  const auto unchanged = padded;
+  check(!writeRenderTapeColorSnapshotRows(rawHalves, padded.data(), -24, smallShape) &&
+            !writeRenderTapeColorSnapshotRows(rawHalves, padded.data(), 15, smallShape) &&
+            !writeRenderTapeColorSnapshotRows(
+                std::span(rawHalves).first(31u), padded.data(), 24, smallShape) &&
+            !writeRenderTapeColorSnapshotRows(rawHalves, nullptr, 24, smallShape) &&
+            !writeRenderTapeColorSnapshotRows(rawHalves, padded.data(), 24, standalone) &&
+            padded == unchanged,
+        "snapshot-only upload rejects bad rows/bytes/storage before any write");
+}
+
 void testCompletedEventQueryArmOverlay() {
   static_assert(std::is_standard_layout_v<D9CRenderTapeEventQueryCheckpointRequest>);
   static_assert(std::is_trivially_copyable_v<D9CRenderTapeEventQueryCheckpointRequest>);
@@ -5389,6 +5598,7 @@ int main(int argc, char** argv) {
     testMissingSeedDescriptorAndProvenanceTruthTable();
     testArmBoundaryTransitionTruthTable();
     testArmColorSnapshotDescriptorTruthTable();
+    testRgba16FloatSnapshotContract();
     testCompletedEventQueryArmOverlay();
     testStandaloneD24S8SnapshotContract();
     testExpectedContentContractDerivation();

@@ -281,6 +281,25 @@ inline bool cpuGeneralWriteTextureRows(
          d3d9::writeRenderTapeVolumeRows(bytes, lock.bits, locked);
 }
 
+inline bool cpuGeneralWriteTextureMutationRows(
+    std::span<const std::byte> descriptor, const D9CTexture& texture,
+    std::uint32_t subresource, std::uint64_t byteOffset,
+    const D9CLockedRect& lock, std::span<const std::byte> bytes) {
+  D9CSurfaceDesc desc{};
+  if (byteOffset != 0u ||
+      !d3d9::renderTapeTextureSubresourceDescriptor(descriptor, subresource, desc))
+    return false;
+  if (desc.format == 113u) {
+    // Raw half-float checkpoint bytes are not general LockRect admission.
+    // The complete parent descriptor, rather than a plausible level shape,
+    // authorizes this snapshot-only full-subresource restoration path.
+    return subresource == 0u &&
+        d3d9::renderTapeArmColorSnapshotTextureSupported(descriptor) &&
+        d3d9::writeRenderTapeColorSnapshotRows(bytes, lock.bits, lock.pitch, desc);
+  }
+  return cpuGeneralWriteTextureRows(desc, texture, subresource, lock, bytes);
+}
+
 struct LogicalReceipt {
   D9CWireObjectIdentity identity{};
   std::uint32_t subresource = 0u;
@@ -1275,8 +1294,9 @@ class CpuGeneralTapeExecutor {
              dxmt9c_texture_lock_rect(texture, fixed.subresource, &lock,
                                       nullptr, 0u) == core::D3D_OK &&
              lock.bits != nullptr;
-        const bool copied = ok && detail::cpuGeneralWriteTextureRows(
-            desc, *texture, fixed.subresource, lock, blob->bytes);
+        const bool copied = ok && detail::cpuGeneralWriteTextureMutationRows(
+            definition->descriptor, *texture, fixed.subresource, fixed.byteOffset,
+            lock, blob->bytes);
         const bool unlocked = ok &&
             dxmt9c_texture_unlock_rect(texture, fixed.subresource) ==
             core::D3D_OK;

@@ -3,6 +3,7 @@
 #include "device_c_common.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_replay_offload.hpp"
+#include "dxmt9/dxmt9_blit_encoders.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 
@@ -89,32 +90,6 @@ bool expectedD24X8Bytes(const D9CSurfaceDesc& desc,
       desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
       desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.resourceType != 1u ||
-      desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
-    return false;
-  }
-  pitch = desc.width * 4u;
-  if (desc.height > std::numeric_limits<std::uint64_t>::max() / pitch) {
-    return false;
-  }
-  bytes = static_cast<std::uint64_t>(pitch) * desc.height;
-  return bytes != 0u;
-}
-
-bool expectedColorSnapshotBytes(const D9CSurfaceDesc& desc,
-                                std::uint32_t& pitch,
-                                std::uint64_t& bytes) noexcept {
-  const bool texture2d = desc.resourceType == 3u &&
-                         ((desc.format == 22u && desc.pool == 0u &&
-                           desc.usage == 1u) ||
-                          (desc.format == 21u && desc.pool == 1u &&
-                           desc.usage == 0u));
-  const bool cube = desc.resourceType == 5u && desc.format == 114u &&
-                    desc.pool == 0u && desc.usage == 1u;
-  const bool standalone =
-      dxmt9::d3d9::renderTapeArmColorSnapshotStandaloneSurfaceSupported(desc);
-  if ((!standalone && !texture2d && !cube) ||
-      desc.multiSampleType != 0u || desc.multiSampleQuality != 0u ||
-      desc.width == 0u || desc.height == 0u || desc.depth != 1u ||
       desc.width > std::numeric_limits<std::uint32_t>::max() / 4u) {
     return false;
   }
@@ -754,21 +729,23 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
   const bool surfaceIdentity = request &&
       request->identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE;
   if (!device || !request || !bytes ||
-      request->encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 ||
+      (request->encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 &&
+       request->encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2) ||
       (!textureIdentity && !surfaceIdentity) ||
       request->identity.generation == 0u || request->identity.objectId == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
-  std::uint32_t expectedPitch = 0u;
-  std::uint64_t expectedBytes = 0u;
-  if (!expectedColorSnapshotBytes(request->surface, expectedPitch,
-                                  expectedBytes)) {
+  dxmt9::d3d9::RenderTapeColorSnapshotLayout layout{};
+  if (!dxmt9::d3d9::renderTapeDeriveColorSnapshotLayout(request->surface,
+                                                       layout)) {
     return dxmt9::core::D3DERR_NOTAVAILABLE;
   }
+  if (request->encodingVersion != layout.encodingVersion)
+    return dxmt9::core::D3DERR_INVALIDCALL;
   const std::uint32_t expectedSubresources =
       request->surface.resourceType == 5u ? 6u : 1u;
   if (request->subresource >= expectedSubresources ||
-      capacity != expectedBytes ||
+      capacity != layout.byteCount ||
       capacity > std::numeric_limits<std::size_t>::max()) {
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH;
     return dxmt9::core::D3DERR_INVALIDCALL;
@@ -874,18 +851,24 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
-    upper->flush();
+    const bool rawRgba16Float = layout.encodingVersion ==
+        D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2;
+    if (!rawRgba16Float) upper->flush();
     dxmt9::core::ReadbackPixels pixels;
     std::vector<std::byte> tight;
     const auto coreFormat = dxmt9::d3d9::devicec::fmtFromD3D(actual.format);
     const bool captured = coreFormat != dxmt9::core::Format::Unknown &&
-        upper->readbackSurface(
-            dxmt9::core::ReadbackDesc{.source = surface->obj->handle()},
-            pixels) &&
+        (rawRgba16Float
+             ? upper->pool() && dxmt9::encoders::captureRenderTapeRgba16Float(
+                   upper->queue(), *upper->pool(), upper->queue().device(),
+                   surface->obj->handle(), pixels)
+             : upper->readbackSurface(
+                   dxmt9::core::ReadbackDesc{.source = surface->obj->handle()},
+                   pixels)) &&
         copyTightPixels(pixels, actual.width, actual.height,
                         static_cast<std::uint32_t>(coreFormat), tight);
     releaseResolved();
-    if (!captured || tight.size() != expectedBytes) {
+    if (!captured || tight.size() != layout.byteCount) {
       out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
@@ -899,11 +882,11 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     }
     std::memcpy(bytes, tight.data(), tight.size());
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE;
-    out->encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1;
+    out->encodingVersion = layout.encodingVersion;
     out->subresource = request->subresource;
     out->width = actual.width;
     out->height = actual.height;
-    out->pitch = expectedPitch;
+    out->pitch = layout.pitch;
     out->format = actual.format;
     out->byteCount = tight.size();
     return dxmt9::core::D3D_OK;

@@ -805,6 +805,26 @@ concurrency, so its evidence is the shared descriptor predicate, native Metal
 readback, and a same-run texture/source oracle rather than a new temporal
 model.
 
+R-HARN-REPLAY-9.10 adds a separate raw RGBA16Float-LE color encoding for
+single-level DEFAULT 2D format-113 render targets. A shared checked layout
+owns encoding, bytes per pixel, tight pitch and total extent for both PE result
+validation and Unix transfer admission. Existing four-byte encoding is not
+reinterpreted. The cold Unix capture entry acquires the existing exclusive
+checkpoint lease, which drains ordinary work and publishes/completes the
+initializer prefix even with no ordinary source. The lease spans physical
+backing lookup through transfer completion; texture retention alone is not a
+write-exclusion capability. Ordinary readback is not redefined as checkpoint
+admission. Unix retains and reads the exact RGBA16Float backing; replay
+uploads the same bytes through the existing same-format resource path. PE
+stores the immutable arm-local bytes and qualified parent identity, never
+converts floating-point values or manufactures a produced-by-pass witness.
+CPU replay uses the same descriptor-qualified eight-byte row layout; this
+does not expand the ordinary LockRect/LockBox format table. Initial contents
+must survive both controlled CPU execution and real Metal restoration.
+Native tests bind malformed layout/result rejection to that shared contract;
+the Metal oracle must compare nonuniform raw bits across capture and restored
+readback before original-workload qualification.
+
 The V2 payloads are now the single production representation. A texture
 payload is one `RenderTapeTextureDescriptorV2` header plus an exact tail of
 `D9CSurfaceDesc` values: one complete mip chain for 2D and volume textures and

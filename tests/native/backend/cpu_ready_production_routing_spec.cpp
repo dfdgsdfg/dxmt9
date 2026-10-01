@@ -10487,6 +10487,152 @@ void generalCpuResetQualificationUsesFreshFixtures() {
   }
 }
 
+void generalCpuRgba16FloatCheckpointUsesQualifiedRows() {
+  namespace tape = dxmt9::d3d9;
+  namespace runtime = tape::render_tape_runtime;
+  namespace cpu = dxmt9::test::detail;
+  const D9CSurfaceDesc level{
+      .format = 113u, .resourceType = 3u, .usage = 1u, .pool = 0u,
+      .width = 7u, .height = 5u, .depth = 1u};
+  const tape::RenderTapeTextureDescriptorV2 metadata{
+      .dimension = static_cast<std::uint32_t>(tape::RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 1u, .subresourceCount = 1u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          tape::RenderTapeInitialContentDisposition::CompleteSeed)};
+  const auto descriptor = [](const auto& fixed, std::span<const D9CSurfaceDesc> levels) {
+    std::vector<std::byte> bytes(sizeof(fixed) + levels.size_bytes());
+    std::memcpy(bytes.data(), &fixed, sizeof(fixed));
+    std::memcpy(bytes.data() + sizeof(fixed), levels.data(), levels.size_bytes());
+    return bytes;
+  };
+  const auto exact = descriptor(metadata, std::span(&level, 1u));
+  constexpr std::uint32_t rowBytes = 7u * 8u;
+  constexpr std::uint32_t pitch = rowBytes + 8u;
+  std::vector<std::byte> seed(rowBytes * level.height);
+  for (std::size_t index = 0u; index < seed.size(); ++index)
+    seed[index] = static_cast<std::byte>((index * 19u + 7u) & 0xffu);
+  std::vector<std::byte> storage(pitch * level.height + 16u, std::byte{0xa5});
+  const D9CLockedRect lock{
+      .pitch = static_cast<std::int32_t>(pitch), .bits = storage.data() + 8u};
+  D9CTexture texture({}, nullptr);
+  check(tape::renderTapeLinearBytesPerPixel(113u) == 0u &&
+            !cpu::cpuGeneralWriteTextureRows(level, texture, 0u, lock, seed),
+        "RGBA16F snapshot support does not widen the general linear LockRect format table");
+  check(cpu::cpuGeneralWriteTextureMutationRows(exact, texture, 0u, 0u, lock, seed),
+        "exact descriptor-qualified RGBA16F checkpoint copies eight raw bytes per texel");
+  for (std::uint32_t row = 0u; row < level.height; ++row) {
+    check(std::equal(seed.begin() + row * rowBytes, seed.begin() + (row + 1u) * rowBytes,
+                     storage.begin() + 8u + row * pitch),
+          "every half-float lane and row is copied without numeric conversion");
+    check(std::all_of(storage.begin() + 8u + row * pitch + rowBytes,
+                      storage.begin() + 8u + (row + 1u) * pitch,
+                      [](std::byte byte) { return byte == std::byte{0xa5}; }),
+          "snapshot row padding remains untouched");
+  }
+  check(std::all_of(storage.begin(), storage.begin() + 8u,
+                    [](std::byte byte) { return byte == std::byte{0xa5}; }) &&
+            std::all_of(storage.end() - 8u, storage.end(),
+                        [](std::byte byte) { return byte == std::byte{0xa5}; }),
+        "snapshot writer stays within its complete row extent");
+  const auto unchanged = storage;
+  const auto reject = [&](std::span<const std::byte> desc, std::uint32_t subresource,
+                          std::uint64_t offset, const D9CLockedRect& candidateLock,
+                          std::span<const std::byte> bytes) {
+    check(!cpu::cpuGeneralWriteTextureMutationRows(desc, texture, subresource,
+              offset, candidateLock, bytes) && storage == unchanged,
+          "invalid snapshot descriptor/pitch/extent/offset rejects before any write");
+  };
+  reject(exact, 1u, 0u, lock, seed);
+  reject(exact, 0u, 1u, lock, seed);
+  reject(exact, 0u, 0u, lock, std::span(seed).first(seed.size() - 1u));
+  auto extraSeed = seed;
+  extraSeed.push_back(std::byte{0xff});
+  reject(exact, 0u, 0u, lock, extraSeed);
+  for (auto invalidPitch : {0, -1, static_cast<std::int32_t>(rowBytes - 1u)})
+    reject(exact, 0u, 0u, {.pitch = invalidPitch, .bits = lock.bits}, seed);
+  reject(exact, 0u, 0u, {.pitch = lock.pitch, .bits = nullptr}, seed);
+  for (unsigned fault = 0u; fault < 8u; ++fault) {
+    auto wrongMetadata = metadata;
+    std::vector<D9CSurfaceDesc> wrongLevels{level};
+    switch (fault) {
+    case 0u: wrongLevels[0].pool = 1u; break;
+    case 1u: wrongLevels[0].usage = 0u; break;
+    case 2u: wrongLevels[0].multiSampleType = 2u; break;
+    case 3u: wrongMetadata.initialContentDisposition = static_cast<std::uint32_t>(
+                 tape::RenderTapeInitialContentDisposition::Unavailable); break;
+    case 4u:
+      wrongMetadata.mipLevelCount = wrongMetadata.subresourceCount = 2u;
+      wrongLevels.push_back(level);
+      wrongLevels[1].width = 3u;
+      wrongLevels[1].height = 2u;
+      break;
+    case 5u:
+      wrongMetadata.dimension = static_cast<std::uint32_t>(tape::RenderTapeTextureDimension::Volume);
+      wrongLevels[0].resourceType = 4u;
+      wrongLevels[0].depth = 3u;
+      break;
+    case 6u:
+      wrongMetadata.dimension = static_cast<std::uint32_t>(tape::RenderTapeTextureDimension::Cube);
+      wrongMetadata.subresourceCount = 6u;
+      wrongLevels.assign(6u, level);
+      for (auto& face : wrongLevels) { face.resourceType = 5u; face.height = face.width; }
+      break;
+    case 7u: wrongLevels[0].resourceType = 1u; break;
+    }
+    const auto wrong = descriptor(wrongMetadata, wrongLevels);
+    reject(wrong, 0u, 0u, lock, seed);
+  }
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "CPU RGBA16F checkpoint fixture needs resources, not GPU execution");
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  std::uint64_t originalDigest = 0u;
+  for (bool alternateSeed : {false, true}) {
+    const auto captured = tape::test::makeGeneralCpuAliasFixture(true, alternateSeed, 113u);
+    check(captured.blobs[0].size() == 16u * 16u * 8u,
+          "complete HDR RT seed preserves all raw eight-byte texels");
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : captured.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    check(runtime::buildGeneralReplayPlan(captured.tape, blobs, plan).complete() &&
+              runtime::admitGeneralCpuPlan(plan).accepted(),
+          "single-level DEFAULT RGBA16F RT checkpoint passes shared and CPU preflight");
+    std::uint64_t semantic = 0u;
+    for (bool measured : {false, true})
+      for (bool compatibility : {true, false}) {
+        RuntimeFixture fixture(false, false, true, false, WMT::Device{resourceDevice.handle});
+        Executor executor(fixture, plan, blobs, {
+            .route = compatibility ? tape::ProviderReplayPolicy::Compatibility
+                                   : tape::ProviderReplayPolicy::ProductionSlot,
+            .measurement = measured});
+        const auto result = executor.run();
+        check(result.complete && result.resetOk, "CPU RGBA16F checkpoint replay: " + result.failure);
+        check(result.draws == 2u && result.observedTextureUploads == 1u &&
+                  result.observedMutations == 3u && !fixture.routing->textureUploadFailed &&
+                  result.resourcesCreated == result.resourcesReleased &&
+                  result.submitted == result.completed && result.completed == result.reclaimed,
+              "actual CPU upload shape and alias lifetime conserve the complete HDR seed");
+        if (measured) {
+          check(result.fullOracleCalls == 0u && result.drawObservations.empty(),
+                "HDR checkpoint measurement keeps shape checks and omits semantic scans");
+        } else {
+          check(result.drawObservations.size() == 2u,
+                "both real draw observations consume the HDR parent/alias receipt");
+          if (!semantic) semantic = result.digest;
+          check(result.digest == semantic,
+                "complete raw half-float seed has identical semantics across production routes");
+        }
+      }
+    if (!alternateSeed) originalDigest = semantic;
+    else check(semantic != originalDigest,
+               "changed half-float raw bits change the observed command/resource semantics");
+  }
+}
+
 void generalCpuAliasAfterParentDestroyUsesImmutableIdentity() {
   namespace runtime = dxmt9::d3d9::render_tape_runtime;
   using Fixture = dxmt9::d3d9::test::GeneralCpuAliasFixture;
@@ -11157,8 +11303,10 @@ int main(int argc, char** argv) {
         generalCpuMeasurementOmitsOracleOnly();
       else if (std::string_view(argv[1]) == "--general-cpu-attachment-spec")
         generalCpuAttachmentContentsRefinement();
-      else if (std::string_view(argv[1]) == "--general-cpu-alias-spec")
+      else if (std::string_view(argv[1]) == "--general-cpu-alias-spec") {
+        generalCpuRgba16FloatCheckpointUsesQualifiedRows();
         generalCpuAliasAfterParentDestroyUsesImmutableIdentity();
+      }
       else if (std::string_view(argv[1]) ==
                "--two-pending-production-sources-spec") {
         twoPendingProductionSourcesPreserveQualifiedFifoLifetime();

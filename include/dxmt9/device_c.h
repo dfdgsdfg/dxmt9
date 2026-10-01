@@ -1141,12 +1141,16 @@ typedef struct D9CRenderTapeEventQueryCheckpointResult {
 
 /* Capture-only, synchronous color resource snapshot. The identity names an
  * exact generation-qualified standalone X8R8G8B8 surface or a supported
- * texture subresource (X8R8G8B8 2D or R32F cube face). Version 1 is the
- * tightly packed logical four-byte pixel representation. The destination is
- * a validated top-level bridge buffer; no nested pointer crosses the PE/unix
- * boundary. */
+ * texture subresource. Version 1 is the tightly packed logical four-byte
+ * pixel representation for X8R8G8B8 2D, A8R8G8B8 managed 2D, or R32F cube.
+ * Version 2 is raw RGBA16Float little-endian (R, G, B, A half lanes, eight
+ * bytes/pixel) for a single-level, single-sample DEFAULT-pool A16B16G16R16F
+ * 2D render-target texture only; it performs no float conversion. The
+ * destination is a validated top-level bridge buffer; no nested pointer
+ * crosses the PE/unix boundary. */
 enum {
     D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1 = 1u,
+    D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 = 2u,
 };
 
 typedef enum D9CRenderTapeColorSnapshotStatus {

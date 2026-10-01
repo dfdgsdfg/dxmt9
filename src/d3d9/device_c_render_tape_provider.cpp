@@ -2214,6 +2214,12 @@ bool resolveChunk(const Chunk& chunk,
 bool writeGeneralLockedSurface(const D9CSurfaceDesc& desc,
                                const D9CLockedRect& locked,
                                std::span<const std::byte> bytes) {
+  if (desc.format == 113u) {
+    // RGBA16F is a snapshot-only RT texture shape, not a new admission into
+    // the generic LockRect/LockBox format table. Preserve every half bit.
+    return writeRenderTapeColorSnapshotRows(bytes, locked.bits, locked.pitch,
+                                            desc);
+  }
   if (renderTapeLinearBytesPerPixel(desc.format) != 0u) {
     RenderTapeLinearLockLayout layout{};
     return renderTapeLinearLockLayout(desc, locked.pitch, nullptr, layout) ==
@@ -2289,6 +2295,9 @@ bool applyGeneralMutation(
             definition->descriptor, mutation.subresource, desc)) {
       return false;
     }
+    if (desc.format == 113u &&
+        !renderTapeArmColorSnapshotTextureSupported(definition->descriptor))
+      return false;
     D9CLockedRect locked{};
     auto* texture = static_cast<D9CTexture*>(object);
     if (dxmt9c_texture_lock_rect(texture, mutation.subresource, &locked,

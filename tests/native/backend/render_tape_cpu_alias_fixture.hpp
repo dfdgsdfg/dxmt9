@@ -57,7 +57,8 @@ inline std::vector<std::byte> aliasDrawChunk() {
 }  // namespace general_cpu_alias_fixture_detail
 
 inline GeneralCpuAliasFixture makeGeneralCpuAliasFixture(
-    bool destroyParentAfterFirstDraw = true, bool alternateParentSeed = false) {
+    bool destroyParentAfterFirstDraw = true, bool alternateParentSeed = false,
+    std::uint32_t parentFormat = 22u) {
   using namespace general_cpu_destroy_fixture_detail;
   using namespace general_cpu_alias_fixture_detail;
 
@@ -96,7 +97,7 @@ inline GeneralCpuAliasFixture makeGeneralCpuAliasFixture(
   // surface descriptor has the level-0 layout and the Surface resource kind; no surface
   // mutation is used, so the only receipt is the parent's level-0 upload.
   const D9CSurfaceDesc aliasLevel{
-      .format = 22u,
+      .format = parentFormat,
       .resourceType = 1u,
       .usage = 1u,
       .pool = 0u,
@@ -120,7 +121,8 @@ inline GeneralCpuAliasFixture makeGeneralCpuAliasFixture(
   std::memcpy(textureDescriptor.data() + sizeof(texture), &textureLevel,
               sizeof(textureLevel));
   std::vector<std::byte> textureBytes(
-      static_cast<std::size_t>(aliasLevel.width) * aliasLevel.height * 4u);
+      static_cast<std::size_t>(aliasLevel.width) * aliasLevel.height *
+      (parentFormat == 113u ? 8u : 4u));
   for (std::size_t index = 0u; index < textureBytes.size(); ++index)
     textureBytes[index] = static_cast<std::byte>(0x31u + (index & 0x7fu));
   if (alternateParentSeed) {

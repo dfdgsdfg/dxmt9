@@ -11,6 +11,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
+#include "dxmt9/dxmt9_resource_initializer.hpp"
 #include "dxmt9/dxmt9_resource_pool.hpp"
 
 // R-HARN-REPLAY-7.6/7.7/7.8: bounded provider identity grammar,
@@ -34,6 +35,31 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace dxmt9 {
+
+struct CommandQueueArenaLeaseTestAccess {
+  static bool hasPendingInitializerWithoutOrdinaryCommands(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.initializer_ || !queue.initializer_->hasPendingUploadsUnlocked())
+      return false;
+    if (!queue.writingSlot_) return true;
+    if (*queue.writingSlot_ >= queue.slots_.size()) return false;
+    const auto* payload = queue.slots_[*queue.writingSlot_].payload;
+    return payload && payload->commandsEmpty();
+  }
+
+  static bool initializerCompleted(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.initializer_ || queue.initializer_->hasPendingUploadsUnlocked())
+      return false;
+    const auto progress = queue.initializer_->queryProgressUnlocked();
+    return progress.published != 0u && progress.completed >= progress.published &&
+        !progress.failed;
+  }
+};
+
+}  // namespace dxmt9
 
 namespace {
 
@@ -5721,6 +5747,274 @@ void colorSnapshotCapturesExact2DAndAllCubeFaces() {
   dxmt9c_factory_release(factory);
 }
 
+void nativeMetalRgba16FloatSnapshotReplayBits() {
+  using dxmt9::core::D3D_OK;
+  constexpr std::uint32_t width = 7u;
+  constexpr std::uint32_t height = 5u;
+  constexpr std::uint32_t pitch = width * 8u;
+  constexpr std::array<std::uint16_t, 24u> halfBits{
+      0x0000u, 0x8000u, 0x0001u, 0x8001u, 0x03ffu, 0x83ffu,
+      0x0400u, 0x8400u, 0x3c00u, 0xbc00u, 0x3555u, 0xb555u,
+      0x7bffu, 0xfbffu, 0x7c00u, 0xfc00u, 0x7e01u, 0x7fffu,
+      0xfe05u, 0x7d11u, 0x3a00u, 0xba00u, 0x3f00u, 0xbf00u};
+  check(std::endian::native == std::endian::little,
+        "raw RGBA16F oracle uses the explicit little-endian wire representation");
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+      dxmt9c_factory_create(), dxmt9c_factory_release);
+  check(bool(factory), "RGBA16F oracle factory");
+  std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> sourceDevice(
+      dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+      dxmt9c_device_release);
+  check(bool(sourceDevice), "RGBA16F oracle source device");
+  std::unique_ptr<D9CTexture, decltype(&dxmt9c_texture_release)> sourceTexture(
+      dxmt9c_device_create_texture(sourceDevice.get(), width, height, 1u, 1u, 113u, 0u),
+      dxmt9c_texture_release);
+  check(bool(sourceTexture), "RGBA16F oracle exact single-level DEFAULT RT texture");
+  D9CWireObjectIdentity identity{};
+  check(dxmt9c_texture_get_wire_identity(sourceTexture.get(), &identity) == D3D_OK,
+        "RGBA16F oracle source has an actual retained wire generation");
+  const D9CSurfaceDesc surface{.format = 113u, .resourceType = 3u,
+      .usage = 1u, .pool = 0u, .width = width, .height = height, .depth = 1u};
+  const D9CRenderTapeColorSnapshotRequest request{.identity = identity,
+      .surface = surface, .subresource = 0u,
+      .encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2};
+  const auto upper = sourceDevice->dev().upperDevice();
+  check(upper && upper->pool(), "RGBA16F oracle has actual Metal backing");
+  std::vector<std::byte> rejectionBytes(pitch * height, std::byte{0x5au});
+  const auto rejectionSentinel = rejectionBytes;
+  const auto rejectsCurrentSnapshot = [&] {
+    rejectionBytes = rejectionSentinel;
+    D9CRenderTapeColorSnapshotResult rejected{};
+    return dxmt9c_device_capture_render_tape_color_snapshot(
+               sourceDevice.get(), &request, &rejected, rejectionBytes.data(),
+               rejectionBytes.size()) != D3D_OK &&
+        rejected.status == D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED &&
+        rejectionBytes == rejectionSentinel;
+  };
+  RenderTapeDigest firstDigest{}, middleDigest{};
+  std::uint32_t checked = 0u;
+  for (std::uint32_t iteration = 0u; iteration < 3u; ++iteration) {
+    std::vector<std::byte> expected(pitch * height);
+    for (std::uint32_t y = 0u; y < height; ++y) {
+      for (std::uint32_t x = 0u; x < width; ++x) {
+        for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
+          const auto bits = halfBits[(y * 5u + x * 7u + lane * 11u +
+                                     (iteration == 1u ? 3u : 0u)) % halfBits.size()];
+          const auto offset = y * pitch + x * 8u + lane * 2u;
+          expected[offset] = std::byte(bits & 0xffu);
+          expected[offset + 1u] = std::byte(bits >> 8u);
+        }
+      }
+    }
+    D9CLockedRect locked{};
+    check(dxmt9c_texture_lock_rect(sourceTexture.get(), 0u, &locked, nullptr, 0u) == D3D_OK &&
+              locked.bits && locked.pitch >= static_cast<std::int32_t>(pitch),
+          "RGBA16F oracle source lock exposes bounded rows");
+    for (std::uint32_t y = 0u; y < height; ++y)
+      std::memcpy(static_cast<std::byte*>(locked.bits) +
+                      static_cast<std::size_t>(y) * locked.pitch,
+                  expected.data() + static_cast<std::size_t>(y) * pitch, pitch);
+    check(dxmt9c_texture_unlock_rect(sourceTexture.get(), 0u) == D3D_OK,
+          "RGBA16F oracle publishes the raw source half bits without conversion");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::
+              hasPendingInitializerWithoutOrdinaryCommands(upper->queue()),
+          "RGBA16F capture starts with pending initializer-only raw upload and no ordinary commands");
+    if (iteration == 0u) {
+      dxmt9::core::SourcePayloadCapacity capacity{};
+      capacity.commandHeaders = 1u;
+      capacity.clearRecords = 1u;
+      auto admission = upper->queue().beginDirectChunkSlotReplay(
+          1u, capacity, sizeof(dxmt9::core::ClearDesc));
+      check(admission.status == dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
+                admission.lease.has_value(),
+            "RGBA16F rejection fixture owns a real active borrowed Direct admission");
+      check(rejectsCurrentSnapshot() &&
+                dxmt9::CommandQueueArenaLeaseTestAccess::
+                    hasPendingInitializerWithoutOrdinaryCommands(upper->queue()),
+            "RGBA16F active borrowed admission rejects without caller writes or publishing initializer");
+      check(admission.lease->rollbackPreEffect(),
+            "RGBA16F rejected checkpoint leaves the borrowed producer safely rollbackable");
+    }
+    std::vector<std::byte> captured(expected.size(), std::byte{0xacu});
+    D9CRenderTapeColorSnapshotResult result{};
+    const auto beforeCapture = dxmt9::perf::snapshotRenderTapeReplay();
+    check(dxmt9c_device_capture_render_tape_color_snapshot(
+              sourceDevice.get(), &request, &result, captured.data(), captured.size()) == D3D_OK &&
+              renderTapeColorSnapshotResultMatches(request, result, captured.size()) &&
+              result.encodingVersion == D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 &&
+              result.pitch == pitch && captured == expected &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::initializerCompleted(upper->queue()) &&
+              dxmt9::perf::snapshotRenderTapeReplay().gpuErrors == beforeCapture.gpuErrors,
+          "RGBA16F V2 capture itself completes raw upload and preserves odd-width half bits and NaN payloads");
+    const auto digest = RenderTapeCaptureSession::sha256(captured);
+    if (iteration == 0u) firstDigest = digest;
+    else if (iteration == 1u) {
+      middleDigest = digest;
+      check(middleDigest != firstDigest, "RGBA16F altered half bits have a distinct exact receipt");
+    } else check(digest == firstDigest, "RGBA16F A/B/A raw capture restores the original receipt");
+
+    if (iteration == 0u) {
+      std::unique_ptr<D9CSurface, decltype(&dxmt9c_surface_release)> sourceLevel(
+          dxmt9c_texture_get_surface_level(sourceTexture.get(), 0u),
+          dxmt9c_surface_release);
+      check(bool(sourceLevel) && sourceLevel->obj,
+            "RGBA16F physical negative retains the exact texture surface alias");
+      WMTTextureInfo wrongInfo{
+          .pixel_format = WMTPixelFormatBGRA8Unorm,
+          .width = width,
+          .height = height,
+          .depth = 1u,
+          .array_length = 1u,
+          .type = WMTTextureType2D,
+          .mipmap_level_count = 1u,
+          .sample_count = 1u,
+          .usage = WMTTextureUsageRenderTarget,
+          .options = WMTResourceStorageModePrivate,
+      };
+      auto wrongBacking = upper->queue().device().newTexture(wrongInfo);
+      check(bool(wrongBacking), "RGBA16F physical negative creates a real wrong-format backing");
+      wrongBacking.setLabel(WMT::String::string(
+          "Rejected RGBA16F checkpoint BGRA8 backing", WMTUTF8StringEncoding));
+      const auto handle = sourceLevel->obj->handle();
+      WMT::Reference<WMT::Texture> originalBacking;
+      {
+        std::lock_guard lock(upper->queue().mutex_);
+        auto* record = upper->pool()->findSurface(handle.value);
+        check(record && record->texture, "RGBA16F physical negative has a live backend surface");
+        originalBacking = record->texture;
+        record->texture = wrongBacking;
+      }
+      const bool rejectedPhysical = rejectsCurrentSnapshot();
+      {
+        std::lock_guard lock(upper->queue().mutex_);
+        upper->pool()->findSurface(handle.value)->texture = originalBacking;
+      }
+      check(rejectedPhysical,
+            "RGBA16F logical format cannot authorize raw transfer from wrong physical backing");
+      const auto reject = [&](D9CRenderTapeColorSnapshotRequest candidate,
+                              std::uint64_t capacity, std::uint32_t expectedStatus) {
+        std::vector<std::byte> untouched(static_cast<std::size_t>(
+            std::max<std::uint64_t>(capacity, captured.size())), std::byte{0x5au});
+        const auto original = untouched;
+        D9CRenderTapeColorSnapshotResult rejected{};
+        check(dxmt9c_device_capture_render_tape_color_snapshot(
+                  sourceDevice.get(), &candidate, &rejected, untouched.data(), capacity) != D3D_OK &&
+                  rejected.status == expectedStatus && untouched == original,
+              "RGBA16F invalid authority/encoding/capacity rejects before output bytes");
+      };
+      auto invalid = request;
+      invalid.encodingVersion = D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1;
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED);
+      reject(request, captured.size() - 1u, D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH);
+      invalid = request;
+      ++invalid.identity.generation;
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_STALE_GENERATION);
+      invalid = request;
+      invalid.subresource = 1u;
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH);
+      invalid = request;
+      ++invalid.surface.width;
+      reject(invalid, static_cast<std::uint64_t>(invalid.surface.width) * height * 8u,
+             D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH);
+      invalid = request;
+      invalid.surface.resourceType = 1u;
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED);
+      invalid = request;
+      invalid.surface.pool = 1u;
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_UNSUPPORTED);
+      std::unique_ptr<D9CTexture, decltype(&dxmt9c_texture_release)> mipTexture(
+          dxmt9c_device_create_texture(sourceDevice.get(), width, height, 2u, 1u, 113u, 0u),
+          dxmt9c_texture_release);
+      check(bool(mipTexture), "RGBA16F negative source creates a real multiple-mip texture");
+      invalid = request;
+      check(dxmt9c_texture_get_wire_identity(mipTexture.get(), &invalid.identity) == D3D_OK,
+            "RGBA16F multiple-mip negative retains its actual generation");
+      reject(invalid, captured.size(), D9C_RENDER_TAPE_COLOR_SNAPSHOT_DESCRIPTOR_MISMATCH);
+    }
+
+    const GeneralIndexedFixture source(3u, true, false, true);
+    auto blobs = source.blobsValue;
+    blobs.push_back({digest, captured});
+    const auto textureDescriptor = texture2DDescriptor(surface);
+    const RenderTapeSurfaceDescriptorV2 alias{
+        .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource),
+        .initialContentDisposition = static_cast<std::uint32_t>(RenderTapeInitialContentDisposition::Unavailable),
+        .parentTexture = kSnapshotTexture2D,
+        .surface = D9CSurfaceDesc{.format = 113u, .resourceType = 1u, .usage = 1u,
+            .width = width, .height = height, .depth = 1u}};
+    ImportedRenderTapeView original;
+    check(importPrevalidatedRenderTape(source.tape, original), "RGBA16F original pixel fixture imports");
+    RenderTapeBuilder builder;
+    bool inserted = false;
+    for (std::uint32_t eventIndex = 0u; eventIndex < original.events.size(); ++eventIndex) {
+      const auto event = original.event(eventIndex);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::CommandChunk && !inserted) {
+        inserted = true;
+        builder.appendObjectDefine(kSnapshotTexture2D,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+            textureDescriptor, 0u, {}, captured.size(), 1u);
+        builder.appendObjectDefine(kSnapshotColorSurface,
+            static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            spanBytes(alias), 0u, {});
+        builder.appendResourceMutation(kSnapshotTexture2D, RenderTapeMutationKind::Upload,
+            0u, 0u, captured.size(), digest);
+      }
+      if (type == RenderTapeEventType::PresentComplete) {
+        RenderTapePresentCompleteHeader complete{};
+        std::memcpy(&complete, event.payload.data(), sizeof(complete));
+        builder.appendPresentComplete(builder.eventCount(), complete.completionOrdinal,
+            static_cast<RenderTapeDigestValidity>(complete.digestValidity),
+            complete.expectedDigest, event.payload.subspan(sizeof(complete)));
+      } else builder.appendRawEvent(type, event.payload);
+    }
+    check(inserted, "RGBA16F exact seed is restored before captured commands");
+    const auto prepared = prepareRenderTapeIdentity(builder.seal(), blobs);
+    check(prepared.valid(), "RGBA16F complete-seed texture and exact surface alias preflight");
+    for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                             RenderTapePreparedRoute::ProductionSlot}) {
+      std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> replayDevice(
+          dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+          dxmt9c_device_release);
+      check(bool(replayDevice), "RGBA16F provider restore uses a genuinely fresh local device");
+      const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto replay = replayPreparedRenderTapeIdentity(replayDevice.get(), prepared,
+          {.route = route, .reset = RenderTapePreparedReset::FreshDevice,
+           .auditInitialSeeds = true});
+      const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto& audit = replay.initialSeedAudit;
+      const auto entry = std::find_if(audit.entries.begin(), audit.entries.end(),
+          [&](const auto& value) {
+            return renderTapeSameWireObject(value.identity, kSnapshotTexture2D);
+          });
+      check(replay.complete() && replay.validity.expectedDigestMatched &&
+                replay.outputPixels == gpuVisibleUniformExpectedPixels() &&
+                replay.conservation.objectsCreated == 8u &&
+                replay.conservation.objectsReleased == 8u &&
+                audit.requested && audit.attempted && audit.complete &&
+                entry != audit.entries.end() && entry->supported && entry->match &&
+                entry->bytes == captured.size() && entry->expectedDigest == digest &&
+                entry->actualDigest == digest && after.gpuErrors == before.gpuErrors,
+            "RGBA16F capture/provider raw upload/exact GPU readback conserves all half bits and alias owners");
+      const auto direct = after.directLeaseDraws - before.directLeaseDraws;
+      const auto compatibility = after.compatibilityDraws - before.compatibilityDraws;
+      check(route == RenderTapePreparedRoute::Compatibility
+                ? compatibility == 3u && direct == 0u : direct == 3u && compatibility == 0u,
+            "RGBA16F raw checkpoint restore exercises the selected provider route");
+      ++checked;
+    }
+  }
+  upper->queue().failStopReplaySourceExecution();
+  check(rejectsCurrentSnapshot(),
+        "RGBA16F terminal backend rejects without overwriting caller bytes or claiming completion");
+  std::cout << "RGBA16F V2 raw Metal oracle: 7x5 exact half bits including NaN payloads; "
+            << checked << " provider restores, A/B/A receipts, alias conservation, unchanged pixels; "
+            << "borrowed admission/physical backing/terminal rejection=3\n";
+}
+
 void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
   const auto descriptor = [](RenderTapeTextureDimension dimension,
                              std::uint32_t format) {
@@ -7224,6 +7518,10 @@ int main(int argc, char** argv) {
       nativeMetalD24S8ProviderPixelOracle();
       return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-rgba16f-oracle") {
+      nativeMetalRgba16FloatSnapshotReplayBits();
+      return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-oracle") {
       check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
             "retained query oracle uses actual GPU visibility");
@@ -7300,7 +7598,7 @@ int main(int argc, char** argv) {
     check(argc == 1,
           "usage: render_tape_provider_spec "
           "[--test-event-ordering|--test-query-oracle|--test-seed-reference-rejection|"
-          "--test-volume-oracle|--test-retained-query-oracle|--test-retained-query-budget|"
+          "--test-volume-oracle|--test-rgba16f-oracle|--test-retained-query-oracle|--test-retained-query-budget|"
           "--write-production-fixture dir|"
           "--write-projection-fixture dir|--write-sequence-fixture dir|"
           "--write-gpu-policy-fixture dir|"

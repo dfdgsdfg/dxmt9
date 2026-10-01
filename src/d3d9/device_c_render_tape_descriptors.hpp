@@ -148,6 +148,81 @@ inline constexpr bool renderTapeArmColorSnapshotSwapchainSurfaceSupported(
   return renderTapeArmColorSnapshotStandaloneSurfaceSupported(surface);
 }
 
+inline constexpr bool renderTapeArmColorSnapshotRgba16FloatTextureSupported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return surface.resourceType == 3u && surface.width != 0u &&
+         surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
+         surface.usage == 1u && surface.format == 113u &&
+         surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
+
+struct RenderTapeColorSnapshotLayout {
+  std::uint32_t encodingVersion = 0u;
+  std::uint32_t pitch = 0u;
+  std::uint64_t byteCount = 0u;
+};
+
+// This is a snapshot-only layout, not a general D3D9 LockRect/LockBox format
+// admission table. Descriptor and provider checks additionally require the
+// exact single-level texture shape before a subresource may use this layout.
+inline constexpr bool renderTapeDeriveColorSnapshotLayout(
+    const D9CSurfaceDesc &surface, RenderTapeColorSnapshotLayout &out) noexcept {
+  out = {};
+  const bool rgba16Float =
+      renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface);
+  const bool texture2d = surface.resourceType == 3u &&
+      ((surface.pool == 0u && surface.usage == 1u && surface.format == 22u) ||
+       (surface.pool == 1u && surface.usage == 0u && surface.format == 21u));
+  const bool cube = surface.resourceType == 5u && surface.pool == 0u &&
+                    surface.usage == 1u && surface.format == 114u;
+  if ((!rgba16Float && !texture2d && !cube &&
+       !renderTapeArmColorSnapshotStandaloneSurfaceSupported(surface)) ||
+      surface.width == 0u || surface.height == 0u || surface.depth != 1u ||
+      surface.multiSampleType != 0u || surface.multiSampleQuality != 0u)
+    return false;
+  const std::uint32_t bytesPerPixel = rgba16Float ? 8u : 4u;
+  // Replay uploads and the expected-content contract consume signed D3D9
+  // lock pitches. A snapshot whose tight row cannot fit one is not portable.
+  if (surface.width >
+      static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) /
+          bytesPerPixel)
+    return false;
+  const auto pitch = surface.width * bytesPerPixel;
+  if (surface.height > std::numeric_limits<std::uint64_t>::max() / pitch)
+    return false;
+  out = {.encodingVersion = rgba16Float
+             ? D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2
+             : D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1,
+         .pitch = pitch,
+         .byteCount = static_cast<std::uint64_t>(pitch) * surface.height};
+  return true;
+}
+
+inline constexpr bool renderTapeColorSnapshotResultMatches(
+    const D9CRenderTapeColorSnapshotRequest &request,
+    const D9CRenderTapeColorSnapshotResult &result,
+    std::uint64_t capacity) noexcept {
+  RenderTapeColorSnapshotLayout layout{};
+  const bool texture = request.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+      (request.surface.resourceType == 3u || request.surface.resourceType == 5u);
+  const bool surface = request.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+                       request.surface.resourceType == 1u;
+  return (texture || surface) && request.identity.generation != 0u &&
+         request.identity.objectId != 0u &&
+         renderTapeDeriveColorSnapshotLayout(request.surface, layout) &&
+         request.subresource < (request.surface.resourceType == 5u ? 6u : 1u) &&
+         request.encodingVersion == layout.encodingVersion &&
+         capacity == layout.byteCount &&
+         capacity <= std::numeric_limits<std::size_t>::max() &&
+         result.status == D9C_RENDER_TAPE_COLOR_SNAPSHOT_COMPLETE &&
+         result.encodingVersion == request.encodingVersion &&
+         result.subresource == request.subresource &&
+         result.width == request.surface.width &&
+         result.height == request.surface.height && result.pitch == layout.pitch &&
+         result.format == request.surface.format && result.reserved0 == 0u &&
+         result.byteCount == layout.byteCount;
+}
+
 enum class RenderTapeSurfaceStorage : std::uint32_t {
   Standalone = 1u,
   TextureSubresource = 2u,
@@ -752,8 +827,9 @@ inline bool renderTapeLoadTextureDescriptorV2(
 }
 
 // Arm-boundary GPU snapshots deliberately support only the exact shapes
-// observed in GT2: the existing DEFAULT-pool render-target shapes plus the
-// single MANAGED shader texture atlas. This policy is shared by PE capture,
+// observed in GT2/STALKER: the existing DEFAULT-pool render-target shapes,
+// the single MANAGED shader texture atlas, and the single-level RGBA16Float
+// 2D DEFAULT-pool render target. This policy is shared by PE capture,
 // unix readback, validation, and provider replay so CompleteSeed cannot widen
 // accidentally to arbitrary textures.
 inline bool renderTapeArmColorSnapshotTextureSupported(
@@ -785,7 +861,8 @@ inline bool renderTapeArmColorSnapshotTextureSupported(
     }
     const bool defaultRenderTarget =
         !cube && surface.pool == 0u && surface.usage == 1u &&
-        surface.format == 22u;
+        (surface.format == 22u ||
+         renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface));
     const bool managedShaderTexture =
         !cube && surface.pool == 1u && surface.usage == 0u &&
         surface.format == 21u;

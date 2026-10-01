@@ -223,6 +223,52 @@ game process was deliberately terminated after repeated identical failures;
 runner exit 1 is that termination, not a GPU failure or FPS result. No Tape
 was published. The harness screenshot captured Orca rather than the game and
 is not visual-correctness evidence.
+Retry `app-d3d9-stkcop-bench-tape-h430-query-volume-09` on `4d9d177e`
+does not reproduce the bootstrap exception: four objects, three mutations and
+four blobs arm successfully. This is not evidence that the exception is fixed.
+The next repeated rejection is `command_chunk_produced_pass_preflight`:
+surface alias 4294967305 refers to texture 4294967304 (generation 1), an
+1280x720 format-113 render target whose expected-content layout is unsupported
+and which has no arm snapshot. Binding-only access supplies no terminal-write
+proof, so ProducedByCapturedPass cannot replace its missing initial contents.
+Exact RGBA16F checkpoint/readback/upload support remains open. The process was
+deliberately terminated after repeated rejection; no Tape was published and
+this diagnostic run provides no FPS or visual-correctness verdict.
+R-HARN-REPLAY-9.10 now has an explicit raw eight-byte color encoding, a shared
+checked snapshot layout/row writer, PE arm/result validation, CPU restoration
+and Unix capture/upload support for the observed RGBA16F RT shape. Both PE
+builds pass. Five native schema/capture/CPU alias/Volume/EVENT tests pass,
+including both CPU routes with the new raw seed; these do not establish GPU
+bit preservation. The canonical Unix build now passes, and the actual Metal
+oracle preserves raw half bits (including NaN payloads) in odd 7x5 rows across
+six provider restores and A/B/A receipts, with alias conservation and unchanged
+pixels. D24S8, EVENT and install-name regression checks also pass. That fixture
+explicitly drains its initial upload before capture; capture's own completion
+and producer-exclusion guarantees require a separate audit before this proves
+self-contained checkpoint admission. The audit confirms a real gap: ordinary
+flush does not publish pending initializer uploads when there is no ordinary
+source, and retained-texture readback does not exclude intervening producers.
+The V2 path now holds the existing exclusive checkpoint lease through
+initializer completion and raw transfer, bypassing the unprotected ordinary
+flush. The rebuilt Metal oracle removes the external pre-drain, asserts an
+initializer-only pending upload before each A/B/A capture and checks complete,
+nonfailed initializer progress afterward. It and D24S8/EVENT/install-name
+regressions pass (4/4). The earlier conditional test is superseded for this
+initializer-only case. Targeted new-entry negatives also pass: real active
+Direct admission leaves the initializer pending and caller bytes unchanged,
+wrong physical backing rejects, and terminal state rejects completion.
+the existing 227-configuration TLA regression passes, not a new protocol proof.
+New workload capture and original
+query/pixel qualification remain pending. Generic
+LockRect/LockBox and produced-by-pass proof gates are unchanged.
+Actual retry `app-d3d9-stkcop-bench-tape-h430-query-volume-10` completes V2
+snapshots for six RGBA16F textures (four 1280x720, one 64x64 and one 8x8),
+including the parent that rejected capture09. EVENT and D24S8 also complete.
+The next repeated rejection is an exception in PE arm-snapshot collection,
+after several managed texture snapshots, before bootstrap. Its exception type
+and exact throwing operation are not yet identified; process RSS alone does
+not prove allocation/address-space exhaustion. The process was deliberately
+terminated after repetition, with no published Tape or FPS qualification.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
