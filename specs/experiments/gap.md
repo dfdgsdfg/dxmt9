@@ -377,9 +377,42 @@ build and ten focused capture/layout/publication/provider/mutation/EVENT tests
 pass, including allocation-fault rollback and overlapping UpdateTexture slots.
 The new fault fixture initially used invalid mip extents; corrected descriptor
 preconditions now ensure injection reaches the intended staging path. PE32,
-PE64, canonical Unix rebuilds and unchanged-budget workload recapture remain
-pending for this ownership change. No published STALKER Tape, practical memory
-reduction, GPU qualification or policy-performance result is claimed.
+PE64 and canonical Unix rebuilds pass, as do the four A8R8G8B8/RGBA16F/D24S8/
+EVENT Metal oracle regressions and install-name audit (5/5).
+Unchanged-budget capture `app-d3d9-stkcop-bench-tape-h430-query-volume-18`
+on `67898161` reaches 2,996 events and 2,466 blobs before explicit
+`blob_byte_limit`, not `bad_alloc`: 268,331,522 unique admitted bytes plus
+131,072 incoming bytes exceeds 268,435,456. Byte-exact deduplication precedes
+this admission check. The bounded ownership observer overflows its 2,048-entry
+backing table, so its unique totals are lower bounds, not total process memory.
+The workload was deliberately terminated after the rejection. No published
+STALKER Tape, quantified memory reduction, original-input GPU qualification or
+policy-performance result is claimed.
+Separate capacity probe `app-d3d9-stkcop-bench-tape-h430-query-volume-19`
+uses the existing capture-only 512 MiB override; the default remains 256 MiB.
+It fails before admission, during `arm_snapshot/color_content_allocate`, with
+`bad_alloc` for object 4294970213 generation 3, format 21, 1024x1024,
+pool 1, 4,194,304 bytes. At failure 19 snapshots retain 57,610,752 bytes and
+durable shadows account for 748,413,336 logical bytes. Repeated failures were
+terminated; this run does not prove 512 MiB fit or resolve allocation pressure.
+Capture 18 also exposes a separate source-identity gap: QUERY_ISSUE selects
+whole-raw Legacy (`plan_reason=1`), whose replay rejects capture identity at
+event 24. Later snapshot/settlement rejections follow the sticky failed token;
+Oversize (`plan_reason=9`) also needs an authoritative fallback-source contract.
+Payload capacity alone cannot qualify these captures. The next gates are exact
+arm-snapshot ownership and real compatibility/control publication identity,
+not synthetic source rows or relaxed original-byte validation.
+The current identity grammar requires nonempty real source/pass coverage for
+every CommandChunk record. QUERY_ISSUE includes coordinator-only effects and
+empty ENDs with no new publication; these cannot be represented as fabricated
+passes. Closing this gap requires explicit no-publication/coordinator evidence
+and capture of real fallback publication/settlement. Deferred END sequence zero
+is unbound, not completed: its generation-qualified marker must resolve only at
+the actual successful queue publication edge, without capture-induced flushes.
+Managed pool/usage and payload extent alone likewise cannot authorize skipping
+an arm readback: GPU-side writes can leave PE durable contents stale. Any
+snapshot storage reuse must preserve actual GPU-byte authentication and failure
+atomicity, rather than substituting the CPU shadow for the checkpoint.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
