@@ -33,12 +33,26 @@ bool failEnabled = false;
 std::size_t failAfter = 0u;
 std::exception_ptr injectedException{};
 std::size_t watchSize = 0u;
+std::size_t watchedAllocations = 0u;
 void* watchedPointer = nullptr;
 bool watchedFreed = false;
+dxmt9::d3d9::RenderTapeCpuShadowContent* freezeDuringAllocation = nullptr;
+bool activeFreezeRejected = false;
+bool activeFreezeAccepted = false;
 
 } // namespace capture_state_allocation_probe
 
 void* operator new(std::size_t size) {
+  if (capture_state_allocation_probe::freezeDuringAllocation) {
+    auto* shadow = capture_state_allocation_probe::freezeDuringAllocation;
+    capture_state_allocation_probe::freezeDuringAllocation = nullptr;
+    try {
+      (void)shadow->freeze();
+      capture_state_allocation_probe::activeFreezeAccepted = true;
+    } catch (const std::logic_error&) {
+      capture_state_allocation_probe::activeFreezeRejected = true;
+    }
+  }
   if (capture_state_allocation_probe::failEnabled) {
     if (capture_state_allocation_probe::failAfter == 0u) {
       capture_state_allocation_probe::failEnabled = false;
@@ -52,6 +66,7 @@ void* operator new(std::size_t size) {
     ++capture_state_allocation_probe::count;
   if (void* value = std::malloc(size)) {
     if (size == capture_state_allocation_probe::watchSize) {
+      ++capture_state_allocation_probe::watchedAllocations;
       capture_state_allocation_probe::watchedPointer = value;
       capture_state_allocation_probe::watchedFreed = false;
     }
@@ -2302,7 +2317,10 @@ void testArmBoundaryTransitionTruthTable() {
   check(selectedOutputSeed.source ==
                 RenderTapeArmSnapshotOverlaySource::CurrentArm &&
             selectedOutputSeed.content.size() == 1u &&
-            selectedOutputSeed.content[0] == seededOutputContent[0],
+            std::equal(selectedOutputSeed.content[0].begin(),
+                       selectedOutputSeed.content[0].end(),
+                       seededOutputContent[0].begin(),
+                       seededOutputContent[0].end()),
         "PresentOutput selects an exact current-arm CompleteSeed over its zero-content output role");
   check(renderTapeArmObjectSnapshotContentComplete(
             0u, false,
@@ -3076,7 +3094,8 @@ void testStandaloneD24S8SnapshotContract() {
             renderTapeArmObjectSnapshotContentComplete(
                 1u, false, RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary,
                 selected.source, selected.content) &&
-            selected.content[0] == armContent[0] &&
+            std::equal(selected.content[0].begin(), selected.content[0].end(),
+                       armContent[0].begin(), armContent[0].end()) &&
             durableContent[0].empty() &&
             std::equal(rawBytes.begin(), rawBytes.end(), rawBefore.begin()),
         "D24S8 arm overlay preserves both planes without mutating durable registry");
@@ -4347,6 +4366,369 @@ void testOwnedMutationFaultsAndBorrowedEquivalence() {
             owned.publicationBundle().blobs[0].bytes == durable &&
             owned.publicationBundle().blobs[0].digest == RenderTapeCaptureSession::sha256(durable),
         "owned mutation independently rehashes original bytes and preserves borrowed events/publication");
+}
+
+void testCpuShadowVersionTransitions() {
+  static_assert(std::is_same_v<decltype(std::declval<RenderTapeImmutablePayload&>().data()),
+                               const std::byte*>);
+  static_assert(std::is_const_v<std::remove_reference_t<decltype(
+      *std::declval<RenderTapeImmutablePayload&>().begin())>>);
+  const std::vector<std::byte> original(32u, std::byte{0x11u});
+  const std::array<std::byte, 3u> patch{std::byte{0x21u}, std::byte{0x22u}, std::byte{0x23u}};
+  for (unsigned state = 0u; state < 4u; ++state) {
+    for (const bool full : {false, true}) {
+      RenderTapeCpuShadowContent shadow(state == 0u ? std::vector<std::byte>{}
+                                                    : std::vector<std::byte>(original));
+      RenderTapeImmutablePayload external;
+      if (state >= 2u) {
+        external = shadow.freeze();
+        if (state == 2u) external = {};
+      }
+      const auto* pointer = shadow.readBytes().data();
+      const auto incoming = full ? std::span<const std::byte>(original)
+                                 : std::span<const std::byte>(patch);
+      auto expected = state == 0u ? std::vector<std::byte>{} : original;
+      const auto reference = applyRenderTapeBufferMutation(32u, full ? 0u : 5u, incoming, expected);
+      const auto status = applyRenderTapeBufferMutation(32u, full ? 0u : 5u, incoming, shadow);
+      check(status == reference &&
+                std::equal(shadow.readBytes().begin(), shadow.readBytes().end(), expected.begin(), expected.end()) &&
+                (external.empty() || external == original) &&
+                (state == 0u || state == 3u || shadow.readBytes().data() == pointer),
+            "unknown/private/frozen-unique/shared transitions match serial vector semantics and preserve leases");
+      if (state == 3u && status == RenderTapeBlockMutationStatus::Accepted)
+        check(shadow.readBytes().data() != pointer,
+              "shared full and partial writes establish a distinct committed version");
+    }
+  }
+  RenderTapeCpuShadowContent unknown;
+  bool rejectedUnknown = false;
+  try { (void)unknown.freeze(); } catch (const std::invalid_argument&) { rejectedUnknown = true; }
+  check(rejectedUnknown && unknown.empty() &&
+            applyRenderTapeBufferMutation(32u, 1u, patch, unknown) ==
+                RenderTapeBlockMutationStatus::IncompleteSeed && unknown.empty(),
+        "unknown freeze/partial write cannot manufacture complete content authority");
+
+  RenderTapeCpuShadowContent freezeFault{std::vector<std::byte>(original)};
+  const auto* privatePointer = freezeFault.readBytes().data();
+  const auto privateCapacity = freezeFault.capacity();
+  capture_state_allocation_probe::failAfter = 0u;
+  capture_state_allocation_probe::failEnabled = true;
+  bool failedFreeze = false;
+  try { (void)freezeFault.freeze(); } catch (const std::bad_alloc&) { failedFreeze = true; }
+  capture_state_allocation_probe::failEnabled = false;
+  check(failedFreeze && freezeFault.readBytes().data() == privatePointer &&
+            freezeFault.capacity() == privateCapacity &&
+            std::equal(freezeFault.readBytes().begin(), freezeFault.readBytes().end(), original.begin()),
+        "freeze metadata allocation failure preserves original private payload, extent and capacity");
+  auto oldLease = freezeFault.freeze();
+  capture_state_allocation_probe::failAfter = 0u;
+  capture_state_allocation_probe::failEnabled = true;
+  const auto partialFault = applyRenderTapeBufferMutation(32u, 5u, patch, freezeFault);
+  capture_state_allocation_probe::failEnabled = false;
+  check(partialFault == RenderTapeBlockMutationStatus::AllocationFailed &&
+            oldLease == original && freezeFault.readBytes().data() == privatePointer &&
+            freezeFault.size() == original.size(),
+        "shared partial-detach failure preserves both committed shadow and captured version");
+  capture_state_allocation_probe::failAfter = 0u;
+  capture_state_allocation_probe::failEnabled = true;
+  const auto invalid = applyRenderTapeBufferMutation(32u, 31u, patch, freezeFault);
+  const bool validationAllocated = !capture_state_allocation_probe::failEnabled;
+  capture_state_allocation_probe::failEnabled = false;
+  check(invalid == RenderTapeBlockMutationStatus::InvalidLayout && !validationAllocated && oldLease == original,
+        "all bounds validation precedes any transactional detach allocation");
+  oldLease = {};
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  const auto reclaimed = applyRenderTapeBufferMutation(32u, 5u, patch, freezeFault);
+  capture_state_allocation_probe::enabled = false;
+  check(reclaimed == RenderTapeBlockMutationStatus::Accepted &&
+            freezeFault.readBytes().data() == privatePointer && capture_state_allocation_probe::count == 0u,
+        "frozen backing is explicitly reused only after the last immutable lease disappears");
+  RenderTapeImmutablePayload retiredLease;
+  {
+    RenderTapeCpuShadowContent retired{std::vector<std::byte>(original)};
+    retiredLease = retired.freeze();
+  }
+  check(retiredLease == original,
+        "retiring the durable owner cannot release a still-retained immutable capture version");
+  std::vector<std::byte> nonuniform(32u);
+  for (std::size_t i = 0u; i < nonuniform.size(); ++i) nonuniform[i] = static_cast<std::byte>(i);
+  RenderTapeCpuShadowContent active{std::move(nonuniform)};
+  capture_state_allocation_probe::freezeDuringAllocation = &active;
+  capture_state_allocation_probe::activeFreezeRejected = false;
+  capture_state_allocation_probe::activeFreezeAccepted = false;
+  const auto overlappingInput = active.readBytes().first(3u);
+  check(applyRenderTapeBufferMutation(32u, 5u, overlappingInput, active) ==
+            RenderTapeBlockMutationStatus::Accepted &&
+            capture_state_allocation_probe::activeFreezeRejected &&
+            !capture_state_allocation_probe::activeFreezeAccepted &&
+            active.readBytes()[5] == std::byte{0u} && active.freeze().size() == 32u,
+        "freeze rejects even allocation-hook reentrancy during an explicit writer and resumes only after commit");
+}
+
+void testCpuShadowWriterFamilyRefinement() {
+  const auto exercise = [&](std::size_t extent, std::size_t patchBytes,
+                            auto applyFull, auto applyPartial) {
+    const std::vector<std::byte> old(extent, std::byte{0x11u});
+    const std::vector<std::byte> incoming(extent, std::byte{0x66u});
+    const std::vector<std::byte> patch(patchBytes, std::byte{0x22u});
+    for (const bool full : {false, true}) {
+      auto reference = old;
+      RenderTapeCpuShadowContent shadow{std::vector<std::byte>(old)};
+      const auto lease = shadow.freeze();
+      const auto status = full ? applyFull(incoming, shadow) : applyPartial(patch, shadow);
+      const auto referenceStatus = full ? applyFull(incoming, reference) : applyPartial(patch, reference);
+      check(status == referenceStatus && status == RenderTapeBlockMutationStatus::Accepted &&
+                lease == old &&
+                std::equal(shadow.readBytes().begin(), shadow.readBytes().end(), reference.begin(), reference.end()),
+            "all durable writer families refine existing full/partial vector semantics without mutating old leases");
+      RenderTapeCpuShadowContent failed{std::vector<std::byte>(old)};
+      const auto failedLease = failed.freeze();
+      const auto* pointer = failed.readBytes().data();
+      capture_state_allocation_probe::failAfter = 0u;
+      capture_state_allocation_probe::failEnabled = true;
+      const auto failedStatus = full ? applyFull(incoming, failed) : applyPartial(patch, failed);
+      capture_state_allocation_probe::failEnabled = false;
+      check(failedStatus == RenderTapeBlockMutationStatus::AllocationFailed &&
+                failedLease == old && failed.readBytes().data() == pointer && failed.size() == extent,
+            "every shared writer family's allocation fault preserves bytes and completeness atomically");
+    }
+  };
+  exercise(32u, 3u,
+      [](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeBufferMutation(32u, 0u, bytes, content); },
+      [](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeBufferMutation(32u, 5u, bytes, content); });
+  D9CSurfaceDesc block{.format = render_tape_d3d_format::DXT1, .width = 8u, .height = 8u};
+  const RenderTapeLockRect blockRect{.left = 4, .top = 4, .right = 8, .bottom = 8};
+  RenderTapeBlockLockLayout blockFull{}, blockPartial{};
+  check(renderTapeBlockLockLayout(block, 16, nullptr, blockFull) == RenderTapeBlockLayoutStatus::Accepted &&
+            renderTapeBlockLockLayout(block, 16, &blockRect, blockPartial) == RenderTapeBlockLayoutStatus::Accepted,
+        "block COW fixture derives its production row layouts");
+  exercise(32u, 8u,
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeBlockMutation(blockFull, bytes, content); },
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeBlockMutation(blockPartial, bytes, content); });
+  D9CSurfaceDesc linear{.format = render_tape_d3d_format::A8R8G8B8, .width = 4u, .height = 3u};
+  const RenderTapeLockRect linearRect{.left = 1, .top = 1, .right = 3, .bottom = 3};
+  RenderTapeLinearLockLayout linearFull{}, linearPartial{};
+  check(renderTapeLinearLockLayout(linear, 16, nullptr, linearFull) == RenderTapeLinearLayoutStatus::Accepted &&
+            renderTapeLinearLockLayout(linear, 16, &linearRect, linearPartial) == RenderTapeLinearLayoutStatus::Accepted,
+        "linear COW fixture derives production rectangle layouts");
+  exercise(48u, 16u,
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeLinearMutation(linearFull, bytes, content); },
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeLinearMutation(linearPartial, bytes, content); });
+  D9CSurfaceDesc volume{.format = render_tape_d3d_format::A8R8G8B8,
+      .resourceType = 4u, .width = 2u, .height = 2u, .depth = 2u};
+  const RenderTapeLockBox volumeBox{.left = 1, .top = 0,
+      .right = 2, .bottom = 2, .front = 1, .back = 2};
+  RenderTapeVolumeLockLayout volumeFull{}, volumePartial{};
+  check(renderTapeVolumeLockLayout(volume, 8, 16, nullptr, volumeFull) == RenderTapeVolumeLayoutStatus::Accepted &&
+            renderTapeVolumeLockLayout(volume, 8, 16, &volumeBox, volumePartial) == RenderTapeVolumeLayoutStatus::Accepted,
+        "volume COW fixture derives production box layouts");
+  exercise(32u, 8u,
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeVolumeMutation(volumeFull, bytes, content); },
+      [&](std::span<const std::byte> bytes, auto& content) { return applyRenderTapeVolumeMutation(volumePartial, bytes, content); });
+}
+
+void testSharedCaptureVersionPublicationAndLedger() {
+  constexpr std::size_t size = 8197u;
+  const auto bootstrap = bootstrapChunk();
+  const D9CBufferDesc desc{.size = size};
+  const D9CWireObjectIdentity a{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 3u, .objectId = 701u};
+  auto b = a;
+  ++b.objectId;
+  PeCaptureState pe({}, kRenderTapeProfileFrame, 0u);
+  pe.renderTapeRegistry.objects.resize(2u);
+  pe.renderTapeRegistry.objects[0].identity = a;
+  pe.renderTapeRegistry.objects[1].identity = b;
+  for (auto& object : pe.renderTapeRegistry.objects) {
+    object.contentCount = 1u;
+    object.descriptor = bytesOf(desc);
+  }
+  auto& current = pe.renderTapeRegistry.objects[0].content;
+  current.emplace_back(std::vector<std::byte>(size, std::byte{0x11u}));
+  const auto* originalPointer = current[0].readBytes().data();
+  capture_state_allocation_probe::watchSize = size;
+  capture_state_allocation_probe::watchedAllocations = 0u;
+  auto original = current[0].freeze();
+  pe.renderTapeRegistry.objects[1].content.emplace_back(original);
+  auto& session = pe.renderTapeCapture;
+  check(session.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+            session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+        "shared capture fixture starts the bounded interval");
+  for (auto& object : pe.renderTapeRegistry.objects) {
+    check(session.objectDefine(object.identity,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer), object.descriptor,
+              0u, {}, size, 1u) == RenderTapeCaptureStatus::Accepted &&
+              session.resourceMutationShadowBytes(object.identity, RenderTapeMutationKind::Upload,
+                  0u, 0u, object.content[0]) == RenderTapeCaptureStatus::Accepted,
+          "distinct identities admit independent shared-backed Upload events");
+  }
+  check(capture_state_allocation_probe::watchedAllocations == 0u &&
+            session.ownedBlobEntries() == 1u && session.ownedBlobBytes() == size &&
+            session.ownedPublishedBlobs()[0].bytes.data() == originalPointer,
+        "freeze and shared admission retain the original pointer with zero payload-sized allocations and exact dedup");
+  const std::array<std::byte, 3u> patch{std::byte{0x21u}, std::byte{0x22u}, std::byte{0x23u}};
+  check(applyRenderTapeBufferMutation(size, 5u, patch, current[0]) == RenderTapeBlockMutationStatus::Accepted &&
+            capture_state_allocation_probe::watchedAllocations == 1u &&
+            current[0].readBytes().data() != originalPointer && original.data() == originalPointer &&
+            original.readBytes()[5] == std::byte{0x11u} &&
+            pe.renderTapeRegistry.objects[1].content[0].readBytes()[5] == std::byte{0x11u} &&
+            current[0].readBytes()[5] == patch[0] &&
+            session.resourceMutationShadowBytes(a, RenderTapeMutationKind::CpuUnlock,
+                0u, 0u, current[0]) == RenderTapeCaptureStatus::Accepted,
+        "A-to-B partial mutation detaches exactly once, keeps original leases immutable, and journals B separately");
+  const auto* newPointer = current[0].readBytes().data();
+  const auto& beforeSeal = measureRenderTapePayloadBoundary(pe);
+  check(beforeSeal.uniqueComplete && beforeSeal.backingCount == 2u &&
+            beforeSeal.uniqueBytes == 2u * size && beforeSeal.uniqueCapacity == 2u * size &&
+            beforeSeal.uniqueSharedBytes == 2u * size && beforeSeal.logicalBytes == 4u * size,
+        "boundary ledger joins registry/session leases by exact backing rather than summing refcounts");
+  const auto output = outputSurfaceDescriptor();
+  const auto present = presentChunk();
+  const auto attachment = oracle();
+  capture_state_allocation_probe::watchedAllocations = 0u;
+  check(session.objectDefine(kSurface, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+            std::as_bytes(std::span(&output, 1u)), 0u, {}) == RenderTapeCaptureStatus::Accepted &&
+            session.commandChunk(CommandChunkEnvelope{.recordCount = 1u}, present) == RenderTapeCaptureStatus::Accepted &&
+            session.completePresent(session.eventCount(), 1u, RenderTapeDigestValidity::NotCaptured, {},
+                std::as_bytes(std::span(&attachment, 1u))) == RenderTapeCaptureStatus::Complete &&
+            capture_state_allocation_probe::watchedAllocations == 0u &&
+            session.publicationBundle().blobs[0].bytes.data() == originalPointer &&
+            session.publicationBundle().blobs[1].bytes.data() == newPointer &&
+            session.publicationBundle().blobs[0].digest == RenderTapeCaptureSession::sha256(original.readBytes()),
+        "final publication shares immutable A/B versions without any payload copy and preserves original digests");
+  capture_state_allocation_probe::watchSize = 0u;
+  original = {};
+  session.abort();
+  check(current[0].readBytes().data() == newPointer &&
+            pe.renderTapeRegistry.objects[1].content[0].readBytes().data() == originalPointer &&
+            pe.renderTapeRegistry.objects[0].contentCount == 1u &&
+            pe.renderTapeRegistry.objects[1].contentCount == 1u,
+        "session abort releases capture leases without touching durable bytes or completeness metadata");
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  const auto reused = applyRenderTapeBufferMutation(size, 7u, patch, current[0]);
+  capture_state_allocation_probe::enabled = false;
+  check(reused == RenderTapeBlockMutationStatus::Accepted && current[0].readBytes().data() == newPointer &&
+            capture_state_allocation_probe::count == 0u,
+        "after abort a now-unique durable version can reuse backing explicitly without allocation");
+
+  RenderTapeCaptureSession borrowed(true);
+  check(borrowed.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+            borrowed.registerBlobBytes(current[0].readBytes()) == RenderTapeCaptureStatus::Accepted &&
+            borrowed.ownedPublishedBlobs()[0].bytes.data() != current[0].readBytes().data(),
+        "borrowed APIs still copy bytes before returning rather than borrowing durable storage");
+  RenderTapeCaptureBlob ambiguous{
+      .bytes = std::vector<std::byte>(2u, std::byte{1u}), .immutable = current[0].freeze()};
+  RenderTapeCaptureSession rejectAmbiguous(true);
+  check(rejectAmbiguous.armWithBlobs(bootstrap, std::span(&ambiguous, 1u)) ==
+            RenderTapeCaptureStatus::InvalidInput &&
+            std::string_view(rejectAmbiguous.armFailure().reason) == "ambiguous_blob_storage",
+        "bootstrap admission rejects simultaneously active raw and immutable payload representations");
+
+  RenderTapePayloadLedger ledger;
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  for (std::size_t i = 0u; i < ledger.kMaxBackings + 2u; ++i)
+    ledger.observe(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(i + 1u)), 3u, 5u, false);
+  capture_state_allocation_probe::enabled = false;
+  check(!ledger.uniqueComplete && ledger.backingCount == ledger.kMaxBackings &&
+            ledger.logicalBytes == 3u * (ledger.kMaxBackings + 2u) &&
+            ledger.uniqueBytes == 3u * ledger.kMaxBackings && capture_state_allocation_probe::count == 0u,
+        "diagnostic overflow stays allocation-free and explicitly reports incomplete unique lower bounds");
+}
+
+void testSharedUpdateTextureAtomicCommit() {
+  auto sourceDescriptor = versionedTextureDescriptor(RenderTapeTextureDimension::Texture2D,
+      2u, render_tape_d3d_format::A8R8G8B8, 4u, 4u);
+  // The generic descriptor fixture repeats the base extent. This atomicity
+  // fixture needs a valid mip chain before allocation injection can reach the
+  // source-freeze staging path.
+  D9CSurfaceDesc mipOne{};
+  const auto mipOneOffset = sizeof(RenderTapeTextureDescriptorV2) + sizeof(mipOne);
+  std::memcpy(&mipOne, sourceDescriptor.data() + mipOneOffset, sizeof(mipOne));
+  mipOne.width = 2u;
+  mipOne.height = 2u;
+  std::memcpy(sourceDescriptor.data() + mipOneOffset, &mipOne, sizeof(mipOne));
+  auto destinationDescriptor = sourceDescriptor;
+  const auto setPool = [](std::vector<std::byte>& descriptor, std::uint32_t pool) {
+    RenderTapeTextureDescriptorV2 texture{};
+    std::memcpy(&texture, descriptor.data(), sizeof(texture));
+    for (std::uint32_t i = 0u; i < texture.subresourceCount; ++i) {
+      D9CSurfaceDesc desc{};
+      const auto offset = sizeof(texture) + i * sizeof(desc);
+      std::memcpy(&desc, descriptor.data() + offset, sizeof(desc));
+      desc.pool = pool;
+      std::memcpy(descriptor.data() + offset, &desc, sizeof(desc));
+    }
+  };
+  setPool(sourceDescriptor, 2u);
+  setPool(destinationDescriptor, 0u);
+  std::array<std::uint64_t, 2u> sourceExpected{}, destinationExpected{};
+  check(renderTapeDeriveExpectedContentContract(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+            sourceDescriptor, sourceExpected).status == RenderTapeExpectedContentStatus::Accepted &&
+            renderTapeDeriveExpectedContentContract(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                destinationDescriptor, destinationExpected).status == RenderTapeExpectedContentStatus::Accepted &&
+            sourceExpected == std::array<std::uint64_t, 2u>{64u, 16u} &&
+            destinationExpected == sourceExpected,
+        "shared UpdateTexture fault fixture has a valid matching two-mip 64/16-byte contract");
+  bool reachedSuccess = false;
+  bool sawLateFault = false;
+  for (std::size_t allocation = 0u; allocation < 16u; ++allocation) {
+    std::vector<RenderTapeCpuShadowContent> source, destination;
+    source.emplace_back(std::vector<std::byte>(64u, std::byte{0x11u}));
+    source.emplace_back(std::vector<std::byte>(16u, std::byte{0x22u}));
+    destination.emplace_back(std::vector<std::byte>(64u, std::byte{0x33u}));
+    destination.emplace_back(std::vector<std::byte>(16u, std::byte{0x44u}));
+    const auto old0 = destination[0].freeze();
+    const auto old1 = destination[1].freeze();
+    const auto* source0 = source[0].readBytes().data();
+    const auto* source1 = source[1].readBytes().data();
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    const auto status = applyRenderTapeUpdateTextureClosure(
+        sourceDescriptor, source, destinationDescriptor, destination);
+    capture_state_allocation_probe::failEnabled = false;
+    check(source[0].readBytes().data() == source0 && source[1].readBytes().data() == source1 &&
+              source[0].readBytes()[0] == std::byte{0x11u} && source[1].readBytes()[0] == std::byte{0x22u} &&
+              old0.readBytes()[0] == std::byte{0x33u} && old1.readBytes()[0] == std::byte{0x44u},
+          "UpdateTexture staging/freezing never changes source semantics or captured old destination versions");
+    if (status == RenderTapeUpdateTextureStatus::Accepted) {
+      reachedSuccess = true;
+      check(destination[0].readBytes().data() == source0 && destination[1].readBytes().data() == source1,
+            "validated UpdateTexture commits immutable source leases with pointer conservation");
+      const std::array<std::byte, 1u> patch{std::byte{0x77u}};
+      check(applyRenderTapeBufferMutation(64u, 1u, patch, source[0]) == RenderTapeBlockMutationStatus::Accepted &&
+                destination[0].readBytes()[1] == std::byte{0x11u} &&
+                applyRenderTapeBufferMutation(16u, 1u, patch, destination[1]) == RenderTapeBlockMutationStatus::Accepted &&
+                source[1].readBytes()[1] == std::byte{0x22u},
+            "subsequent explicit source/destination writes detach without cross-mutating shared versions");
+      break;
+    }
+    sawLateFault |= allocation >= 3u;
+    check(status == RenderTapeUpdateTextureStatus::AllocationFailed &&
+              destination[0].readBytes().data() == old0.data() && destination[1].readBytes().data() == old1.data() &&
+              destination[0].size() == 64u && destination[1].size() == 16u &&
+              std::equal(destination[0].readBytes().begin(), destination[0].readBytes().end(),
+                         old0.begin(), old0.end()) &&
+              std::equal(destination[1].readBytes().begin(), destination[1].readBytes().end(),
+                         old1.begin(), old1.end()),
+          "every precommit UpdateTexture fault preserves all destination bytes/extent/completeness atomically");
+  }
+  check(reachedSuccess && sawLateFault,
+        "UpdateTexture fault sweep reaches source-freeze staging and the complete atomic commit");
+  std::vector<RenderTapeCpuShadowContent> overlap;
+  overlap.emplace_back(std::vector<std::byte>(64u, std::byte{0x11u}));
+  overlap.emplace_back(std::vector<std::byte>(16u, std::byte{0x22u}));
+  overlap.emplace_back(std::vector<std::byte>(16u, std::byte{0x33u}));
+  const auto* first = overlap[0].readBytes().data();
+  const auto* second = overlap[1].readBytes().data();
+  check(applyRenderTapeUpdateTextureClosure(sourceDescriptor,
+            std::span(overlap).first(2u), destinationDescriptor, std::span(overlap).subspan(1u, 2u)) ==
+            RenderTapeUpdateTextureStatus::Accepted &&
+            overlap[1].readBytes().data() == first && overlap[2].readBytes().data() == second &&
+            overlap[2].readBytes()[0] == std::byte{0x22u},
+        "overlapping source/destination slot sets consume staged old-version leases, not earlier commits");
 }
 
 void testConsumingArmBlobOwnershipAndEquivalence() {
@@ -6759,6 +7141,10 @@ int main(int argc, char** argv) {
     testArmSnapshotTransferGuardExhaustive();
     testSelectiveArmTransferAndOwnedMutation();
     testOwnedMutationFaultsAndBorrowedEquivalence();
+    testCpuShadowVersionTransitions();
+    testCpuShadowWriterFamilyRefinement();
+    testSharedCaptureVersionPublicationAndLedger();
+    testSharedUpdateTextureAtomicCommit();
     testConsumingArmBlobOwnershipAndEquivalence();
     testBoundedBlobBytesAndDeduplication();
     testRenderTapeBlobCapacityResolverTruthTable();

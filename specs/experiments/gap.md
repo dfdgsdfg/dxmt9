@@ -366,6 +366,20 @@ does not remove this durable-registry fallback copy. The process was
 deliberately terminated with no published Tape; host VM summary alone cannot
 attribute Wine guest allocator exhaustion. Further ownership work must not
 move mutable durable bytes away from later application mutations.
+Durable capture shadows now freeze into shared immutable payload owners for
+session admission and publication. Explicit partial writes detach only while
+an old version is retained; full writes consume incoming contents. UpdateTexture
+validates and stages every source version before committing destinations.
+Borrowed admission still copies, and digest/extent/budget checks are unchanged.
+Boundary accounting distinguishes logical payload bytes from unique retained
+backings, with an explicit lower-bound marker on observer overflow. Native full
+build and ten focused capture/layout/publication/provider/mutation/EVENT tests
+pass, including allocation-fault rollback and overlapping UpdateTexture slots.
+The new fault fixture initially used invalid mip extents; corrected descriptor
+preconditions now ensure injection reaches the intended staging path. PE32,
+PE64, canonical Unix rebuilds and unchanged-budget workload recapture remain
+pending for this ownership change. No published STALKER Tape, practical memory
+reduction, GPU qualification or policy-performance result is claimed.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

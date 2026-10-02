@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <type_traits>
 
 namespace dxmt9::d3d9 {
 namespace {
@@ -855,9 +856,45 @@ bool copyRenderTapeBlockRows(const void* bits,
   }
 }
 
-RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
+namespace {
+
+RenderTapeBlockMutationStatus writeMutationPlan(
+    const RenderTapeShadowWritePlan& plan, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& content) noexcept {
+  switch (content.write(plan, bytes)) {
+  case RenderTapeShadowWriteStatus::Accepted: return RenderTapeBlockMutationStatus::Accepted;
+  case RenderTapeShadowWriteStatus::IncompleteContent: return RenderTapeBlockMutationStatus::IncompleteSeed;
+  case RenderTapeShadowWriteStatus::InvalidInput: return RenderTapeBlockMutationStatus::InvalidLayout;
+  case RenderTapeShadowWriteStatus::AllocationFailed: return RenderTapeBlockMutationStatus::AllocationFailed;
+  }
+  return RenderTapeBlockMutationStatus::InvalidLayout;
+}
+
+RenderTapeBlockMutationStatus writeMutationPlan(
+    const RenderTapeShadowWritePlan& plan, std::span<const std::byte> bytes,
+    std::vector<std::byte>& content) noexcept {
+  if (plan.fullOverwrite) {
+    try {
+      content.assign(bytes.begin(), bytes.end());
+      return RenderTapeBlockMutationStatus::Accepted;
+    } catch (...) {
+      return RenderTapeBlockMutationStatus::AllocationFailed;
+    }
+  }
+  if (content.size() != plan.expectedBytes)
+    return RenderTapeBlockMutationStatus::IncompleteSeed;
+  for (std::uint64_t slice = 0u; slice < plan.slices; ++slice)
+    for (std::uint64_t row = 0u; row < plan.rows; ++row)
+      std::memcpy(content.data() + plan.destinationOffset + slice * plan.slicePitch + row * plan.rowPitch,
+                  bytes.data() + (slice * plan.rows + row) * plan.rowBytes,
+                  static_cast<std::size_t>(plan.rowBytes));
+  return RenderTapeBlockMutationStatus::Accepted;
+}
+
+template <typename Content>
+RenderTapeBlockMutationStatus applyBlockMutationStorage(
     const RenderTapeBlockLockLayout& layout, std::span<const std::byte> bytes,
-    std::vector<std::byte>& completeContent) noexcept {
+    Content& completeContent) noexcept {
   std::uint64_t contentBytes = 0u;
   const std::uint64_t destinationColumn =
       static_cast<std::uint64_t>(layout.blockLeft) * layout.blockBytes;
@@ -885,51 +922,43 @@ RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
         layout.rows != layout.fullRows || bytes.size() != contentBytes) {
       return RenderTapeBlockMutationStatus::InvalidLayout;
     }
-    try {
-      completeContent.assign(bytes.begin(), bytes.end());
-      return RenderTapeBlockMutationStatus::Accepted;
-    } catch (...) {
-      return RenderTapeBlockMutationStatus::AllocationFailed;
-    }
   }
-
-  if (completeContent.size() != contentBytes)
-    return RenderTapeBlockMutationStatus::IncompleteSeed;
-  for (std::uint32_t row = 0u; row < layout.rows; ++row) {
-    const auto destinationOffset =
-        static_cast<std::size_t>(layout.blockTop + row) * layout.fullRowBytes +
-        static_cast<std::size_t>(layout.blockLeft) * layout.blockBytes;
-    std::memcpy(completeContent.data() + destinationOffset,
-                bytes.data() + static_cast<std::size_t>(row) * layout.rowBytes,
-                layout.rowBytes);
-  }
-  return RenderTapeBlockMutationStatus::Accepted;
+  return writeMutationPlan({.expectedBytes = contentBytes,
+      .destinationOffset = static_cast<std::uint64_t>(layout.blockTop) * layout.fullRowBytes + destinationColumn,
+      .rowBytes = layout.rowBytes, .rowPitch = layout.fullRowBytes, .rows = layout.rows,
+      .fullOverwrite = layout.fullSubresource}, bytes, completeContent);
 }
 
-RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+template <typename Content>
+RenderTapeBlockMutationStatus applyBufferMutationStorage(
     std::uint64_t expectedBytes, std::uint64_t byteOffset,
     std::span<const std::byte> bytes,
-    std::vector<std::byte>& completeContent) noexcept {
+    Content& completeContent) noexcept {
   if (expectedBytes == 0u || bytes.empty() ||
       expectedBytes > std::numeric_limits<std::size_t>::max()) {
     return RenderTapeBlockMutationStatus::InvalidBytes;
   }
   if (byteOffset > expectedBytes || bytes.size() > expectedBytes - byteOffset)
     return RenderTapeBlockMutationStatus::InvalidLayout;
-  if (byteOffset == 0u && bytes.size() == expectedBytes) {
-    try {
-      completeContent.assign(bytes.begin(), bytes.end());
-      return RenderTapeBlockMutationStatus::Accepted;
-    } catch (...) {
-      return RenderTapeBlockMutationStatus::AllocationFailed;
-    }
-  }
-  if (completeContent.size() != expectedBytes)
-    return RenderTapeBlockMutationStatus::IncompleteSeed;
-  std::memcpy(completeContent.data() + static_cast<std::size_t>(byteOffset),
-              bytes.data(), bytes.size());
-  return RenderTapeBlockMutationStatus::Accepted;
+  return writeMutationPlan({.expectedBytes = expectedBytes, .destinationOffset = byteOffset,
+      .rowBytes = bytes.size(), .fullOverwrite = byteOffset == 0u && bytes.size() == expectedBytes},
+      bytes, completeContent);
 }
+
+} // namespace
+
+RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
+    const RenderTapeBlockLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& content) noexcept { return applyBlockMutationStorage(layout, bytes, content); }
+RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
+    const RenderTapeBlockLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& content) noexcept { return applyBlockMutationStorage(layout, bytes, content); }
+RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+    std::uint64_t size, std::uint64_t offset, std::span<const std::byte> bytes,
+    std::vector<std::byte>& content) noexcept { return applyBufferMutationStorage(size, offset, bytes, content); }
+RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+    std::uint64_t size, std::uint64_t offset, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& content) noexcept { return applyBufferMutationStorage(size, offset, bytes, content); }
 
 RenderTapeLinearLayoutStatus renderTapeLinearLockLayout(
     const D9CSurfaceDesc& desc, std::int32_t pitch,
@@ -1136,9 +1165,12 @@ bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
   return writeRenderTapeLinearRows(tightBytes, bits, layout);
 }
 
-RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
+namespace {
+
+template <typename Content>
+RenderTapeBlockMutationStatus applyLinearMutationStorage(
     const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
-    std::vector<std::byte>& completeContent) noexcept {
+    Content& completeContent) noexcept {
   std::uint64_t contentBytes = 0u;
   if (layout.bytesPerPixel == 0u || layout.fullRowBytes == 0u ||
       layout.fullRows == 0u || layout.rowBytes == 0u || layout.rows == 0u ||
@@ -1160,25 +1192,21 @@ RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
         layout.rows != layout.fullRows || bytes.size() != contentBytes) {
       return RenderTapeBlockMutationStatus::InvalidLayout;
     }
-    try {
-      completeContent.assign(bytes.begin(), bytes.end());
-      return RenderTapeBlockMutationStatus::Accepted;
-    } catch (...) {
-      return RenderTapeBlockMutationStatus::AllocationFailed;
-    }
   }
-  if (completeContent.size() != contentBytes)
-    return RenderTapeBlockMutationStatus::IncompleteSeed;
-  for (std::uint32_t row = 0u; row < layout.rows; ++row) {
-    const auto destinationOffset =
-        static_cast<std::size_t>(layout.top + row) * layout.fullRowBytes +
-        layout.destinationByteOffset;
-    std::memcpy(completeContent.data() + destinationOffset,
-                bytes.data() + static_cast<std::size_t>(row) * layout.rowBytes,
-                layout.rowBytes);
-  }
-  return RenderTapeBlockMutationStatus::Accepted;
+  return writeMutationPlan({.expectedBytes = contentBytes,
+      .destinationOffset = static_cast<std::uint64_t>(layout.top) * layout.fullRowBytes + layout.destinationByteOffset,
+      .rowBytes = layout.rowBytes, .rowPitch = layout.fullRowBytes, .rows = layout.rows,
+      .fullOverwrite = layout.fullSubresource}, bytes, completeContent);
 }
+
+} // namespace
+
+RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
+    const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& content) noexcept { return applyLinearMutationStorage(layout, bytes, content); }
+RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
+    const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& content) noexcept { return applyLinearMutationStorage(layout, bytes, content); }
 
 namespace {
 
@@ -1408,44 +1436,52 @@ bool writeRenderTapeVolumeRows(
   return true;
 }
 
-RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+namespace {
+
+template <typename Content>
+RenderTapeBlockMutationStatus applyVolumeMutationStorage(
     const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
-    std::vector<std::byte>& completeContent) noexcept {
+    Content& completeContent) noexcept {
   if (!validVolumeLayout(layout))
     return RenderTapeBlockMutationStatus::InvalidLayout;
   if (bytes.size() != layout.tightBytes)
     return RenderTapeBlockMutationStatus::InvalidBytes;
   if (layout.fullSubresource) {
-    try {
-      std::vector<std::byte> replacement(bytes.begin(), bytes.end());
-      completeContent.swap(replacement);
-      return RenderTapeBlockMutationStatus::Accepted;
-    } catch (...) {
-      return RenderTapeBlockMutationStatus::AllocationFailed;
+    if constexpr (std::is_same_v<Content, std::vector<std::byte>>) {
+      try {
+        std::vector<std::byte> replacement(bytes.begin(), bytes.end());
+        completeContent.swap(replacement);
+        return RenderTapeBlockMutationStatus::Accepted;
+      } catch (...) {
+        return RenderTapeBlockMutationStatus::AllocationFailed;
+      }
     }
   }
-  if (completeContent.size() != layout.fullBytes)
-    return RenderTapeBlockMutationStatus::IncompleteSeed;
-  for (std::uint32_t slice = 0u; slice < layout.slices; ++slice) {
-    for (std::uint32_t row = 0u; row < layout.rows; ++row) {
-      const auto destinationOffset =
-          (layout.front + slice) * layout.fullSliceBytes +
-          static_cast<std::size_t>(layout.top + row) * layout.fullRowBytes +
-          layout.destinationByteOffset;
-      std::memcpy(completeContent.data() + destinationOffset,
-                  bytes.data() + slice * layout.tightSliceBytes +
-                      static_cast<std::size_t>(row) * layout.rowBytes,
-                  layout.rowBytes);
-    }
-  }
-  return RenderTapeBlockMutationStatus::Accepted;
+  return writeMutationPlan({.expectedBytes = layout.fullBytes,
+      .destinationOffset = static_cast<std::uint64_t>(layout.front) * layout.fullSliceBytes +
+          static_cast<std::uint64_t>(layout.top) * layout.fullRowBytes + layout.destinationByteOffset,
+      .rowBytes = layout.rowBytes, .rowPitch = layout.fullRowBytes, .rows = layout.rows,
+      .slicePitch = layout.fullSliceBytes, .slices = layout.slices,
+      .fullOverwrite = layout.fullSubresource}, bytes, completeContent);
 }
 
-RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+} // namespace
+
+RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+    const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& content) noexcept { return applyVolumeMutationStorage(layout, bytes, content); }
+RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+    const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& content) noexcept { return applyVolumeMutationStorage(layout, bytes, content); }
+
+namespace {
+
+template <typename Commit>
+RenderTapeUpdateTextureStatus updateTextureValidatedCommit(
     std::span<const std::byte> sourceDescriptor,
-    std::span<const std::vector<std::byte>> sourceContent,
+    RenderTapeContentView sourceContent,
     std::span<const std::byte> destinationDescriptor,
-    std::span<std::vector<std::byte>> destinationContent) noexcept {
+    RenderTapeContentView destinationContent, Commit&& commit) noexcept {
   try {
     RenderTapeTextureDescriptorV2 source{};
     RenderTapeTextureDescriptorV2 destination{};
@@ -1535,19 +1571,50 @@ RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
           destinationExpected[subresource] != expected[subresource])
         return RenderTapeUpdateTextureStatus::IncompleteSource;
     }
-    std::vector<std::vector<std::byte>> replacement;
-    replacement.reserve(sourceContent.size());
-    for (const auto& bytes : sourceContent)
-      replacement.emplace_back(bytes);
-    for (std::uint32_t subresource = 0u;
-         subresource < source.subresourceCount; ++subresource)
-      destinationContent[subresource].swap(replacement[subresource]);
-    return RenderTapeUpdateTextureStatus::Accepted;
+    return commit();
   } catch (const std::bad_alloc&) {
     return RenderTapeUpdateTextureStatus::AllocationFailed;
   } catch (...) {
     return RenderTapeUpdateTextureStatus::InvalidDescriptor;
   }
+}
+
+} // namespace
+
+RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+    std::span<const std::byte> sourceDescriptor,
+    std::span<const std::vector<std::byte>> sourceContent,
+    std::span<const std::byte> destinationDescriptor,
+    std::span<std::vector<std::byte>> destinationContent) noexcept {
+  return updateTextureValidatedCommit(sourceDescriptor, RenderTapeContentView(sourceContent),
+      destinationDescriptor, RenderTapeContentView(std::span<const std::vector<std::byte>>(destinationContent)), [&] {
+        std::vector<std::vector<std::byte>> replacement;
+        replacement.reserve(sourceContent.size());
+        for (const auto& bytes : sourceContent) replacement.emplace_back(bytes);
+        for (std::size_t i = 0u; i < replacement.size(); ++i)
+          destinationContent[i].swap(replacement[i]);
+        return RenderTapeUpdateTextureStatus::Accepted;
+      });
+}
+
+RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+    std::span<const std::byte> sourceDescriptor,
+    std::span<RenderTapeCpuShadowContent> sourceContent,
+    std::span<const std::byte> destinationDescriptor,
+    std::span<RenderTapeCpuShadowContent> destinationContent) noexcept {
+  return updateTextureValidatedCommit(sourceDescriptor,
+      RenderTapeContentView(std::span<const RenderTapeCpuShadowContent>(sourceContent)),
+      destinationDescriptor,
+      RenderTapeContentView(std::span<const RenderTapeCpuShadowContent>(destinationContent)), [&] {
+        // Freeze all source versions and stage every replacement owner before
+        // committing any destination. This also handles overlapping slot sets.
+        std::vector<RenderTapeCpuShadowContent> replacement;
+        replacement.reserve(sourceContent.size());
+        for (auto& bytes : sourceContent) replacement.emplace_back(bytes.freeze());
+        for (std::size_t i = 0u; i < replacement.size(); ++i)
+          destinationContent[i] = std::move(replacement[i]);
+        return RenderTapeUpdateTextureStatus::Accepted;
+      });
 }
 
 } // namespace dxmt9::d3d9

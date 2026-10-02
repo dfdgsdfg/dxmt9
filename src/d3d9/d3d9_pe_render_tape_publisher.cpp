@@ -331,7 +331,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     blobDigests.reserve(bundle.blobs.size());
     for (const auto& blob : bundle.blobs) {
       const auto actualDigest =
-          hexDigest(RenderTapeCaptureSession::sha256(blob.bytes));
+          hexDigest(RenderTapeCaptureSession::sha256(blob.bytes.readBytes()));
       const auto declaredDigest = hexDigest(blob.digest);
       if (declaredDigest != actualDigest || !seen.insert(actualDigest).second) {
         return reject("blob_digest");
@@ -380,7 +380,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     }
     for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
       const auto blobPath = blobsPath / (blobDigests[i] + ".bin");
-      if (!writeBytes(blobPath, bundle.blobs[i].bytes)) {
+      if (!writeBytes(blobPath, bundle.blobs[i].bytes.readBytes())) {
         return fail("blob_write_or_sync");
       }
     }

@@ -772,6 +772,7 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
     dxmt9::d3d9::RenderTapeCaptureStatus status) noexcept {
     if (!peCaptureState_)
         return;
+    logRenderTapePayloadBoundary(*peCaptureState_, "mutation_reject", dxmt9DeviceInfoLog);
     const auto &limits = peCaptureState_->renderTapeCapture.limits();
     const auto &aborted = peCaptureState_->renderTapeCapture.lastAbortAccounting();
     const auto &failure = peCaptureState_->renderTapeCapture.mutationFailure();
@@ -831,7 +832,7 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
 bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::uint32_t subresource, const char *reason) noexcept {
-    const auto *entry = findRenderTapeObject(object);
+    auto *entry = findRenderTapeObject(object);
     if (!entry || subresource >= entry->content.size()) {
         dxmt9DeviceInfoLog(
             "render_tape_capture mutation_reject reason=%s detail=%s kind=%u "
@@ -843,10 +844,11 @@ bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
             subresource, entry ? entry->content.size() : 0u);
         return false;
     }
-    const auto &bytes = entry->content[subresource];
+    auto &content = entry->content[subresource];
+    const auto bytes = content.readBytes();
     dxmt9::d3d9::RenderTapeDigest digest{};
     const auto blobStatus =
-        peCaptureState_->renderTapeCapture.registerBlobBytes(bytes, &digest);
+        peCaptureState_->renderTapeCapture.registerShadowBlobBytes(content, &digest);
     if (blobStatus != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
         logRenderTapeMutationRejection(reason, "blob_register", object,
                                        subresource, bytes.size(),
@@ -1222,9 +1224,9 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
             ? peCaptureState_->renderTapeCapture.resourceMutationOwnedBytes(
                   identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
                   subresource, 0u, std::move(*ownedBytes))
-            : peCaptureState_->renderTapeCapture.resourceMutationBytes(
+            : peCaptureState_->renderTapeCapture.resourceMutationShadowBytes(
                   identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
-                  subresource, 0u, effectiveContent[subresource]);
+                  subresource, 0u, object->content[subresource]);
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             const dxmt9::d3d9::pe::PeWireObjectRef reference{.identity = identity};
             logRenderTapeMutationRejection(

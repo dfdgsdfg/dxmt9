@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_render_tape_descriptors.hpp"
+#include "device_c_render_tape_payload.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -39,7 +40,7 @@ struct RenderTapeArmObjectSnapshotOverlaySelection {
   RenderTapeArmSnapshotOverlaySource source =
       RenderTapeArmSnapshotOverlaySource::Missing;
   std::span<const std::byte> descriptor{};
-  std::span<const std::vector<std::byte>> content{};
+  RenderTapeContentView content{};
 };
 
 enum class RenderTapeArmObjectSnapshotOverlayPolicy : std::uint8_t {
@@ -50,9 +51,9 @@ enum class RenderTapeArmObjectSnapshotOverlayPolicy : std::uint8_t {
 inline RenderTapeArmObjectSnapshotOverlaySelection
 renderTapeSelectArmObjectSnapshotOverlay(
     std::span<const std::byte> durableDescriptor,
-    std::span<const std::vector<std::byte>> durableContent,
+    RenderTapeContentView durableContent,
     std::span<const std::byte> candidateDescriptor,
-    std::span<const std::vector<std::byte>> candidateContent,
+    RenderTapeContentView candidateContent,
     std::uint64_t candidateOrdinal,
     std::uint64_t activeOrdinal,
     RenderTapeArmObjectSnapshotOverlayPolicy policy =
@@ -102,7 +103,7 @@ inline bool renderTapeArmObjectSnapshotContentComplete(
     std::uint32_t durableContentCount, bool textureAlias,
     RenderTapeArmObjectSnapshotOverlayPolicy policy,
     RenderTapeArmSnapshotOverlaySource source,
-    std::span<const std::vector<std::byte>> content) noexcept {
+    RenderTapeContentView content) noexcept {
   if (textureAlias) return true;
   const std::size_t expectedCount =
       policy == RenderTapeArmObjectSnapshotOverlayPolicy::PresentOutput &&
@@ -561,6 +562,13 @@ RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
     std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
 
+RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
+    const RenderTapeBlockLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& completeContent) noexcept;
+RenderTapeBlockMutationStatus applyRenderTapeBufferMutation(
+    std::uint64_t expectedBytes, std::uint64_t byteOffset,
+    std::span<const std::byte> bytes, RenderTapeCpuShadowContent& completeContent) noexcept;
+
 enum class RenderTapeLinearLayoutStatus : std::uint32_t {
   Accepted = 0u,
   UnsupportedFormat,
@@ -600,6 +608,10 @@ bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
 RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
     const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
+
+RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
+    const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& completeContent) noexcept;
 
 enum class RenderTapeVolumeLayoutStatus : std::uint32_t {
   Accepted = 0u,
@@ -685,6 +697,10 @@ RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
     const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
 
+RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+    const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
+    RenderTapeCpuShadowContent& completeContent) noexcept;
+
 // Capture-only closure for the D3D9 UpdateTexture full-resource copy. The
 // destination may have no CPU-visible seed yet; this transform proves that
 // every source subresource is complete and copies those exact bytes into the
@@ -705,5 +721,11 @@ RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
     std::span<const std::vector<std::byte>> sourceContent,
     std::span<const std::byte> destinationDescriptor,
     std::span<std::vector<std::byte>> destinationContent) noexcept;
+
+RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
+    std::span<const std::byte> sourceDescriptor,
+    std::span<RenderTapeCpuShadowContent> sourceContent,
+    std::span<const std::byte> destinationDescriptor,
+    std::span<RenderTapeCpuShadowContent> destinationContent) noexcept;
 
 } // namespace dxmt9::d3d9

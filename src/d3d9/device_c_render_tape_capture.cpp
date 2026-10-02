@@ -348,14 +348,19 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
     owned.reserve(reserveCount);
     for (std::size_t index = 0u; index < blobs.size(); ++index) {
       const auto& blob = blobs[index];
+      const auto bytes = blob.readBytes();
       context.blobIndex = index;
-      context.blobBytes = blob.bytes.size();
+      context.blobBytes = bytes.size();
       context.uniqueBlobCount = owned.size();
       context.cumulativeBlobBytes = totalBlobBytes;
       context.phase = "blob_deduplicate";
+      if (blob.immutable.hasBacking() && blob.bytes.capacity() != 0u) {
+        fail("ambiguous_blob_storage");
+        return RenderTapeCaptureStatus::InvalidInput;
+      }
       const bool duplicate = std::any_of(
           owned.begin(), owned.end(), [&](const auto& published) {
-            return published.bytes == blob.bytes;
+            return std::equal(published.bytes.begin(), published.bytes.end(), bytes.begin(), bytes.end());
           });
       if (duplicate) {
         continue;
@@ -365,7 +370,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
         fail("blob_entry_limit");
         return RenderTapeCaptureStatus::CapacityExceeded;
       }
-      const auto blobBytes = static_cast<std::uint64_t>(blob.bytes.size());
+      const auto blobBytes = static_cast<std::uint64_t>(bytes.size());
       if (blobBytes > limits_.maxBlobBytes ||
           totalBlobBytes > limits_.maxBlobBytes - blobBytes) {
         context.phase = "blob_byte_admission";
@@ -373,12 +378,15 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
         return RenderTapeCaptureStatus::CapacityExceeded;
       }
       context.phase = "blob_digest";
-      const auto digest = sha256(blob.bytes);
+      const auto digest = sha256(bytes);
       context.phase = "catalogue_append";
       catalogue.push_back(RenderTapeBlob{.digest = digest,
-                                         .size = blob.bytes.size(),
+                                         .size = bytes.size(),
                                          .verified = 1u});
-      if (transferredBlobs) {
+      if (blob.immutable.hasBacking()) {
+        context.phase = "owned_blob_share";
+        owned.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = blob.immutable});
+      } else if (transferredBlobs) {
         static_assert(std::is_nothrow_move_constructible_v<RenderTapePublishedBlob>);
         context.phase = "owned_blob_move";
         owned.push_back(RenderTapePublishedBlob{
@@ -492,15 +500,49 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerOwnedBlobBytes(
   return status;
 }
 
+RenderTapeCaptureStatus RenderTapeCaptureSession::registerSharedBlobBytes(
+    const RenderTapeImmutablePayload& bytes, RenderTapeDigest* digestOut) {
+  return registerBlobStorage(bytes.readBytes(), digestOut, nullptr, &bytes);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::registerShadowBlobBytes(
+    RenderTapeCpuShadowContent& bytes, RenderTapeDigest* digestOut) {
+  if (!enabled_) return RenderTapeCaptureStatus::Disabled;
+  auto context = mutationFailureContext("register_shadow_blob_bytes");
+  context.phase = "shadow_freeze";
+  context.byteSize = bytes.size();
+  if (state_ != RenderTapeCaptureState::Armed && state_ != RenderTapeCaptureState::Capturing) {
+    context.valid = true;
+    context.phase = "state_validation";
+    context.reason = "invalid_state";
+    context.status = RenderTapeCaptureStatus::InvalidState;
+    mutationFailure_ = context;
+    return context.status;
+  }
+  try {
+    const auto immutable = bytes.freeze();
+    return registerSharedBlobBytes(immutable, digestOut);
+  } catch (...) {
+    context.valid = true;
+    context.reason = "exception";
+    context.exceptionKind = captureMutationExceptionKind();
+    context.status = RenderTapeCaptureStatus::CapacityExceeded;
+    mutationFailure_ = context;
+    return context.status;
+  }
+}
+
 RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobStorage(
     std::span<const std::byte> bytes, RenderTapeDigest* digestOut,
-    std::vector<std::byte>* transferredBytes) {
+    std::vector<std::byte>* transferredBytes,
+    const RenderTapeImmutablePayload* sharedBytes) {
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
   mutationFailure_ = {};
   auto context = mutationFailureContext(
-      transferredBytes ? "register_owned_blob_bytes" : "register_blob_bytes");
+      sharedBytes ? "register_shared_blob_bytes"
+          : transferredBytes ? "register_owned_blob_bytes" : "register_blob_bytes");
   context.byteSize = bytes.size();
   const auto fail = [&](RenderTapeCaptureStatus status, const char* reason,
                         const char* exception = "none") {
@@ -549,13 +591,17 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobStorage(
     }
   }
   try {
-    if (transferredBytes) {
-      // All potentially throwing metadata admission precedes the payload
-      // transfer. The original bytes are hashed above, never a caller digest.
+    if (sharedBytes) {
       context.phase = "blob_publication_append";
-      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest});
-      context.phase = "blob_payload_move";
-      publishedBlobs_.back().bytes.swap(*transferredBytes);
+      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = *sharedBytes});
+    } else if (transferredBytes) {
+      // The immutable owner's metadata allocation precedes its vector move;
+      // later publication failure is fail-stop under the consuming API.
+      // The original bytes are hashed above, never a caller digest.
+      context.phase = "blob_payload_owner";
+      RenderTapeImmutablePayload owned(std::move(*transferredBytes));
+      context.phase = "blob_publication_append";
+      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = std::move(owned)});
     } else {
       context.phase = "blob_payload_copy";
       RenderTapePublishedBlob owned{
@@ -629,6 +675,31 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationOwnedBytes(
   if (status != RenderTapeCaptureStatus::Accepted && enabled_)
     abortInternal();
   return status;
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationShadowBytes(
+    const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
+    std::uint32_t subresource, std::uint64_t byteOffset,
+    RenderTapeCpuShadowContent& bytes,
+    RenderTapeBufferMutationDisposition bufferDisposition) {
+  const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
+  RenderTapeDigest digest{};
+  const auto status = registerShadowBlobBytes(bytes, &digest);
+  if (status != RenderTapeCaptureStatus::Accepted) {
+    if (mutationFailure_.valid) {
+      mutationFailure_.hasIdentity = true;
+      mutationFailure_.identity = identity;
+      mutationFailure_.kind = kind;
+      mutationFailure_.bufferDisposition = bufferDisposition;
+      mutationFailure_.subresource = subresource;
+      mutationFailure_.byteOffset = byteOffset;
+      mutationFailure_.byteSize = incomingBytes;
+      mutationFailure_.eventPayloadBytes = sizeof(RenderTapeResourceMutationHeader);
+    }
+    return status;
+  }
+  return resourceMutation(identity, kind, subresource, byteOffset, incomingBytes,
+                          digest, bufferDisposition);
 }
 
 RenderTapeCaptureMutationFailure RenderTapeCaptureSession::mutationFailureContext(

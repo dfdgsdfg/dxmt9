@@ -630,6 +630,30 @@ session-owned bytes. A new arm reconstructs snapshots after abort. The actual
 transfer predicate and failure transitions require bounded native coverage;
 pointer conservation proves ownership behavior, not byte authenticity.
 
+Durable capture CPU shadows have a different lifetime: subsequent partial
+application mutations still require their previous contents. They must not
+surrender their sole payload to session admission. A capture-local immutable
+payload owner may share the exact backing between durable shadow, session and
+publication, subject to unchanged digest, extent, deduplication and budgets.
+Borrowed span inputs still require ownership before return. Shared ownership
+must not substitute for byte authentication or cross the PE/Unix wire ABI.
+
+Durable writes must use an explicit transactional mutation boundary. A full
+replacement derives from the actual incoming bytes; a partial write detaches
+when an immutable reader still owns the prior version. Failed validation or
+allocation must not modify either published bytes or the committed shadow.
+UpdateTexture must validate/stage all subresources before committing the
+destination versions. Abort releases session leases without destroying the
+registry's authoritative contents. Ordinary mutable data access must not
+silently detach or expose published storage for modification. Snapshot-vector
+transfer and EVENT descriptor authority retain their existing contracts.
+
+Native coverage must bind buffer, block, linear and volume writes, atomic
+UpdateTexture replacement, nonuniform A-to-B partial updates with retained A,
+abort/rearm and allocation failures. Boundary-only ownership accounting must
+distinguish logical bytes from unique retained backing allocations; unchanged
+budget workload capture remains required to claim practical memory benefit.
+
 The capture owner must also enforce an overflow-safe total owned-blob byte
 budget before hashing or copying a new blob. The capture-only production
 default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`

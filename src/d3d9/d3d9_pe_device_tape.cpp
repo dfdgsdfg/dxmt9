@@ -86,6 +86,8 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
         std::numeric_limits<std::uint32_t>::max();
     const auto logProducerException = [&](const char *kind,
                                           const char *detail) {
+        logRenderTapePayloadBoundary(*peCaptureState_, "bootstrap_exception", dxmt9DeviceInfoLog,
+                                     seed.blobs);
         dxmt9DeviceInfoLog(
             "render_tape_capture producer aborted reason=exception "
             "exception_kind=%s phase=%s kind=%u generation=%u object_id=%llu "
@@ -235,9 +237,9 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             overlay.recordCount, overlay.handleCount, overlay.blob.size());
 
         exceptionPhase = "bootstrap_live_objects";
-        std::vector<const RenderTapeLiveObject *> objects;
+        std::vector<RenderTapeLiveObject *> objects;
         objects.reserve(peCaptureState_->renderTapeRegistry.objects.size());
-        for (const auto &object : peCaptureState_->renderTapeRegistry.objects) {
+        for (auto &object : peCaptureState_->renderTapeRegistry.objects) {
             objects.push_back(&object);
         }
         std::sort(objects.begin(), objects.end(), [](const auto *a, const auto *b) {
@@ -253,7 +255,7 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
         D9CWireObjectIdentity presentOutput{};
         std::size_t presentOutputCount = 0u;
         bool staleArmSnapshot = false;
-        for (const auto *object : objects) {
+        for (auto *object : objects) {
             if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
                 presentOutput = object->identity;
                 ++presentOutputCount;
@@ -434,7 +436,7 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             "render_tape_capture bootstrap_closure_complete "
             "handles=%zu live_objects=%zu closure=%zu",
             bootstrapHandles.size(), objects.size(), closure.size());
-        for (const auto *object : objects) {
+        for (auto *object : objects) {
             if (!dxmt9::d3d9::renderTapeBootstrapClosureContains(
                     closure, object->identity)) {
                 continue;
@@ -683,8 +685,9 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                             .source = ownedBytes,
                             .blobIndex = seed.blobs.size() - 1u});
                     } else {
-                        exceptionPhase = "content_blob_copy";
-                        seed.blobs.push_back({.bytes = bytes});
+                        exceptionPhase = "content_shadow_freeze";
+                        seed.blobs.push_back({
+                            .immutable = object->content[subresource].freeze()});
                     }
                     exceptionPhase = "content_mutation_append";
                     seed.mutations.push_back({
@@ -726,6 +729,8 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
         // consumed snapshots as complete same-interval seed evidence.
         for (const auto &transfer : pendingContentTransfers)
             seed.blobs[transfer.blobIndex].bytes.swap(*transfer.source);
+        logRenderTapePayloadBoundary(*peCaptureState_, "bootstrap_complete", dxmt9DeviceInfoLog,
+                                     seed.blobs);
         return true;
     } catch (const std::bad_alloc &exception) {
         logProducerException("bad_alloc", exception.what());
@@ -1446,6 +1451,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         "mutations=%zu blobs=%zu",
         static_cast<unsigned long long>(peCaptureState_->renderTapeActiveCaptureToken),
         seed.objects.size(), seed.mutations.size(), producedBlobCount);
+    logRenderTapePayloadBoundary(*peCaptureState_, "arm_complete", dxmt9DeviceInfoLog);
     return true;
 }
 

@@ -47,7 +47,7 @@ inline bool renderTapeTextureSubresourceDescriptor(
 inline bool renderTapeValidateExpectedContent(
     const D9CWireObjectIdentity &identity,
     std::span<const std::byte> descriptor,
-    std::span<const std::vector<std::byte>> content,
+    dxmt9::d3d9::RenderTapeContentView content,
     dxmt9::d3d9::RenderTapeExpectedContentContract &contract) noexcept {
   try {
     std::vector<std::uint64_t> expected(content.size());

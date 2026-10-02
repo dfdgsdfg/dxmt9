@@ -24,7 +24,7 @@ struct RenderTapeLiveObject {
   std::vector<std::byte> descriptor{};
   std::vector<std::byte> immutablePayload{};
   std::uint32_t contentCount = 0u;
-  std::vector<std::vector<std::byte>> content{};
+  std::vector<dxmt9::d3d9::RenderTapeCpuShadowContent> content{};
   dxmt9::d3d9::RenderTapeSurfaceAliasLifetime lifetime{};
   D9CWireObjectIdentity aliasParentTexture{};
   Role role = Role::Ordinary;
@@ -85,7 +85,8 @@ inline RenderTapeArmContentTransferSelection selectRenderTapeArmContentTransfer(
           snapshot->armOrdinal, activeOrdinal) ||
       selected.descriptor.data() != snapshot->descriptor.data() ||
       selected.descriptor.size() != snapshot->descriptor.size() ||
-      selected.content.data() != snapshot->content.data() ||
+      !selected.content.vectorBacked() ||
+      selected.content.vectorData() != snapshot->content.data() ||
       selected.content.size() != snapshot->content.size())
     return {.disposition = Disposition::InvalidSnapshot};
   return {.disposition = Disposition::OwnedSnapshot, .content = snapshot->content};
@@ -110,7 +111,7 @@ struct RenderTapeLiveRegistry {
   dxmt9::d3d9::RenderTapePresentOutputRole presentOutputRole{};
   std::vector<std::byte> presentOutputPriorDescriptor{};
   std::uint32_t presentOutputPriorContentCount = 0u;
-  std::vector<std::vector<std::byte>> presentOutputPriorContent{};
+  std::vector<dxmt9::d3d9::RenderTapeCpuShadowContent> presentOutputPriorContent{};
 };
 
 struct PeCaptureState {
@@ -137,11 +138,60 @@ struct PeCaptureState {
   std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities{};
   dxmt9::d3d9::RenderTapeFirstAccessLedger renderTapeFirstAccessLedger{};
   const char *renderTapeAbortReason = nullptr;
+  dxmt9::d3d9::RenderTapePayloadLedger renderTapePayloadLedger{};
   std::uint64_t renderTapeCompletionOrdinal = 0u;
   // Non-null only during a cold capture-only child command.  Commit consults
   // this already-owned state pointer to collect any CapacityPost acceptance.
   PeRenderTapeCommitReceiptCollector *renderTapeCommitCollector = nullptr;
 };
+
+inline const dxmt9::d3d9::RenderTapePayloadLedger& measureRenderTapePayloadBoundary(
+    PeCaptureState& state,
+    std::span<const dxmt9::d3d9::RenderTapeCaptureBlob> seed = {}) noexcept {
+  auto& ledger = state.renderTapePayloadLedger;
+  ledger.reset();
+  const auto observeShadow = [&](const auto& shadow) {
+    ledger.observe(shadow.readBytes().data(), shadow.size(), shadow.capacity(), shadow.shared());
+  };
+  const auto observeImmutable = [&](const auto& payload) {
+    ledger.observe(payload.data(), payload.size(), payload.capacity(), payload.shared());
+  };
+  for (const auto& object : state.renderTapeRegistry.objects) {
+    ledger.observe(object.immutablePayload.data(), object.immutablePayload.size(),
+                   object.immutablePayload.capacity(), false);
+    for (const auto& content : object.content) observeShadow(content);
+  }
+  for (const auto& content : state.renderTapeRegistry.presentOutputPriorContent) observeShadow(content);
+  for (const auto& snapshot : state.renderTapeArmSnapshots)
+    for (const auto& content : snapshot.content)
+      ledger.observe(content.data(), content.size(), content.capacity(), false);
+  for (const auto& blob : state.renderTapeCapture.ownedPublishedBlobs()) observeImmutable(blob.bytes);
+  for (const auto& blob : state.renderTapeCapture.publicationBundle().blobs) observeImmutable(blob.bytes);
+  for (const auto& blob : seed) {
+    if (blob.immutable.hasBacking()) observeImmutable(blob.immutable);
+    ledger.observe(blob.bytes.data(), blob.bytes.size(), blob.bytes.capacity(), false);
+  }
+  return ledger;
+}
+
+template <typename Log>
+inline void logRenderTapePayloadBoundary(PeCaptureState& state, const char* boundary,
+    Log log, std::span<const dxmt9::d3d9::RenderTapeCaptureBlob> seed = {}) noexcept {
+  const auto& ledger = measureRenderTapePayloadBoundary(state, seed);
+  log("render_tape_capture payload_boundary boundary=%s logical_bytes=%llu "
+      "logical_capacity=%llu logical_owners=%llu unique_backings_lower_bound=%zu "
+      "unique_bytes_lower_bound=%llu unique_capacity_lower_bound=%llu "
+      "unique_shared_bytes_lower_bound=%llu unique_shared_capacity_lower_bound=%llu "
+      "unique_complete=%d logical_totals_valid=%d observer_capacity=%zu",
+      boundary, static_cast<unsigned long long>(ledger.logicalBytes),
+      static_cast<unsigned long long>(ledger.logicalCapacity),
+      static_cast<unsigned long long>(ledger.logicalOwners), ledger.backingCount,
+      static_cast<unsigned long long>(ledger.uniqueBytes),
+      static_cast<unsigned long long>(ledger.uniqueCapacity),
+      static_cast<unsigned long long>(ledger.uniqueSharedBytes),
+      static_cast<unsigned long long>(ledger.uniqueSharedCapacity),
+      ledger.uniqueComplete ? 1 : 0, ledger.totalsValid ? 1 : 0, ledger.kMaxBackings);
+}
 
 inline std::unique_ptr<PeCaptureState> makePeCaptureState(
     bool enabled, dxmt9::d3d9::RenderTapeCaptureLimits limits,

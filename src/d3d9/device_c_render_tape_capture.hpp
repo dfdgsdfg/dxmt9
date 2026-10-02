@@ -2,6 +2,7 @@
 
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_payload.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -122,15 +123,21 @@ struct RenderTapeCaptureMutationSeed {
   RenderTapeDigest digest{};
 };
 
-// A capture-owned blob. The digest is never trusted: armWithBlobs hashes the
-// copied bytes and derives the catalogue entry from that result.
+// A capture input blob. The digest is never trusted: armWithBlobs hashes the
+// original bytes and derives the catalogue entry from that result.
 struct RenderTapeCaptureBlob {
   std::vector<std::byte> bytes{};
+  // Optional already-frozen CPU shadow version. Both representations at once
+  // are invalid; raw arm snapshot vectors retain the consuming path above.
+  RenderTapeImmutablePayload immutable{};
+  std::span<const std::byte> readBytes() const noexcept {
+    return immutable.hasBacking() ? immutable.readBytes() : std::span<const std::byte>(bytes);
+  }
 };
 
 struct RenderTapePublishedBlob {
   RenderTapeDigest digest{};
-  std::vector<std::byte> bytes{};
+  RenderTapeImmutablePayload bytes{};
 };
 
 struct RenderTapePublicationBundle {
@@ -229,6 +236,11 @@ public:
   RenderTapeCaptureStatus registerOwnedBlobBytes(
       std::vector<std::byte>&& bytes, RenderTapeDigest* digest = nullptr);
 
+  RenderTapeCaptureStatus registerSharedBlobBytes(
+      const RenderTapeImmutablePayload& bytes, RenderTapeDigest* digest = nullptr);
+  RenderTapeCaptureStatus registerShadowBlobBytes(
+      RenderTapeCpuShadowContent& bytes, RenderTapeDigest* digest = nullptr);
+
   RenderTapeCaptureStatus resourceMutationBytes(
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
       std::uint32_t subresource, std::uint64_t byteOffset,
@@ -242,6 +254,13 @@ public:
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
       std::uint32_t subresource, std::uint64_t byteOffset,
       std::vector<std::byte>&& bytes,
+      RenderTapeBufferMutationDisposition bufferDisposition =
+          RenderTapeBufferMutationDisposition::Plain);
+
+  RenderTapeCaptureStatus resourceMutationShadowBytes(
+      const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
+      std::uint32_t subresource, std::uint64_t byteOffset,
+      RenderTapeCpuShadowContent& bytes,
       RenderTapeBufferMutationDisposition bufferDisposition =
           RenderTapeBufferMutationDisposition::Plain);
 
@@ -301,6 +320,9 @@ public:
   std::uint32_t ownedBlobEntries() const noexcept {
     return static_cast<std::uint32_t>(catalogue_.blobs.size());
   }
+  std::span<const RenderTapePublishedBlob> ownedPublishedBlobs() const noexcept {
+    return publishedBlobs_;
+  }
   const RenderTapeCaptureLimits& limits() const noexcept { return limits_; }
   const RenderTapeCaptureArmFailure& armFailure() const noexcept {
     return armFailure_;
@@ -338,7 +360,8 @@ public:
 private:
   RenderTapeCaptureStatus registerBlobStorage(
       std::span<const std::byte> bytes, RenderTapeDigest* digest,
-      std::vector<std::byte>* transferredBytes);
+      std::vector<std::byte>* transferredBytes,
+      const RenderTapeImmutablePayload* sharedBytes = nullptr);
   RenderTapeCaptureStatus armWithBlobStorage(
       std::span<const std::byte> bootstrapOverlay,
       std::span<const RenderTapeCaptureBlob> blobs,
