@@ -1183,6 +1183,14 @@ rows and completion evidence must originate at actual successful publication
 and completion edges; capture must not introduce extra flushes or publications
 to satisfy its grammar. Capacity, cancellation or stale provenance failures
 must reject the capture, not synthesize coverage or replay work again.
+Physical command provenance must permit multiple, even nonadjacent, canonical
+draw records to share one actual DrawRun across intervening state records.
+Unique physical command rows own actual command kind, draw extent and pass
+membership; draw dispositions reference disjoint ordered subdraw slices.
+Physical command coverage/completion is counted once, while canonical records
+remain exactly covered. Capture must not split a production DrawRun solely to
+fit its evidence format. Missing/overlapping subdraws, unsupported mappings and
+unrepresented generated commands fail closed.
 
 **R-HARN-REPLAY-7.27** Query coordinator provenance must bind the capture
 epoch, event/record, raw replay ordinal, wire identity/generation, issue cycle,

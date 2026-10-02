@@ -1059,7 +1059,14 @@ source publications from event-local record dispositions and replay settlements.
 Publication observers copy source/pass values before Ready visibility or reclaim;
 replay observers bind record anchors to these values even when one writer spans
 events. CPU/state-only and query-coordinator dispositions carry no invented
-source or pass. The source table alone owns exactly-once completion evidence.
+source or pass. The source table owns exactly-once render-source completion
+evidence; initializer completion remains a separate domain.
+Actual physical commands occupy a separate unique table. Dispositions refer to
+its command rows and, for DrawRun, ordered subdraw slices: Draw/state/Draw can
+share one physical command without inventing a new publication or pass.
+Generated coordinator commands name their coordinator owner explicitly. END
+cursor validation uses all physical-command provenance, including shared draws,
+and rejects a command spanning both sides of the END boundary.
 
 A query association retains a generation-qualified END receipt, keyed by wire
 identity and issue cycle, until the actual publication edge binds its marker.
@@ -1076,6 +1083,17 @@ The shared source-plan validator/digest must include disposition coverage and
 prefix dependencies before either CPU or Metal replay changes state. Runtime,
 bridge and harness integration evidence is tracked in the owning gap document;
 the v3 contract does not itself promote or relax existing v2 readers.
+
+The v3 plan is an owned, fully admitted sequence of record/event execution,
+expected actual publication and replay-settlement actions. Publication actions
+qualify receipts at authenticated cuts; they do not unconditionally publish a
+second source or resubmit initializer work already emitted by Query END. Actual
+publication-edge order resolves source/initializer actions sharing a cut.
+The native plan digest uses a separate domain/version and explicit little-endian
+field encoding of tape/identity component hashes and lengths, referenced verified
+blob identities and sizes, and the validated canonical tables. It must not hash
+native padding. Original RGBA oracles remain bound by the enclosing bundle and
+qualification receipt, not silently inferred from this native plan digest.
 
 `identity.bin` is a cold, fixed-layout, little-endian sidecar. Version 1 used
 schema `dxmt9.render_tape.identity.v1` and one source entry per canonical

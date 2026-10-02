@@ -430,10 +430,31 @@ cross-event writer, future-source empty END, independent upload readiness,
 younger-upload rejection, bounded failure and cross-version wire round-trip.
 This binds pure predicates and finite transitions, not live scheduling or GPU
 bytes. Actual publication/query observers, every historical poll observation,
-PE bridge/publication, versioned source-plan/digest and CPU/Metal harness driver
+PE bridge/publication and CPU/Metal harness driver
 integration remain incomplete; no v3 production capture or policy result is
 claimed. In particular, the v2 replay driver's per-range forced publication
 and CPU event-entry empty-writer assumption cannot simply be reused for v3.
+The next native tranche separates unique physical command rows from canonical
+record dispositions and ordered subdraw slices. Draw/constant/Draw may share
+one DrawRun, but effectful interleaving, physical reordering and ordered-control
+straddles reject. Generated coordinator commands are currently admitted only
+for UPDATE_TEXTURE SurfaceCopy/GenerateMipmaps mappings. The owned v3 source
+plan validates complete evidence, preserves original record/publication cuts,
+and binds an explicit LE digest; failed admission invalidates previous output.
+Its cursor proves traversal, not execution or GPU completion. Native/Python
+inspection exposes six exact tables with lossless u64 values. V3 remains
+inspection-only and rejects policy execution before staging/provider effects;
+v2 execution is not silently adapted. The CLI fixture currently covers Present
+with no nonempty initializer/coordinator tables. Runtime capture integration,
+arm-snapshot memory pressure and original-input GPU/query qualification remain
+open independently of these native contracts.
+Native full build and all 15 focused identity/source-plan/inspection,
+Tape/capture/projection/provider and CPU/GPU policy regression gates pass.
+Integration corrected a malformed QueryGetData fixture payload length and a
+stale v2 CLI expectation for the already-existing empty query transcript;
+neither fix weakens validation or removes public evidence. No production
+runtime, wild capture, GPU-pixel or concurrency qualification is inferred
+from these native/CLI gates.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

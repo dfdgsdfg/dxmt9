@@ -6,9 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -16,6 +19,7 @@ namespace {
 using namespace dxmt9::d3d9;
 using Prefix = RenderTapeIdentityV3PrefixKind;
 using Kind = RenderTapeIdentityV3DispositionKind;
+using CommandKind = RenderTapeIdentityV3CommandKind;
 using Phase = RenderTapeIdentityV3SourcePhase;
 using Observation = RenderTapeIdentityV3Observation;
 using Status = RenderTapeIdentityV3Status;
@@ -91,13 +95,25 @@ RenderTapeIdentityV3CurrentIssue current(const RenderTapeIdentityV3Coordinator& 
 }
 
 RenderTapeIdentityV3Disposition gpu(std::uint64_t event, std::uint32_t record,
-                                   std::uint32_t command) {
-  return {.eventOrdinal = event, .logicalPassId = 17u,
+                                   std::uint32_t command, std::uint32_t subdraw = 0u) {
+  return {.eventOrdinal = event,
           .firstRecord = record, .recordCount = 1u,
           .kind = static_cast<std::uint32_t>(Kind::GpuCommand),
-          .sourceIndex = 0u, .firstCommand = command, .commandCount = 1u,
+          .commandIndex = command, .firstSubdraw = subdraw, .subdrawCount = 1u};
+}
+
+RenderTapeIdentityV3Command drawCommand(std::uint32_t sourceIndex,
+    std::uint32_t physicalIndex, std::uint32_t draws = 1u) {
+  return {.logicalPassId = 17u, .sourceIndex = sourceIndex,
+          .physicalCommandIndex = physicalIndex,
+          .kind = static_cast<std::uint32_t>(CommandKind::DrawRun), .drawCount = draws,
           .membership = static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::Pass),
           .dagPassIndex = 0u};
+}
+
+RenderTapeIdentityV3Disposition state(std::uint64_t event, std::uint32_t record) {
+  return {.eventOrdinal = event, .firstRecord = record, .recordCount = 1u,
+          .kind = static_cast<std::uint32_t>(Kind::StateOnly)};
 }
 
 RenderTapeIdentityV3Disposition coordinator(std::uint64_t event, std::uint32_t record,
@@ -239,6 +255,7 @@ void exactPrefixAndCrossEventWriter() {
   RenderTapeIdentityV3View identity{};
   identity.header = header();
   identity.sources.push_back(source());
+  identity.commands = {drawCommand(0u, 0u), drawCommand(0u, 1u)};
   auto query = end(Prefix::RealSource);
   query.recordIndex = 1u;
   identity.coordinators.push_back(query);
@@ -257,7 +274,7 @@ void exactPrefixAndCrossEventWriter() {
   check(validateRenderTapeIdentityV3Rows(missing, events, records) != Status::Valid,
         "missing canonical coverage rejects the entire capture");
   auto overlap = identity;
-  overlap.dispositions[2].firstCommand = 0u;
+  overlap.dispositions[2].commandIndex = 0u;
   check(validateRenderTapeIdentityV3Rows(overlap, events, records) != Status::Valid,
         "overlapping physical command witnesses reject");
   auto gap = identity;
@@ -269,6 +286,7 @@ void exactPrefixAndCrossEventWriter() {
       RenderTapeIdentityV3RecordFact{2u, 1u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE}};
   auto futureSource = identity;
   futureSource.sources[0].commandCount = 1u;
+  futureSource.commands.resize(1u);
   futureSource.coordinators[0].recordIndex = 0u;
   futureSource.coordinators[0].commandEnd = 0u;
   futureSource.dispositions = {coordinator(2u, 0u), gpu(2u, 1u, 0u)};
@@ -312,9 +330,9 @@ void noPublicationAndIndependentInitializers() {
             identity.sources.empty(),
         "empty END settles replay exactly once without source, pass, submission or GPU-completion fiction");
   auto fabricated = identity;
-  fabricated.dispositions[0].logicalPassId = 8u;
+  fabricated.dispositions[0].commandIndex = 0u;
   check(validateRenderTapeIdentityV3Rows(fabricated, events, records) != Status::Valid,
-        "coordinator cannot receive a fabricated pass");
+        "coordinator disposition cannot fabricate a physical command reference");
   identity.initializers.push_back({.sequence = 5u, .epoch = 7u,
       .publicationEdge = 4u, .submissionEdge = 5u, .cutEventOrdinal = 2u,
       .cutKind = static_cast<std::uint32_t>(RenderTapeIdentityV3CutKind::AfterRecord), .cutRecord = 1u});
@@ -363,9 +381,149 @@ void noPublicationAndIndependentInitializers() {
             identity.initializers, Observation::Ready), "stale initializer owner epoch rejects Ready");
 }
 
+void sharedDrawRunAndPhysicalCoverage() {
+  const std::array events{RenderTapeIdentityV3EventFact{2u, 5u, 3u}};
+  const std::array records{
+      RenderTapeIdentityV3RecordFact{2u, 0u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE},
+      RenderTapeIdentityV3RecordFact{2u, 1u, D9C_COMMAND_RECORD_SET_VS_CONST_F},
+      RenderTapeIdentityV3RecordFact{2u, 2u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE}};
+  RenderTapeIdentityV3View identity{};
+  identity.header = header();
+  identity.sources = {source(1u)};
+  identity.commands = {drawCommand(0u, 0u, 2u)};
+  identity.dispositions = {gpu(2u, 0u, 0u, 0u), state(2u, 1u), gpu(2u, 2u, 0u, 1u)};
+  identity.settlements = {{2u, 20u, 4u, 6u, 3u}};
+  check(validateRenderTapeIdentityV3Rows(identity, events, records) == Status::Valid &&
+            identity.commands.size() == 1u && identity.sources.size() == 1u,
+        "Draw-Const-Draw partitions two actual subdraws in one physical DrawRun without a split");
+  // Bind exact subdraw conservation to the production validator, not a
+  // second test-only implementation: every bounded slice pair and extent.
+  for (std::uint32_t extent = 1u; extent <= 3u; ++extent)
+    for (std::uint32_t first = 0u; first <= 3u; ++first)
+      for (std::uint32_t firstCount = 0u; firstCount <= 3u; ++firstCount)
+        for (std::uint32_t second = 0u; second <= 3u; ++second)
+          for (std::uint32_t secondCount = 0u; secondCount <= 3u; ++secondCount) {
+            auto candidate = identity;
+            candidate.commands[0].drawCount = extent;
+            candidate.dispositions[0].firstSubdraw = first;
+            candidate.dispositions[0].subdrawCount = firstCount;
+            candidate.dispositions[2].firstSubdraw = second;
+            candidate.dispositions[2].subdrawCount = secondCount;
+            const bool expected = extent == 2u && first == 0u && firstCount == 1u &&
+                second == 1u && secondCount == 1u;
+            check((validateRenderTapeIdentityV3Rows(candidate, events, records) == Status::Valid) == expected,
+                  "subdraw slices admit only exact nonoverlapping ordered cover of actual DrawRun extent");
+          }
+  for (std::uint32_t mutation = 0u; mutation < 6u; ++mutation) {
+    auto candidate = identity;
+    if (mutation == 0u) candidate.commands.push_back(candidate.commands[0]);
+    if (mutation == 1u) candidate.commands[0].physicalCommandIndex = 1u;
+    if (mutation == 2u) candidate.commands[0].kind = UINT32_MAX;
+    if (mutation == 3u) candidate.commands[0].sourceIndex = 1u;
+    if (mutation == 4u) candidate.sources[0].commandCount = 2u;
+    if (mutation == 5u) candidate.dispositions[2].commandIndex = 1u;
+    check(validateRenderTapeIdentityV3Rows(candidate, events, records) != Status::Valid,
+          "actual command duplicate/gap/kind/source/extent/reference forgery rejects");
+  }
+  auto opcodeMismatch = records;
+  opcodeMismatch[2].recordType = D9C_COMMAND_RECORD_CLEAR;
+  check(validateRenderTapeIdentityV3Rows(identity, events, opcodeMismatch) != Status::Valid,
+        "canonical GPU opcode must match stable actual command kind");
+  auto reversed = identity;
+  reversed.sources[0].commandCount = 2u;
+  reversed.commands = {drawCommand(0u, 0u), drawCommand(0u, 1u)};
+  reversed.dispositions[0].commandIndex = 1u;
+  reversed.dispositions[2].firstSubdraw = 0u;
+  check(validateRenderTapeIdentityV3Rows(reversed, events, records) != Status::Valid,
+        "canonical contributors cannot reverse physical command order");
+  auto interleaved = identity;
+  interleaved.sources[0].commandCount = 2u;
+  auto clear = drawCommand(0u, 1u);
+  clear.kind = static_cast<std::uint32_t>(CommandKind::Clear);
+  clear.drawCount = 0u;
+  interleaved.commands.push_back(clear);
+  interleaved.dispositions[1] = gpu(2u, 1u, 1u);
+  interleaved.dispositions[1].subdrawCount = 0u;
+  auto clearRecords = records;
+  clearRecords[1].recordType = D9C_COMMAND_RECORD_CLEAR;
+  check(validateRenderTapeIdentityV3Rows(interleaved, events, clearRecords) != Status::Valid,
+        "DrawRun cannot straddle a distinct effectful physical command");
+  for (std::uint32_t flags : {1u, 2u}) {
+    auto straddled = identity;
+    auto query = end(flags == 1u ? Prefix::RealSource : Prefix::None);
+    query.recordIndex = 1u;
+    query.flags = flags;
+    straddled.coordinators = {query};
+    straddled.dispositions[1] = coordinator(2u, 1u);
+    auto queryRecords = records;
+    queryRecords[1] = queryFact(2u, 1u);
+    queryRecords[1].queryFlags = flags;
+    check(validateRenderTapeIdentityV3Rows(straddled, events, queryRecords) != Status::Valid,
+          "one actual DrawRun cannot span BEGIN or END even when control generates no command");
+  }
+}
+
+void coordinatorGeneratedCommands() {
+  const std::array events{RenderTapeIdentityV3EventFact{2u, 5u, 1u}};
+  constexpr auto submit = static_cast<std::uint32_t>(
+      dxmt9::core::metalqueue::SessionReleaseAction::SubmitSession);
+  const std::array records{RenderTapeIdentityV3RecordFact{
+      .eventOrdinal = 2u, .recordIndex = 0u,
+      .recordType = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+      .requiredReleaseAction = submit}};
+  RenderTapeIdentityV3View identity{};
+  identity.header = header();
+  identity.sources = {source(2u)};
+  RenderTapeIdentityV3Coordinator control{
+      .eventOrdinal = 2u, .rawOrdinal = 20u, .buildGeneration = 4u,
+      .dispatchEdge = 2u, .releaseOrdinal = 1u, .releaseGeneration = 2u,
+      .recordType = D9C_COMMAND_RECORD_UPDATE_TEXTURE, .releaseAction = submit};
+  identity.coordinators = {control};
+  RenderTapeIdentityV3Command generated{
+      .sourceIndex = 0u, .kind = static_cast<std::uint32_t>(CommandKind::SurfaceCopy),
+      .membership = static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::NoPassCommand),
+      .coordinatorIndex = 0u};
+  identity.commands = {generated, generated};
+  identity.commands[1].physicalCommandIndex = 1u;
+  identity.dispositions = {coordinator(2u, 0u)};
+  identity.settlements = {{2u, 20u, 4u, 6u, 1u}};
+  check(validateRenderTapeIdentityV3Rows(identity, events, records) == Status::Valid,
+        "coordinator-produced actual commands have one owner each and one source completion, not fake canonical GPU rows");
+  auto duplicate = identity;
+  duplicate.commands[1].physicalCommandIndex = 0u;
+  check(validateRenderTapeIdentityV3Rows(duplicate, events, records) != Status::Valid,
+        "generated command physical ownership cannot overlap");
+  auto missingOwner = identity;
+  missingOwner.commands[1].coordinatorIndex = kRenderTapeIdentityV3NoIndex;
+  check(validateRenderTapeIdentityV3Rows(missingOwner, events, records) != Status::Valid,
+        "unrepresented generated actual command cannot be silently covered by coordinator release");
+  auto autogen = identity;
+  autogen.commands[1].kind = static_cast<std::uint32_t>(CommandKind::GenerateMipmaps);
+  check(validateRenderTapeIdentityV3Rows(autogen, events, records) == Status::Valid,
+        "UpdateTexture optional autogen mipmap uses an evidenced generated command kind");
+  for (std::uint32_t record : {D9C_COMMAND_RECORD_QUERY_ISSUE,
+                              D9C_COMMAND_RECORD_READBACK,
+                              D9C_COMMAND_RECORD_UPDATE_TEXTURE})
+    for (std::uint32_t kind = 0u; kind <= 10u; ++kind) {
+      const bool expected = record == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
+          (kind == static_cast<std::uint32_t>(CommandKind::SurfaceCopy) ||
+           kind == static_cast<std::uint32_t>(CommandKind::GenerateMipmaps));
+      check(renderTapeIdentityV3CoordinatorCommandAdmitted(
+                record, static_cast<CommandKind>(kind)) == expected,
+            "generated command ownership is fail-closed to evidenced coordinator-kind mappings");
+      auto fabricated = identity;
+      fabricated.coordinators[0].recordType = record;
+      fabricated.commands[0].kind = kind;
+      fabricated.commands[0].drawCount = kind == static_cast<std::uint32_t>(CommandKind::DrawRun) ? 1u : 0u;
+      if (!expected)
+        check(validateRenderTapeIdentityV3Rows(fabricated, events, records) != Status::Valid,
+              "coordinator cannot invent DrawRun/Clear/unknown/standalone-readback physical commands");
+    }
+}
+
 void ledgerDeferredAndFailureTraces() {
   const RenderTapeIdentityV3Limits limits{
-      .maxSources = 1u, .maxInitializers = 2u, .maxDispositions = 8u,
+      .maxSources = 1u, .maxInitializers = 2u, .maxCommands = 8u, .maxDispositions = 8u,
       .maxCoordinators = 2u, .maxSettlements = 2u};
   RenderTapeIdentityV3Ledger ledger;
   check(ledger.begin(header(), limits), "bounded ledger arms");
@@ -457,6 +615,35 @@ void ledgerDeferredAndFailureTraces() {
             !capacity.snapshot(kKey, snapshot), "bounded capacity rejects capture, never partial coverage");
 }
 
+void ledgerActualCommandTraces() {
+  const RenderTapeIdentityV3Limits limits{
+      .maxSources = 1u, .maxInitializers = 0u, .maxCommands = 1u,
+      .maxDispositions = 3u, .maxCoordinators = 0u, .maxSettlements = 1u};
+  RenderTapeIdentityV3Ledger ledger;
+  auto published = source(1u);
+  published.submissionEdge = published.completionEdge = published.completedSequence = 0u;
+  check(ledger.begin(header(), limits) && ledger.publishSource(kKey, published, kWriter) &&
+            ledger.appendCommand(kKey, drawCommand(0u, 0u, 2u)) &&
+            ledger.appendDisposition(kKey, gpu(2u, 0u, 0u, 0u), D9C_COMMAND_RECORD_DRAW_PRIMITIVE) &&
+            ledger.appendDisposition(kKey, state(2u, 1u), D9C_COMMAND_RECORD_SET_VS_CONST_F) &&
+            ledger.appendDisposition(kKey, gpu(2u, 2u, 0u, 1u), D9C_COMMAND_RECORD_DRAW_PRIMITIVE) &&
+            ledger.settleReplay(kKey, {2u, 20u, 4u, 0u, 3u}) &&
+            ledger.submitSource(kKey, 0u) && ledger.completeSource(kKey, 0u, 11u),
+        "cold bounded ledger records two canonical draw slices with one actual command/source completion");
+  RenderTapeIdentityV3View snapshot;
+  const std::array events{RenderTapeIdentityV3EventFact{2u, 5u, 3u}};
+  const std::array records{
+      RenderTapeIdentityV3RecordFact{2u, 0u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE},
+      RenderTapeIdentityV3RecordFact{2u, 1u, D9C_COMMAND_RECORD_SET_VS_CONST_F},
+      RenderTapeIdentityV3RecordFact{2u, 2u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE}};
+  check(ledger.snapshot(kKey, snapshot) && snapshot.commands.size() == 1u &&
+            validateRenderTapeIdentityV3Rows(snapshot, events, records) == Status::Valid,
+        "ledger snapshot owns command rows and passes exact final conservation validator");
+  check(!ledger.appendCommand(kKey, drawCommand(0u, 1u)) && ledger.failed() &&
+            !ledger.snapshot(kKey, snapshot),
+        "actual command capacity/extent overrun fails sticky without partial usable capture");
+}
+
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
@@ -513,7 +700,17 @@ std::vector<std::byte> bootstrap() {
   return oneRecord(D9C_COMMAND_RECORD_APPLY_STATE, bytes);
 }
 
-void serializationAndV2Isolation() {
+void writeFixtureFile(const std::filesystem::path& path,
+                      std::span<const std::byte> bytes) {
+  std::ofstream stream(path, std::ios::binary);
+  check(static_cast<bool>(stream), "inspection fixture opens a new artifact");
+  stream.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  stream.close();
+  check(static_cast<bool>(stream), "inspection fixture writes complete validated bytes");
+}
+
+void serializationAndV2Isolation(const std::filesystem::path& fixtureDirectory) {
   RenderTapeBuilder builder;
   builder.appendBootstrapState(bootstrap());
   const D9CWireObjectIdentity output{D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 51u};
@@ -543,13 +740,16 @@ void serializationAndV2Isolation() {
   check(tapeValidation.valid(), "wire fixture uses production full-tape validation");
   RenderTapeIdentityV3View identity;
   identity.header = header();
+  identity.header.frameId = 9007199254740993ull;
   identity.header.presentOrdinal = 3u;
   identity.sources = {source(1u)};
+  identity.sources[0].sourceOrdinal = 9007199254740995ull;
   identity.sources[0].cutEventOrdinal = 3u;
+  identity.commands = {{.sourceIndex = 0u,
+      .kind = static_cast<std::uint32_t>(CommandKind::Present),
+      .membership = static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::NoPassCommand)}};
   auto presentIdentity = gpu(3u, 0u, 0u);
-  presentIdentity.logicalPassId = 0u;
-  presentIdentity.membership = static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::NoPassCommand);
-  presentIdentity.dagPassIndex = UINT32_MAX;
+  presentIdentity.subdrawCount = 0u;
   identity.dispositions = {presentIdentity};
   identity.settlements = {{3u, 20u, 4u, 6u, 1u}};
   Status status{};
@@ -557,9 +757,11 @@ void serializationAndV2Isolation() {
   check(status == Status::Valid && !bytes.empty(), "v3 builder authenticates actual tape and bounded row grammar");
   RenderTapeIdentityV3View imported;
   check(validateRenderTapeIdentityV3(tape, {}, bytes, &imported) == Status::Valid &&
-            imported.sources.size() == 1u && imported.sources[0].seqId == 11u,
+            imported.sources.size() == 1u && imported.sources[0].seqId == 11u &&
+            imported.commands.size() == 1u && imported.commands[0].kind ==
+                static_cast<std::uint32_t>(CommandKind::Present),
         "versioned little-endian identity round trips without pointers");
-  for (std::uint32_t mutation = 0u; mutation < 4u; ++mutation) {
+  for (std::uint32_t mutation = 0u; mutation < 6u; ++mutation) {
     auto corrupt = bytes;
     RenderTapeIdentityV3Header h{};
     std::memcpy(&h, corrupt.data(), sizeof(h));
@@ -567,6 +769,8 @@ void serializationAndV2Isolation() {
     if (mutation == 1u) h.initializers.count = UINT32_MAX;
     if (mutation == 2u) h.version = 2u;
     if (mutation == 3u) ++h.eventsBytes;
+    if (mutation == 4u) h.commands.entrySize = 0u;
+    if (mutation == 5u) h.reserved3 = 1u;
     std::memcpy(corrupt.data(), &h, sizeof(h));
     check(validateRenderTapeIdentityV3(tape, {}, corrupt, &imported) != Status::Valid &&
               imported.sources.empty(), "corrupt offset/count/version/digest context exposes no partial view");
@@ -584,18 +788,35 @@ void serializationAndV2Isolation() {
   check(!validateRenderTapeIdentity(tape, {}, bytes).valid() &&
             validateRenderTapeIdentityV3(tape, {}, v2) != Status::Valid,
         "neither reader silently reinterprets the other grammar");
+  if (!fixtureDirectory.empty()) {
+    check(std::filesystem::create_directories(fixtureDirectory),
+          "inspection fixture output directory must be new; existing artifacts are never overwritten");
+    writeFixtureFile(fixtureDirectory / "events.bin", tape);
+    writeFixtureFile(fixtureDirectory / "identity.bin", bytes);
+    writeFixtureFile(fixtureDirectory / "identity-v2.bin", v2);
+  }
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    std::filesystem::path fixtureDirectory;
+    if (argc != 1) {
+      check(argc == 3 && std::string_view(argv[1]) == "--write-inspection-fixture",
+            "usage: render-tape-identity-v3-spec [--write-inspection-fixture <new-directory>]");
+      fixtureDirectory = argv[2];
+      check(!fixtureDirectory.empty(), "inspection fixture path must not be empty");
+    }
     exhaustiveRegistryAndPublication();
     exhaustiveBindingAndCurrentIssue();
     exactPrefixAndCrossEventWriter();
     noPublicationAndIndependentInitializers();
+    sharedDrawRunAndPhysicalCoverage();
+    coordinatorGeneratedCommands();
     ledgerDeferredAndFailureTraces();
-    serializationAndV2Isolation();
+    ledgerActualCommandTraces();
+    serializationAndV2Isolation(fixtureDirectory);
     // Exclusions: live observer scheduling, queue races/liveness, source-plan
     // consumption, Metal/resource bytes, query result bytes, pixels and wild
     // qualification. The finite checker binds only these production predicates.

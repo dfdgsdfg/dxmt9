@@ -42,15 +42,35 @@ bool headerAdmitted(const RenderTapeIdentityV3Header& header) noexcept {
        (kind == Prefix::ArmBaseline && header.baselineSequence)) &&
       header.authority == static_cast<std::uint32_t>(
           RenderTapeIdentityAuthority::Capture) &&
-      !header.reserved0 && !header.reserved1 && !header.reserved2;
+      !header.reserved0 && !header.reserved1 && !header.reserved2 && !header.reserved3;
 }
 
 bool noGpuMembership(const RenderTapeIdentityV3Disposition& row) noexcept {
-  return row.sourceIndex == kRenderTapeIdentityV3NoIndex &&
-      !row.firstCommand && !row.commandCount && !row.logicalPassId &&
-      row.dagPassIndex == kRenderTapeIdentityV3NoIndex && !row.passKind &&
-      row.membership == static_cast<std::uint32_t>(
-          RenderTapeIdentityV3Membership::None);
+  return row.commandIndex == kRenderTapeIdentityV3NoIndex &&
+      !row.firstSubdraw && !row.subdrawCount;
+}
+
+bool commandShapeAdmitted(const RenderTapeIdentityV3Command& row,
+    std::span<const RenderTapeIdentityV3Source> sources,
+    std::span<const RenderTapeIdentityV3Coordinator> coordinators) noexcept {
+  const bool draw = row.kind == static_cast<std::uint32_t>(RenderTapeIdentityV3CommandKind::DrawRun);
+  if (row.sourceIndex >= sources.size() ||
+      row.physicalCommandIndex >= sources[row.sourceIndex].commandCount ||
+      row.kind < static_cast<std::uint32_t>(RenderTapeIdentityV3CommandKind::DrawRun) ||
+      row.kind > static_cast<std::uint32_t>(RenderTapeIdentityV3CommandKind::Present) ||
+      draw != (row.drawCount != 0u) || row.drawCount > kRenderTapeIdentityV3MaxRows ||
+      row.reserved0 || row.reserved1 ||
+      (row.coordinatorIndex != kRenderTapeIdentityV3NoIndex && row.coordinatorIndex >= coordinators.size()))
+    return false;
+  if (row.coordinatorIndex != kRenderTapeIdentityV3NoIndex &&
+      !renderTapeIdentityV3CoordinatorCommandAdmitted(
+          coordinators[row.coordinatorIndex].recordType,
+          static_cast<RenderTapeIdentityV3CommandKind>(row.kind))) return false;
+  if (row.membership == static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::Pass))
+    return row.logicalPassId && row.dagPassIndex != kRenderTapeIdentityV3NoIndex && row.passKind <= 4u;
+  return !draw && row.membership == static_cast<std::uint32_t>(
+      RenderTapeIdentityV3Membership::NoPassCommand) && !row.logicalPassId &&
+      row.dagPassIndex == kRenderTapeIdentityV3NoIndex && !row.passKind;
 }
 
 bool prefixShapeAdmitted(const RenderTapeIdentityV3Header& header,
@@ -155,14 +175,8 @@ bool coordinatorShapeAdmitted(const RenderTapeIdentityV3Header& header,
       row.releaseWriter > static_cast<std::uint32_t>(
           core::metalqueue::SessionReleaseWriter::RetainQueryRange) ||
       row.observation > static_cast<std::uint32_t>(Observation::Completed) ||
-      row.reserved0 || row.reserved1 || row.reserved2 ||
+      row.reserved0 || row.reserved1 ||
       !prefixShapeAdmitted(header, row, sources, initializers)) return false;
-  if (!row.producedCommandCount) {
-    if (row.firstProducedCommand || row.producedSourceIndex != kRenderTapeIdentityV3NoIndex)
-      return false;
-  } else if (row.producedSourceIndex >= sources.size() ||
-      std::uint64_t{row.firstProducedCommand} + row.producedCommandCount >
-          sources[row.producedSourceIndex].commandCount) return false;
   if (row.recordType != D9C_COMMAND_RECORD_QUERY_ISSUE)
     return queryFieldsEmpty(row) && row.prefixKind == static_cast<std::uint32_t>(
         Prefix::None) && row.releaseWriter == static_cast<std::uint32_t>(
@@ -198,6 +212,8 @@ bool layout(RenderTapeIdentityV3Header& header,
                      sizeof(RenderTapeIdentityV3Source)) &&
       appendTable(header.initializers, size, identity.initializers.size(),
                   sizeof(RenderTapeIdentityV3Initializer)) &&
+      appendTable(header.commands, size, identity.commands.size(),
+                  sizeof(RenderTapeIdentityV3Command)) &&
       appendTable(header.dispositions, size, identity.dispositions.size(),
                   sizeof(RenderTapeIdentityV3Disposition)) &&
       appendTable(header.coordinators, size, identity.coordinators.size(),
@@ -341,6 +357,7 @@ Status validateRenderTapeIdentityV3Rows(
   if (!headerAdmitted(identity.header)) return Status::InvalidHeader;
   if (identity.sources.size() > kRenderTapeIdentityV3MaxRows ||
       identity.initializers.size() > kRenderTapeIdentityV3MaxRows ||
+      identity.commands.size() > kRenderTapeIdentityV3MaxRows ||
       identity.dispositions.size() > kRenderTapeIdentityV3MaxRows ||
       identity.coordinators.size() > kRenderTapeIdentityV3MaxRows ||
       identity.settlements.size() > kRenderTapeIdentityV3MaxRows ||
@@ -350,14 +367,13 @@ Status validateRenderTapeIdentityV3Rows(
     std::vector<Position> cuts;
     std::vector<std::uint64_t> edges{identity.header.baselineCompletionEdge};
     std::vector<std::uint64_t> commandTails(identity.sources.size(), 0u);
-    struct CommandWitness {
-      std::uint32_t source = 0u;
-      std::uint32_t first = 0u;
-      std::uint32_t count = 0u;
-      Position endPosition{};
-      std::uint32_t coordinator = kRenderTapeIdentityV3NoIndex;
+    struct CommandAnchors {
+      Position first{UINT64_MAX, UINT64_MAX};
+      Position last{};
+      bool covered = false;
     };
-    std::vector<CommandWitness> commands;
+    std::vector<CommandAnchors> commandAnchors(identity.commands.size());
+    std::vector<std::uint64_t> subdrawTails(identity.commands.size(), 0u);
     std::vector<bool> coordinatorUsed(identity.coordinators.size(), false);
     std::uint64_t priorSource = 0u;
     std::uint64_t priorSequence = identity.header.baselineCompletedSequence;
@@ -402,6 +418,35 @@ Status validateRenderTapeIdentityV3Rows(
       priorInitializerEdge = initializer.publicationEdge;
       priorInitializerCut = cut;
     }
+    std::uint32_t priorCommandSource = 0u;
+    bool haveCommand = false;
+    for (std::size_t index = 0u; index < identity.commands.size(); ++index) {
+      const auto& command = identity.commands[index];
+      if (!commandShapeAdmitted(command, identity.sources, identity.coordinators) ||
+          (haveCommand && command.sourceIndex < priorCommandSource) ||
+          command.physicalCommandIndex != commandTails[command.sourceIndex])
+        return Status::InvalidDisposition;
+      ++commandTails[command.sourceIndex];
+      haveCommand = true;
+      priorCommandSource = command.sourceIndex;
+      for (std::size_t prior = 0u; prior < index; ++prior) {
+        const auto& priorCommand = identity.commands[prior];
+        if (command.logicalPassId && priorCommand.logicalPassId == command.logicalPassId &&
+            (priorCommand.dagPassIndex != command.dagPassIndex ||
+             priorCommand.passKind != command.passKind)) return Status::InvalidDisposition;
+      }
+      if (command.coordinatorIndex != kRenderTapeIdentityV3NoIndex) {
+        const auto& owner = identity.coordinators[command.coordinatorIndex];
+        const Position start{owner.eventOrdinal, owner.recordIndex};
+        const Position end{owner.eventOrdinal, std::uint64_t{owner.recordIndex} + 1u};
+        if (cuts[command.sourceIndex] < end) return Status::InvalidCut;
+        commandAnchors[index] = {start, end, true};
+        subdrawTails[index] = command.drawCount;
+      }
+    }
+    for (std::size_t index = 0u; index < commandTails.size(); ++index)
+      if (commandTails[index] != identity.sources[index].commandCount)
+        return Status::InvalidDisposition;
 
     std::size_t recordCursor = 0u;
     std::size_t dispositionCursor = 0u;
@@ -420,32 +465,29 @@ Status validateRenderTapeIdentityV3Rows(
              identity.dispositions[dispositionCursor].eventOrdinal == event.ordinal) {
         const auto& row = identity.dispositions[dispositionCursor++];
         const auto end = std::uint64_t{row.firstRecord} + row.recordCount;
-        if (!row.recordCount || row.firstRecord != covered || end > event.recordCount)
+        if (!row.recordCount || row.firstRecord != covered || end > event.recordCount || row.reserved0)
           return Status::RecordCoverageMismatch;
         const auto kind = static_cast<Kind>(row.kind);
         if (kind == Kind::GpuCommand) {
-          if (row.sourceIndex >= identity.sources.size() || !row.commandCount ||
+          if (row.commandIndex >= identity.commands.size() ||
               row.coordinatorIndex != kRenderTapeIdentityV3NoIndex)
             return Status::InvalidDisposition;
-          const auto& source = identity.sources[row.sourceIndex];
-          const auto commandEnd = std::uint64_t{row.firstCommand} + row.commandCount;
-          if (row.firstCommand < commandTails[row.sourceIndex] || commandEnd > source.commandCount ||
-              cuts[row.sourceIndex] < Position{event.ordinal, end}) return Status::InvalidDisposition;
-          commandTails[row.sourceIndex] = commandEnd;
-          commands.push_back({row.sourceIndex, row.firstCommand, row.commandCount,
-                              {event.ordinal, end}, kRenderTapeIdentityV3NoIndex});
-          if (row.membership == static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::Pass)) {
-            if (!row.logicalPassId || row.dagPassIndex == kRenderTapeIdentityV3NoIndex || row.passKind > 4u)
-              return Status::InvalidDisposition;
-            for (std::size_t i = 0u; i + 1u < dispositionCursor; ++i) {
-              const auto& prior = identity.dispositions[i];
-              if (prior.logicalPassId == row.logicalPassId &&
-                  (prior.dagPassIndex != row.dagPassIndex || prior.passKind != row.passKind))
-                return Status::InvalidDisposition;
-            }
-          } else if (row.membership != static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::NoPassCommand) ||
-              row.logicalPassId || row.dagPassIndex != kRenderTapeIdentityV3NoIndex || row.passKind)
+          const auto& command = identity.commands[row.commandIndex];
+          auto& anchors = commandAnchors[row.commandIndex];
+          if (command.coordinatorIndex != kRenderTapeIdentityV3NoIndex ||
+              cuts[command.sourceIndex] < Position{event.ordinal, end})
             return Status::InvalidDisposition;
+          if (command.kind == static_cast<std::uint32_t>(RenderTapeIdentityV3CommandKind::DrawRun)) {
+            const auto subdrawEnd = std::uint64_t{row.firstSubdraw} + row.subdrawCount;
+            if (!row.subdrawCount || row.subdrawCount != row.recordCount ||
+                row.firstSubdraw != subdrawTails[row.commandIndex] || subdrawEnd > command.drawCount)
+              return Status::InvalidDisposition;
+            subdrawTails[row.commandIndex] = subdrawEnd;
+          } else if (row.firstSubdraw || row.subdrawCount || row.recordCount != 1u || anchors.covered)
+            return Status::InvalidDisposition;
+          anchors.first = std::min(anchors.first, Position{event.ordinal, row.firstRecord});
+          anchors.last = std::max(anchors.last, Position{event.ordinal, end});
+          anchors.covered = true;
         } else if (kind == Kind::StateOnly) {
           if (!noGpuMembership(row) || row.coordinatorIndex != kRenderTapeIdentityV3NoIndex)
             return Status::InvalidDisposition;
@@ -461,9 +503,9 @@ Status validateRenderTapeIdentityV3Rows(
           if (fact.eventOrdinal != event.ordinal || fact.recordIndex != index ||
               !renderTapeIdentityV3DispositionAdmitted(fact.recordType, kind))
             return Status::InvalidDisposition;
-          const auto* topology = recordTopology(fact.recordType);
-          if (kind == Kind::GpuCommand && topology->primitivePredicate &&
-              row.membership != static_cast<std::uint32_t>(RenderTapeIdentityV3Membership::Pass))
+          if (kind == Kind::GpuCommand &&
+              identity.commands[row.commandIndex].kind != static_cast<std::uint32_t>(
+                  renderTapeIdentityV3RecordCommandKind(fact.recordType)))
             return Status::InvalidDisposition;
           if (kind == Kind::Coordinator) {
             const auto& control = identity.coordinators[row.coordinatorIndex];
@@ -471,12 +513,6 @@ Status validateRenderTapeIdentityV3Rows(
                 control.eventOrdinal != event.ordinal || control.recordIndex != index ||
                 control.recordType != fact.recordType || control.releaseAction != fact.requiredReleaseAction)
               return Status::InvalidCoordinator;
-            if (control.producedCommandCount) {
-              if (cuts[control.producedSourceIndex] < Position{event.ordinal, index + 1u})
-                return Status::InvalidCut;
-              commands.push_back({control.producedSourceIndex, control.firstProducedCommand,
-                  control.producedCommandCount, {event.ordinal, index + 1u}, row.coordinatorIndex});
-            }
             if (fact.recordType == D9C_COMMAND_RECORD_QUERY_ISSUE &&
                 (control.flags != fact.queryFlags || control.queryType != fact.queryType ||
                  !renderTapeIdentityV3SameIdentity(control.queryIdentity, fact.queryIdentity) ||
@@ -519,19 +555,24 @@ Status validateRenderTapeIdentityV3Rows(
     if (settlementCursor != identity.settlements.size()) return Status::InvalidSettlement;
     if (!std::all_of(coordinatorUsed.begin(), coordinatorUsed.end(), [](bool value) { return value; }))
       return Status::InvalidCoordinator;
-    // Exact physical command witness coverage: canonical GPU records and
-    // explicitly authenticated coordinator-generated spans. Internal gaps
-    // are unsupported until an actual owner supplies their provenance.
-    std::sort(commands.begin(), commands.end(), [](const auto& left, const auto& right) {
-      return std::pair{left.source, left.first} < std::pair{right.source, right.first};
-    });
-    std::fill(commandTails.begin(), commandTails.end(), 0u);
-    for (const auto& command : commands) {
-      if (command.first != commandTails[command.source]) return Status::InvalidDisposition;
-      commandTails[command.source] += command.count;
+    // Physical commands are counted once; canonical DrawRun contributors
+    // partition subdraws even when state-only records separate them.
+    for (std::size_t index = 0u; index < identity.commands.size(); ++index)
+      if (!commandAnchors[index].covered || subdrawTails[index] != identity.commands[index].drawCount)
+        return Status::InvalidDisposition;
+    for (std::size_t index = 1u; index < identity.commands.size(); ++index)
+      if (commandAnchors[index - 1u].last > commandAnchors[index].first &&
+          (identity.commands[index].coordinatorIndex == kRenderTapeIdentityV3NoIndex ||
+           identity.commands[index - 1u].coordinatorIndex != identity.commands[index].coordinatorIndex))
+        return Status::InvalidDisposition;
+    for (std::size_t index = 0u; index < identity.commands.size(); ++index) {
+      if (identity.commands[index].coordinatorIndex != kRenderTapeIdentityV3NoIndex) continue;
+      for (const auto& control : identity.coordinators) {
+        const Position boundary{control.eventOrdinal, control.recordIndex};
+        if (commandAnchors[index].first < boundary && boundary < commandAnchors[index].last)
+          return Status::InvalidDisposition;
+      }
     }
-    for (std::size_t i = 0u; i < commandTails.size(); ++i)
-      if (commandTails[i] != identity.sources[i].commandCount) return Status::InvalidDisposition;
     for (std::size_t controlIndex = 0u; controlIndex < identity.coordinators.size(); ++controlIndex) {
       const auto& control = identity.coordinators[controlIndex];
       edges.push_back(control.dispatchEdge);
@@ -547,11 +588,14 @@ Status validateRenderTapeIdentityV3Rows(
         if (cuts[control.sourceIndex] <= endPosition && control.commandEnd != source.commandCount)
           return Status::InvalidPrefix;
         std::uint64_t exactEnd = 0u;
-        for (const auto& command : commands) {
-          if (command.source != control.sourceIndex) continue;
-          if (command.endPosition <= endPosition || command.coordinator == controlIndex) {
-            exactEnd = std::max(exactEnd, std::uint64_t{command.first} + command.count);
-          } else if (command.first < control.commandEnd) return Status::InvalidPrefix;
+        for (std::size_t commandIndex = 0u; commandIndex < identity.commands.size(); ++commandIndex) {
+          const auto& command = identity.commands[commandIndex];
+          const auto& anchors = commandAnchors[commandIndex];
+          if (command.sourceIndex != control.sourceIndex) continue;
+          if (anchors.last <= endPosition || command.coordinatorIndex == controlIndex) {
+            exactEnd = std::max(exactEnd, std::uint64_t{command.physicalCommandIndex} + 1u);
+          } else if (anchors.first < endPosition || command.physicalCommandIndex < control.commandEnd)
+            return Status::InvalidPrefix;
         }
         if (exactEnd != control.commandEnd) return Status::InvalidPrefix;
       }
@@ -584,6 +628,7 @@ Status validateRenderTapeIdentityV3(std::span<const std::byte> tape,
   std::uint64_t cursor = sizeof(header);
   if (!tableAdmitted(header.sources, cursor, sizeof(RenderTapeIdentityV3Source)) ||
       !tableAdmitted(header.initializers, cursor, sizeof(RenderTapeIdentityV3Initializer)) ||
+      !tableAdmitted(header.commands, cursor, sizeof(RenderTapeIdentityV3Command)) ||
       !tableAdmitted(header.dispositions, cursor, sizeof(RenderTapeIdentityV3Disposition)) ||
       !tableAdmitted(header.coordinators, cursor, sizeof(RenderTapeIdentityV3Coordinator)) ||
       !tableAdmitted(header.settlements, cursor, sizeof(RenderTapeIdentityV3ReplaySettlement)) ||
@@ -593,6 +638,7 @@ Status validateRenderTapeIdentityV3(std::span<const std::byte> tape,
   try {
     copyTable(identity.sources, sidecar, header.sources);
     copyTable(identity.initializers, sidecar, header.initializers);
+    copyTable(identity.commands, sidecar, header.commands);
     copyTable(identity.dispositions, sidecar, header.dispositions);
     copyTable(identity.coordinators, sidecar, header.coordinators);
     copyTable(identity.settlements, sidecar, header.settlements);
@@ -625,6 +671,7 @@ std::vector<std::byte> buildRenderTapeIdentityV3(std::span<const std::byte> tape
     std::memcpy(bytes.data(), &header, sizeof(header));
     storeTable(bytes, header.sources, identity.sources);
     storeTable(bytes, header.initializers, identity.initializers);
+    storeTable(bytes, header.commands, identity.commands);
     storeTable(bytes, header.dispositions, identity.dispositions);
     storeTable(bytes, header.coordinators, identity.coordinators);
     storeTable(bytes, header.settlements, identity.settlements);
@@ -642,6 +689,7 @@ bool RenderTapeIdentityV3Ledger::begin(RenderTapeIdentityV3Header header,
   if (active_ || failed_ || !headerAdmitted(header) ||
       limits.maxSources > kRenderTapeIdentityV3MaxRows ||
       limits.maxInitializers > kRenderTapeIdentityV3MaxRows ||
+      limits.maxCommands > kRenderTapeIdentityV3MaxRows ||
       limits.maxDispositions > kRenderTapeIdentityV3MaxRows ||
       limits.maxCoordinators > kRenderTapeIdentityV3MaxRows ||
       limits.maxSettlements > kRenderTapeIdentityV3MaxRows ||
@@ -650,6 +698,7 @@ bool RenderTapeIdentityV3Ledger::begin(RenderTapeIdentityV3Header header,
   try {
     identity_.sources.reserve(limits.maxSources);
     identity_.initializers.reserve(limits.maxInitializers);
+    identity_.commands.reserve(limits.maxCommands);
     identity_.dispositions.reserve(limits.maxDispositions);
     identity_.coordinators.reserve(limits.maxCoordinators);
     identity_.settlements.reserve(limits.maxSettlements);
@@ -716,11 +765,29 @@ bool RenderTapeIdentityV3Ledger::publishSource(RenderTapeIdentityV3CaptureKey ke
   return true;
 }
 
+bool RenderTapeIdentityV3Ledger::appendCommand(RenderTapeIdentityV3CaptureKey key,
+    RenderTapeIdentityV3Command command) noexcept {
+  if (!admit(key) || identity_.commands.size() >= limits_.maxCommands ||
+      !commandShapeAdmitted(command, identity_.sources, identity_.coordinators)) return reject();
+  std::uint64_t expected = 0u;
+  if (!identity_.commands.empty()) {
+    const auto& prior = identity_.commands.back();
+    if (command.sourceIndex < prior.sourceIndex) return reject();
+    if (command.sourceIndex == prior.sourceIndex)
+      expected = std::uint64_t{prior.physicalCommandIndex} + 1u;
+  }
+  if (command.physicalCommandIndex != expected) return reject();
+  try { identity_.commands.push_back(command); }
+  catch (...) { return reject(); }
+  return true;
+}
+
 bool RenderTapeIdentityV3Ledger::appendDisposition(RenderTapeIdentityV3CaptureKey key,
     RenderTapeIdentityV3Disposition row, std::uint32_t canonicalRecordType) noexcept {
   if (!admit(key) || identity_.dispositions.size() >= limits_.maxDispositions ||
       !row.eventOrdinal || !row.recordCount ||
       std::uint64_t{row.firstRecord} + row.recordCount > UINT32_MAX ||
+      row.reserved0 ||
       !renderTapeIdentityV3DispositionAdmitted(canonicalRecordType, static_cast<Kind>(row.kind)))
     return reject();
   if (!identity_.dispositions.empty()) {
@@ -730,7 +797,15 @@ bool RenderTapeIdentityV3Ledger::appendDisposition(RenderTapeIdentityV3CaptureKe
          row.firstRecord != std::uint64_t{prior.firstRecord} + prior.recordCount)) return reject();
   }
   if (row.kind == static_cast<std::uint32_t>(Kind::GpuCommand)) {
-    if (row.sourceIndex >= identity_.sources.size()) return reject();
+    if (row.commandIndex >= identity_.commands.size()) return reject();
+    const auto& command = identity_.commands[row.commandIndex];
+    if (command.coordinatorIndex != kRenderTapeIdentityV3NoIndex ||
+        command.kind != static_cast<std::uint32_t>(
+            renderTapeIdentityV3RecordCommandKind(canonicalRecordType))) return reject();
+    if (command.kind == static_cast<std::uint32_t>(RenderTapeIdentityV3CommandKind::DrawRun)) {
+      if (!row.subdrawCount || row.subdrawCount != row.recordCount ||
+          std::uint64_t{row.firstSubdraw} + row.subdrawCount > command.drawCount) return reject();
+    } else if (row.recordCount != 1u || row.firstSubdraw || row.subdrawCount) return reject();
   } else if (!noGpuMembership(row)) return reject();
   if (row.kind == static_cast<std::uint32_t>(Kind::Coordinator)) {
     if (row.recordCount != 1u || row.coordinatorIndex >= identity_.coordinators.size()) return reject();

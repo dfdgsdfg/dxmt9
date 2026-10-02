@@ -31,6 +31,12 @@ SCHEMA = "dxmt9.render_tape.bundle.v2"
 EVENTS_NAME = "events.bin"
 IDENTITY_NAME = "identity.bin"
 IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v2"
+IDENTITY_V3_SCHEMA = "dxmt9.render_tape.identity.v3"
+IDENTITY_SCHEMAS = {2: IDENTITY_SCHEMA, 3: IDENTITY_V3_SCHEMA}
+IDENTITY_MAGIC = 0x31444954544D5844
+# Only the schema-independent dispatch prefix is decoded here. The native
+# validator owns all table extents, record grammar and authenticated evidence.
+IDENTITY_DISPATCH_PREFIX = struct.Struct("<Q64xII")
 MAX_REPLAY_RUNS = 64
 PARALLEL_VERIFY_RUNS = 2
 PROVIDER_SCHEMA = "dxmt9.render_tape.provider_replay.v2"
@@ -70,6 +76,64 @@ CPU_GENERAL_INPUT_LIMITS = {
 }
 CPU_WINDOW_PLAN_SCHEMA = "dxmt9.render_tape.cpu_window_plan.v1"
 CPU_WINDOW_PAGE_SIZE = 4096
+
+
+def identity_binary_schema(identity: pathlib.Path) -> str:
+    try:
+        with identity.open("rb") as stream:
+            prefix = stream.read(IDENTITY_DISPATCH_PREFIX.size)
+            size = os.fstat(stream.fileno()).st_size
+    except OSError as error:
+        raise SystemExit(f"cannot read render tape identity {identity}: {error}") from error
+    if len(prefix) != IDENTITY_DISPATCH_PREFIX.size:
+        raise SystemExit("render tape identity common header is truncated")
+    magic, version, header_size = IDENTITY_DISPATCH_PREFIX.unpack(prefix)
+    if magic != IDENTITY_MAGIC:
+        raise SystemExit("render tape identity magic is invalid")
+    if version not in IDENTITY_SCHEMAS:
+        raise SystemExit(f"render tape identity version is unsupported: {version}")
+    if not IDENTITY_DISPATCH_PREFIX.size <= header_size <= size:
+        raise SystemExit("render tape identity declared header extent is invalid")
+    return IDENTITY_SCHEMAS[version]
+
+
+def require_execution_identity(identity: pathlib.Path) -> None:
+    if identity_binary_schema(identity) != IDENTITY_SCHEMA:
+        raise SystemExit(
+            "identity v3 is inspection-only; execution and policy transforms "
+            "require identity v2"
+        )
+
+
+def guard_execution_bundle_before_staging(bundle: pathlib.Path) -> None:
+    """Reject known incompatible identity inputs before execution staging.
+
+    This is a compatibility guard, not authentication. Missing/malformed
+    manifests and absent components remain owned by the normal staged loader.
+    A second complete validation of the owned copy is still required.
+    """
+    bundle_path = bundle.resolve()
+    identity = bundle_path / IDENTITY_NAME
+    if identity.is_file():
+        require_execution_identity(identity)
+    manifest_path = bundle_path / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(manifest, dict):
+        return
+    components = manifest.get("components")
+    if not isinstance(components, dict):
+        return
+    component = components.get("identity")
+    if not isinstance(component, dict):
+        return
+    if component.get("schema") != IDENTITY_SCHEMA:
+        raise SystemExit(
+            "execution and policy transforms require identity v2; "
+            "identity v3 is inspection-only"
+        )
 
 
 def digest(path: pathlib.Path) -> str:
@@ -304,6 +368,7 @@ def run_identity_validator(
     identity: pathlib.Path,
     blob_refs: list[str],
 ) -> dict[str, Any]:
+    schema = identity_binary_schema(identity)
     arguments = [str(validator), "identity", str(events), str(identity)]
     for reference in blob_refs:
         arguments.extend(("--verified-blob", reference))
@@ -312,9 +377,20 @@ def run_identity_validator(
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise SystemExit(f"render tape identity validation failed: {detail}")
     try:
-        return json.loads(completed.stdout)
+        result = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise SystemExit("render tape identity validator emitted invalid JSON") from error
+    if not isinstance(result, dict) or result.get("schema") != schema:
+        raise SystemExit("render tape identity validator schema does not match binary")
+    if result.get("valid") is not True:
+        raise SystemExit("render tape identity validator did not authenticate identity")
+    if schema == IDENTITY_V3_SCHEMA and (
+        result.get("inspection_only") is not True
+        or result.get("execution_supported") is not False
+        or result.get("production_qualified") is not False
+    ):
+        raise SystemExit("render tape identity v3 validator returned unsafe scope")
+    return result
 
 
 def run_policy_explore(
@@ -323,6 +399,7 @@ def run_policy_explore(
     identity: pathlib.Path,
     blob_refs: list[str],
 ) -> dict[str, Any]:
+    require_execution_identity(identity)
     arguments = [str(validator), "policy-explore", str(events), str(identity)]
     for reference in blob_refs:
         arguments.extend(("--verified-blob", reference))
@@ -376,6 +453,8 @@ def run_provider_replay(
     partition_mode: Optional[str] = None,
     identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
+    if identity is not None:
+        require_execution_identity(identity)
     arguments = [str(provider), "replay", str(events)]
     for path in blob_paths:
         arguments.extend(("--blob", str(path)))
@@ -660,8 +739,12 @@ def pack(args: argparse.Namespace) -> int:
     profile = validator_result.get("profile")
     if profile not in ("frame-tape", "sequence-tape"):
         raise SystemExit(f"validator returned unsupported render tape profile: {profile}")
+    identity_schema = None
     if identity_source is not None:
-        run_identity_validator(args.validator, events, identity_source, blob_refs)
+        identity_result = run_identity_validator(
+            args.validator, events, identity_source, blob_refs
+        )
+        identity_schema = identity_result["schema"]
     if output_source is not None:
         inspected = run_validator(args.validator, "inspect", events, blob_refs)
         if (
@@ -725,9 +808,18 @@ def pack(args: argparse.Namespace) -> int:
         if identity_source is not None:
             identity_target = staging / IDENTITY_NAME
             copy_flushed(identity_source, identity_target)
+            if identity_schema == IDENTITY_V3_SCHEMA:
+                # The inspection-only component is still authenticated: a
+                # producer changing either input during copy cannot publish a
+                # sidecar validated against different event bytes.
+                staged_identity = run_identity_validator(
+                    args.validator, destination, identity_target, blob_refs
+                )
+                if staged_identity["schema"] != identity_schema:
+                    raise SystemExit("render tape identity schema changed during packing")
             manifest["components"]["identity"] = {
                 "path": IDENTITY_NAME,
-                "schema": IDENTITY_SCHEMA,
+                "schema": identity_schema,
                 "bytes": identity_target.stat().st_size,
                 "sha256": digest(identity_target),
             }
@@ -758,6 +850,7 @@ def pack(args: argparse.Namespace) -> int:
 
 def load_bundle(
     bundle: pathlib.Path,
+    *, allow_identity_v3: bool = False,
 ) -> tuple[
     dict[str, Any], pathlib.Path, list[str], list[pathlib.Path],
     Optional[pathlib.Path], Optional[pathlib.Path]
@@ -912,8 +1005,14 @@ def load_bundle(
             raise SystemExit("render tape components.identity must be an object")
         if identity.get("path") != IDENTITY_NAME:
             raise SystemExit("render tape identity path must be canonical: identity.bin")
-        if identity.get("schema") != IDENTITY_SCHEMA:
+        schema = identity.get("schema")
+        if schema not in IDENTITY_SCHEMAS.values():
             raise SystemExit("render tape identity schema is unsupported")
+        if schema == IDENTITY_V3_SCHEMA and not allow_identity_v3:
+            raise SystemExit(
+                "identity v3 is inspection-only; execution and policy transforms "
+                "require identity v2"
+            )
         claimed_digest = identity.get("sha256")
         if (
             not isinstance(claimed_digest, str)
@@ -929,6 +1028,8 @@ def load_bundle(
             raise SystemExit("render tape identity size mismatch")
         if digest(identity_path) != claimed_digest:
             raise SystemExit("render tape identity digest mismatch")
+        if identity_binary_schema(identity_path) != schema:
+            raise SystemExit("render tape identity manifest schema does not match binary")
     allowed = {"manifest.json", EVENTS_NAME}
     if blobs_directory.exists():
         allowed.add("blobs")
@@ -1077,13 +1178,20 @@ def inspect_bundle_commands(
 
 
 def validate_or_inspect(args: argparse.Namespace) -> int:
-    manifest, events, blob_refs, _, identity, _source = load_bundle(args.bundle)
+    manifest, events, blob_refs, _, identity, _source = load_bundle(
+        args.bundle, allow_identity_v3=True
+    )
+    identity_result = None
     if identity is not None:
-        run_identity_validator(args.validator, events, identity, blob_refs)
+        identity_result = run_identity_validator(
+            args.validator, events, identity, blob_refs
+        )
     result = run_validator(args.validator, args.command, events, blob_refs)
     result["bundle_schema"] = manifest["schema"]
     result["events_sha256"] = manifest["components"]["events"]["sha256"]
     result["scope"] = manifest.get("scope", {})
+    if identity_result is not None and identity_result["schema"] == IDENTITY_V3_SCHEMA:
+        result["identity_validation"] = identity_result
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -1781,6 +1889,7 @@ def experiment_inline_observer_enabled(environment: dict[str, str]) -> bool:
 
 
 def fixed_input_experiment(args: argparse.Namespace) -> int:
+    guard_execution_bundle_before_staging(args.bundle)
     provider_environment = dict(os.environ)
     source_boundary_mode = getattr(args, "source_boundary_mode", "chunk")
     capture_source = source_boundary_mode == "capture-source"
@@ -3541,6 +3650,7 @@ def cpu_compare_accepts(*args: Any, **kwargs: Any) -> bool:
 
 
 def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
+    guard_execution_bundle_before_staging(args.bundle)
     provider_environment = dict(os.environ)
     validation_diagnostic = experiment_metal_validation_enabled(provider_environment)
     grammar = getattr(args, "grammar", "bounded")
@@ -3874,6 +3984,7 @@ def _cpu_compare_child(
 
 
 def cpu_compare(args: argparse.Namespace) -> int:
+    guard_execution_bundle_before_staging(args.bundle)
     grammar = getattr(args, "grammar", "bounded")
     source_projection = getattr(args, "source_projection", None)
     if source_projection is not None and (
@@ -4098,6 +4209,7 @@ def cpu_source_project(args: argparse.Namespace) -> int:
     This is an observation artifact, not authorization to defer completion.
     Future schedules must bind its input, executable and loaded-image evidence.
     """
+    guard_execution_bundle_before_staging(args.bundle)
     from render_tape_cpu_source_projection import validate_cpu_source_closures
 
     if not 2 <= args.repeat <= 32 or args.timeout_seconds <= 0:
@@ -4431,6 +4543,11 @@ def parallel_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cpu_policy_compare(args: argparse.Namespace) -> int:
+    guard_execution_bundle_before_staging(args.bundle)
+    return render_tape_cpu_policy.cpu_policy_compare(args)
+
+
 def run_native_materialize(
     validator: pathlib.Path,
     events: pathlib.Path,
@@ -4443,6 +4560,7 @@ def run_native_materialize(
     output_sha256: Optional[str] = None,
     output_identity: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
+    require_execution_identity(identity)
     arguments = [
         str(validator), "materialize", str(events), str(identity), str(output),
         "--command-event-ordinal", str(command_event_ordinal),
@@ -5046,7 +5164,7 @@ def parser() -> argparse.ArgumentParser:
     policy_compare_parser.add_argument("--gpu-reset", choices=("cold-device", "warm-device"),
                                        default="cold-device",
                                        help="explicit reset policy for GPU qualification children")
-    policy_compare_parser.set_defaults(function=render_tape_cpu_policy.cpu_policy_compare)
+    policy_compare_parser.set_defaults(function=cpu_policy_compare)
     compare_parser = subparsers.add_parser(
         "cpu-compare",
         help="compare compatibility and production-slot CPU Tape replays",

@@ -34,6 +34,7 @@ dxmt9_frontend_provider_srcs = files(
   'device_c_render_tape_identity.cpp',
   'device_c_render_tape_identity_v3.cpp',
   'device_c_render_tape_source_plan.cpp',
+  'device_c_render_tape_source_plan_v3.cpp',
   'device_c_render_tape_origin_locator.cpp',
   'device_c_render_tape_present_capture.cpp',
   'device_c_render_tape_projection.cpp',

@@ -423,6 +423,7 @@ foreach spec : [
   ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],
   ['render-tape-source-plan', 'render_tape_source_plan_spec.cpp'],
+  ['render-tape-source-plan-v3', 'render_tape_source_plan_v3_spec.cpp'],
 ]
   sources = [spec[1]]
   if spec[0] == 'render-tape-capture'
@@ -454,6 +455,8 @@ foreach spec : [
     render_tape_fixture_spec = target
   elif spec[0] == 'render-tape-capture'
     render_tape_capture_fixture_spec = target
+  elif spec[0] == 'render-tape-identity-v3'
+    render_tape_identity_v3_fixture_spec = target
   elif spec[0] == 'render-tape-projection'
     render_tape_projection_fixture_spec = target
   elif spec[0] == 'render-tape-provider'
@@ -572,6 +575,17 @@ test('dxmt9-render-tape-cli-spec', python3,
        join_paths(meson.project_source_root(),
                   'scripts/check/test_render_tape_cli.py'),
        render_tape_fixture_spec,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
+     ],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-identity-v3-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_identity_v3_cli.py'),
+       render_tape_identity_v3_fixture_spec,
        dxmt9_render_tape_tool,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
