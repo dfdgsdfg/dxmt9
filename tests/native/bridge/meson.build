@@ -418,6 +418,7 @@ foreach spec : [
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
+  ['render-tape-identity-v3', 'render_tape_identity_v3_spec.cpp'],
   ['render-tape-volume-layout', 'render_tape_volume_layout_spec.cpp'],
   ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],

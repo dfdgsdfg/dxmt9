@@ -654,6 +654,14 @@ abort/rearm and allocation failures. Boundary-only ownership accounting must
 distinguish logical bytes from unique retained backing allocations; unchanged
 budget workload capture remains required to claim practical memory benefit.
 
+GPU checkpoint bytes and the durable CPU mutation base are distinct authorities.
+A successful GPU readback must not overwrite the CPU base merely to reuse its
+allocation. In particular, a managed texture may retain CPU version A while a
+GPU surface operation produces B; a later partial managed unlock can upload the
+whole CPU level A-plus-patch. Substituting B as the CPU base would reconstruct
+different bytes. Storage optimizations must preserve both required versions and
+their authority, not silently turn supported partial updates into unknown seeds.
+
 The capture owner must also enforce an overflow-safe total owned-blob byte
 budget before hashing or copying a new blob. The capture-only production
 default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`
@@ -1162,6 +1170,48 @@ bytes must not be reinterpreted as current identity. The v2 EventSerial
 one-source-per-event compatibility lane remains valid and reachable, and is the
 required complete-event fallback when v2 SegmentSerial cannot be authenticated
 or proved before effects. v1 is never a fallback.
+
+**R-HARN-REPLAY-7.26** Coordinator-capable capture identity must use an
+explicitly versioned grammar; existing v2 bytes retain their original meaning.
+Every canonical record must have exactly one authenticated disposition:
+GPU-command provenance, state-only replay, or coordinator execution. Actual
+published sources are unique rows referenced by provenance, not duplicated
+per event. A writer spanning events may reference the same actual source.
+Coordinator/state-only records may settle replay without creating a source or
+pass. Such settlement must not imply submission or GPU completion. Source
+rows and completion evidence must originate at actual successful publication
+and completion edges; capture must not introduce extra flushes or publications
+to satisfy its grammar. Capacity, cancellation or stale provenance failures
+must reject the capture, not synthesize coverage or replay work again.
+
+**R-HARN-REPLAY-7.27** Query coordinator provenance must bind the capture
+epoch, event/record, raw replay ordinal, wire identity/generation, issue cycle,
+flags and actual dispatch outcome. A deferred END has an explicit Unbound
+prefix until its generation-qualified marker binds at successful publication.
+Zero sequence is not completed or an implicit empty prefix. An END with no
+new publication may reference an authenticated existing source or arm-baseline
+prefix; a zero-work baseline requires its own explicit authenticated kind and
+must not be inferred from sequence zero. BEGIN need not create any prefix.
+Pending observations may precede binding; Ready/Completed require current-issue
+publication and completion
+evidence. The exact END command cursor must be retained at dispatch and checked
+against ordered provenance; merely bounding it by final source size is
+insufficient. Younger commands must not expand the END's logical prefix.
+The initializer/upload dependency has independent publication and completion
+evidence. An empty END may publish a new initializer prefix while retaining an
+already-completed render sequence; render completion alone must not admit
+Ready. Post-arm initializer work must not be treated as baseline-completed or
+represented by a fabricated render source.
+
+**R-HARN-REPLAY-7.28** Coordinator-capable source-policy authentication must
+bind immutable events, the versioned identity sidecar, actual publication cuts,
+record dispositions, coordinator positions and prefix dependencies. CPU and
+Metal consumers must validate the same plan before effects. Publication cuts
+must follow authenticated original boundaries, not event count or an invented
+one-source-per-control convention. Bounded model-code tests must cover empty
+END, Draw/END/younger Draw, deferred binding, reissue/reset, cross-event writers,
+stale generations, capacity failure and exactly-once settlement. These tests
+do not replace original query-result and GPU-byte qualification.
 
 ## 8. Fixed-Input Policy Experiment Loop
 

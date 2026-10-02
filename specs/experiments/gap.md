@@ -413,6 +413,27 @@ Managed pool/usage and payload extent alone likewise cannot authorize skipping
 an arm readback: GPU-side writes can leave PE durable contents stale. Any
 snapshot storage reuse must preserve actual GPU-byte authentication and failure
 atomicity, rather than substituting the CPU shadow for the checkpoint.
+Destructive durable-backing reuse is not adopted: managed CPU A followed by
+GPU StretchRect B and a partial unlock uploads the whole core CPU A-plus-patch,
+not B-plus-patch. `core_surface.cpp` / StretchRect and `core_texture.cpp` /
+unlock demonstrate why retaining both authority versions is necessary. Marking
+the CPU seed unknown would instead lose existing partial-mutation coverage.
+R-HARN-REPLAY-7.26–7.28 now specify coordinator-capable identity v3. Separate
+`device_c_render_tape_identity_v3.{hpp,cpp}` implements bounded POD tables,
+opcode-qualified exact record/command coverage, no-publication replay settlement,
+source and independent initializer lifecycles, exact END cursor/prefix checks,
+and a cold capture ledger. V2 bytes/readers are unchanged; the shared wire
+version/header-size prefix is pinned. Native full build and nine focused
+Tape/capture/source-plan/projection/provider/publication/EVENT gates pass.
+The new native test executes 18,965 checks, including stale writer/issue,
+cross-event writer, future-source empty END, independent upload readiness,
+younger-upload rejection, bounded failure and cross-version wire round-trip.
+This binds pure predicates and finite transitions, not live scheduling or GPU
+bytes. Actual publication/query observers, every historical poll observation,
+PE bridge/publication, versioned source-plan/digest and CPU/Metal harness driver
+integration remain incomplete; no v3 production capture or policy result is
+claimed. In particular, the v2 replay driver's per-range forced publication
+and CPU event-entry empty-writer assumption cannot simply be reused for v3.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

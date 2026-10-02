@@ -1053,6 +1053,30 @@ capturing process.
 
 #### Authoritative identity component
 
+The coordinator-capable extension (R-HARN-REPLAY-7.26–7.28) uses identity v3
+without reinterpreting v2. Its cold Unix capture owner separates unique actual
+source publications from event-local record dispositions and replay settlements.
+Publication observers copy source/pass values before Ready visibility or reclaim;
+replay observers bind record anchors to these values even when one writer spans
+events. CPU/state-only and query-coordinator dispositions carry no invented
+source or pass. The source table alone owns exactly-once completion evidence.
+
+A query association retains a generation-qualified END receipt, keyed by wire
+identity and issue cycle, until the actual publication edge binds its marker.
+Unbound, authenticated arm-baseline prefix and actual-source prefix are distinct
+values. Coordinator dispatch, publication, submission and GPU completion are
+separate transitions. Pending-before-bind remains representable; a stale or
+capacity-failed association fails the capture rather than forcing a flush.
+Serialization emits only bounded POD values, never retained receipt pointers.
+Initializer/upload prefixes have their own bounded publication/completion
+evidence, separate from render source completion: an empty END can submit new
+upload work while referencing an already-completed render source. Query readiness
+joins both dependencies, including independent arm-baseline completion values.
+The shared source-plan validator/digest must include disposition coverage and
+prefix dependencies before either CPU or Metal replay changes state. Runtime,
+bridge and harness integration evidence is tracked in the owning gap document;
+the v3 contract does not itself promote or relax existing v2 readers.
+
 `identity.bin` is a cold, fixed-layout, little-endian sidecar. Version 1 used
 schema `dxmt9.render_tape.identity.v1` and one source entry per canonical
 `CommandChunk` event; it is Retired, and the current reader rejects rather than
