@@ -106,6 +106,8 @@ RenderTapeExpectedContentContract expectedContentForTexture(
   RenderTapeTextureDescriptorV2 texture{};
   if (!renderTapeLoadTextureDescriptorV2(descriptor, texture))
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
+  if (renderTapeNullRtDescriptorOnly(D9C_CHUNK_HANDLE_KIND_TEXTURE, descriptor))
+    return {};
   if (texture.initialContentDisposition != static_cast<std::uint32_t>(
           RenderTapeInitialContentDisposition::CompleteSeed))
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
@@ -866,6 +868,7 @@ RenderTapeBlockMutationStatus writeMutationPlan(
   case RenderTapeShadowWriteStatus::IncompleteContent: return RenderTapeBlockMutationStatus::IncompleteSeed;
   case RenderTapeShadowWriteStatus::InvalidInput: return RenderTapeBlockMutationStatus::InvalidLayout;
   case RenderTapeShadowWriteStatus::AllocationFailed: return RenderTapeBlockMutationStatus::AllocationFailed;
+  case RenderTapeShadowWriteStatus::IoFailed: return RenderTapeBlockMutationStatus::IoFailed;
   }
   return RenderTapeBlockMutationStatus::InvalidLayout;
 }
@@ -1139,9 +1142,16 @@ bool writeRenderTapeLinearRows(std::span<const std::byte> tightBytes,
 bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
                                       void* bits, std::int32_t pitch,
                                       const D9CSurfaceDesc& surface) noexcept {
+  const bool rgba16Float =
+      renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface);
+  const bool r32Float =
+      renderTapeArmColorSnapshotR32FloatTextureSupported(surface);
   RenderTapeColorSnapshotLayout snapshot{};
-  if (!renderTapeDeriveColorSnapshotLayout(surface, snapshot) ||
-      snapshot.encodingVersion != D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 ||
+  if ((!rgba16Float && !r32Float) ||
+      !renderTapeDeriveColorSnapshotLayout(surface, snapshot) ||
+      snapshot.encodingVersion != (rgba16Float
+          ? D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2
+          : D9C_RENDER_TAPE_COLOR_ENCODING_TIGHT_V1) ||
       pitch <= 0 || static_cast<std::uint32_t>(pitch) < snapshot.pitch ||
       tightBytes.size() != snapshot.byteCount)
     return false;
@@ -1152,7 +1162,7 @@ bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
       destinationBytes > std::numeric_limits<std::size_t>::max())
     return false;
   const RenderTapeLinearLockLayout layout{
-      .bytesPerPixel = 8u,
+      .bytesPerPixel = rgba16Float ? 8u : 4u,
       .fullRowBytes = snapshot.pitch,
       .fullRows = surface.height,
       .rowBytes = snapshot.pitch,

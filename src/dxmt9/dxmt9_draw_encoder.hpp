@@ -46,6 +46,18 @@ namespace encoders {
 
 struct LateRenderPassStoreState;
 
+// Recorder-only accepted slice observations. Uploads are candidates, not proof
+// that later expansion or staging selected them for an issued draw. Reuse
+// identifies an earlier staging receipt and carries no newly uploaded bytes.
+enum class EncodeDrawBufferObservationKind : std::uint8_t {
+  TransientVertexUpload,
+  TransientIndexUpload,
+  StagedVertexUpload,
+  StagedIndexUpload,
+  StagedVertexReuse,
+  StagedIndexReuse,
+};
+
 // Optional recorder seam for tests that need to observe the final draw-issue
 // commands after encodeDraw has selected UP vs bound resources and built the
 // per-draw volatile constants. Production leaves this null.
@@ -67,8 +79,48 @@ struct EncodeDrawRecorder {
   WMT::SamplerState fragmentSamplerState{};
   WMT::RenderCommandEncoder renderCommandEncoder{};
 
+  // Numeric source/draw join only; no source pointer or call-local state is
+  // retained by the encoder. A collector closes the prior draw at the next
+  // beginDraw or existing source-fragment epilogue, including early skips.
+  void (*beginDraw)(void* userdata,
+                     std::uint64_t seqId,
+                     std::uint32_t commandIndex,
+                     std::uint64_t commandDrawIndex) noexcept = nullptr;
+  // Synchronous source-address metadata after the caller's effective binding
+  // override and the encoder's actual captured-snapshot selection. References
+  // and pointers must not be retained; copying numeric/POD facts transfers no
+  // source ownership, byte-read authority, or successful route/issue proof.
+  void (*observeDrawBindingContext)(
+      void* userdata,
+      const core::FlatDrawStateRecord& effectiveHot,
+      const core::DrawShaderLayoutContext& effectiveLayout,
+      const core::DrawParam& effectiveParam,
+      const core::DrawBufferBindingSnapshot* selectedStream0Snapshot,
+      const core::DrawBufferBindingSnapshot* selectedIndexSnapshot) noexcept = nullptr;
+  // Input bytes are a synchronous borrow and must not be retained. The reason
+  // is the corresponding ActiveEncoderBreakdown transient vertex/index source
+  // enum cast to u8. Ordinary uploads have sourceHandle=0; staging carries the
+  // logical source handle. Staging reuse has an empty uploadBytes span and does
+  // not reread mutable source bytes. Final binds/issues establish consumption;
+  // this receipt alone proves no future bytes, GPU execution, or pixels.
+  void (*observeBufferSlice)(void* userdata,
+                              EncodeDrawBufferObservationKind kind,
+                              std::uint8_t reason,
+                              std::uint64_t sourceHandle,
+                              std::span<const std::uint8_t> uploadBytes,
+                              WMT::Buffer acceptedBuffer,
+                              std::uint64_t acceptedOffset,
+                              std::uint64_t acceptedSize) noexcept = nullptr;
+
   // Command-level integration hooks. Production leaves the recorder null;
   // these callbacks must not retain any call-local source span.
+  // The actual options identity is borrowed once per real source fragment,
+  // including continuations. This does not open a render encoder or transfer
+  // source-storage/lifetime authority; the original preamble remains first-only.
+  void (*observeSourceBindingContext)(
+      void* userdata,
+      const core::CpuReadyTape::SourceRef& source,
+      std::uint64_t seqId) noexcept = nullptr;
   void (*beginSourceFragmentPreamble)(void* userdata,
                                       std::uint64_t seqId) = nullptr;
   void (*beginTransactionPreamble)(void* userdata) = nullptr;

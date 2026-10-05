@@ -79,6 +79,8 @@ const char* captureMutationExceptionKind() noexcept {
     return "length_error";
   } catch (const std::invalid_argument&) {
     return "invalid_argument";
+  } catch (const RenderTapePayloadReadError&) {
+    return "scratch_io";
   } catch (const std::exception&) {
     return "std_exception";
   } catch (...) {
@@ -123,12 +125,19 @@ RenderTapeCaptureSession::RenderTapeCaptureSession(
     bool enabled, RenderTapeCaptureLimits limits, std::uint32_t profile)
     : enabled_(enabled), limits_(limits),
       state_(RenderTapeCaptureState::Disabled), builder_(profile) {
+  limits_.maxEvents = std::min(limits_.maxEvents, kRenderTapeHardMaxEvents);
+  limits_.maxBlobEntries = std::min(limits_.maxBlobEntries, kRenderTapeHardMaxBlobEntries);
   limits_.maxBlobBytes =
       std::min(limits_.maxBlobBytes, kRenderTapeHardMaxBlobBytes);
+  if (enabled_) payloadArena_ = std::make_shared<RenderTapeScratchArena>();
 }
 
 RenderTapeDigest RenderTapeCaptureSession::sha256(
     std::span<const std::byte> bytes) {
+  return sha256(RenderTapeByteView(bytes));
+}
+
+RenderTapeDigest RenderTapeCaptureSession::sha256(RenderTapeByteView bytes) {
   std::array<std::uint32_t, 8> state = {0x6a09e667u, 0xbb67ae85u,
                                         0x3c6ef372u, 0xa54ff53au,
                                         0x510e527fu, 0x9b05688cu,
@@ -173,16 +182,26 @@ RenderTapeDigest RenderTapeCaptureSession::sha256(
       state[i] += working[i];
     }
   };
-  // Input blocks are borrowed only for this call. Only the final one or two
-  // padded blocks need scratch; never allocate another whole captured blob.
+  // Borrow vector inputs directly; scratch inputs use one bounded transient
+  // window. Neither path materializes another complete captured version.
   const std::size_t fullBytes = bytes.size() - bytes.size() % 64u;
-  for (std::size_t offset = 0u; offset < fullBytes; offset += 64u) {
-    compress(std::span<const std::byte, 64u>(bytes.data() + offset, 64u));
+  if (bytes.data()) {
+    for (std::size_t offset = 0u; offset < fullBytes; offset += 64u)
+      compress(std::span<const std::byte, 64u>(bytes.data() + offset, 64u));
+  } else {
+    std::array<std::byte, kRenderTapePayloadWindowBytes> window{};
+    for (std::size_t offset = 0u; offset < fullBytes;) {
+      const auto count = std::min(window.size(), fullBytes - offset);
+      if (!bytes.readAt(offset, std::span(window).first(count))) throw RenderTapePayloadReadError();
+      for (std::size_t at = 0u; at < count; at += 64u)
+        compress(std::span<const std::byte, 64u>(window.data() + at, 64u));
+      offset += count;
+    }
   }
   std::array<std::byte, 128u> tail{};
   const std::size_t remaining = bytes.size() - fullBytes;
-  if (remaining != 0u)
-    std::memcpy(tail.data(), bytes.data() + fullBytes, remaining);
+  if (remaining != 0u && !bytes.readAt(fullBytes, std::span(tail).first(remaining)))
+    throw RenderTapePayloadReadError();
   tail[remaining] = std::byte{0x80};
   const std::size_t tailBytes = remaining < 56u ? 64u : 128u;
   for (unsigned i = 0u; i < 8u; ++i) {
@@ -251,6 +270,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     mutationFailure_ = {};
     publishedBlobs_.clear();
     publicationBundle_ = {};
+    identityV4ValidationStatus_ = RenderTapeIdentityV4Status::InvalidHeader;
+    topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::InvalidHeader;
     objects_.clear();
     sealedArtifact_.clear();
     eventCount_ = 0u;
@@ -358,9 +379,22 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
         fail("ambiguous_blob_storage");
         return RenderTapeCaptureStatus::InvalidInput;
       }
+      if (blob.retainedLease.valid()) {
+        context.phase = "blob_lease_validation";
+        if (blob.immutable.hasBacking() || !transferredBlobs ||
+            blob.retainedLease.kind() != RenderTapeSnapshotBudgetKind::Retained ||
+            blob.retainedLease.resourceBytes() != bytes.size() ||
+            blob.retainedLease.chargedBytes() != bytes.size() ||
+            !blob.retainedLease.boundPayloadMatches(blob.bytes.data(), bytes.size())) {
+          fail(!transferredBlobs && !blob.immutable.hasBacking()
+              ? "borrowed_retained_blob" : "invalid_retained_lease");
+          return RenderTapeCaptureStatus::InvalidInput;
+        }
+      }
+      context.phase = "blob_deduplicate";
       const bool duplicate = std::any_of(
           owned.begin(), owned.end(), [&](const auto& published) {
-            return std::equal(published.bytes.begin(), published.bytes.end(), bytes.begin(), bytes.end());
+            return published.bytes.readBytes().equals(bytes);
           });
       if (duplicate) {
         continue;
@@ -390,7 +424,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
         static_assert(std::is_nothrow_move_constructible_v<RenderTapePublishedBlob>);
         context.phase = "owned_blob_move";
         owned.push_back(RenderTapePublishedBlob{
-            .digest = digest, .bytes = std::move((*transferredBlobs)[index].bytes)});
+            .digest = digest, .bytes = RenderTapeImmutablePayload(
+                std::move((*transferredBlobs)[index].bytes), blob.retainedLease)});
       } else {
         context.phase = "owned_blob_copy";
         owned.push_back(RenderTapePublishedBlob{.digest = digest,
@@ -403,6 +438,9 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
     return RenderTapeCaptureStatus::CapacityExceeded;
   } catch (const std::length_error&) {
     fail("exception", "length_error");
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  } catch (const RenderTapePayloadReadError&) {
+    fail("exception", "scratch_io");
     return RenderTapeCaptureStatus::CapacityExceeded;
   } catch (const std::invalid_argument&) {
     fail("exception", "invalid_argument");
@@ -487,14 +525,25 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerVerifiedBlob(
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
     std::span<const std::byte> bytes, RenderTapeDigest* digestOut) {
+  return registerBlobStorage(RenderTapeByteView(bytes), digestOut, nullptr);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
+    RenderTapeByteView bytes, RenderTapeDigest* digestOut) {
   return registerBlobStorage(bytes, digestOut, nullptr);
 }
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::registerOwnedBlobBytes(
-    std::vector<std::byte>&& bytes, RenderTapeDigest* digestOut) {
+    std::vector<std::byte>&& bytes, RenderTapeDigest* digestOut,
+    const RenderTapeSnapshotBudgetLease& retainedLease) {
+  // This local receipt also protects failure/dedup paths. Its declaration
+  // precedes owned so a redundant or rejected vector is always freed first.
+  const auto lease = retainedLease;
   std::vector<std::byte> owned;
   owned.swap(bytes);
-  const auto status = registerBlobStorage(owned, digestOut, &owned);
+  const auto status = registerBlobStorage(
+      RenderTapeByteView(std::span<const std::byte>(owned)), digestOut, &owned,
+      nullptr, lease);
   if (status != RenderTapeCaptureStatus::Accepted && enabled_)
     abortInternal();
   return status;
@@ -533,9 +582,10 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerShadowBlobBytes(
 }
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobStorage(
-    std::span<const std::byte> bytes, RenderTapeDigest* digestOut,
+    RenderTapeByteView bytes, RenderTapeDigest* digestOut,
     std::vector<std::byte>* transferredBytes,
-    const RenderTapeImmutablePayload* sharedBytes) {
+    const RenderTapeImmutablePayload* sharedBytes,
+    const RenderTapeSnapshotBudgetLease& retainedLease) {
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
@@ -557,67 +607,80 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobStorage(
       state_ != RenderTapeCaptureState::Capturing) {
     return fail(RenderTapeCaptureStatus::InvalidState, "invalid_state");
   }
-  context.phase = "blob_deduplicate";
-  const auto alreadyPublished = std::find_if(
-      publishedBlobs_.begin(), publishedBlobs_.end(), [&](const auto& blob) {
-        return blob.bytes.size() == bytes.size() &&
-               std::equal(blob.bytes.begin(), blob.bytes.end(), bytes.begin());
-      });
-  if (alreadyPublished != publishedBlobs_.end()) {
-    if (digestOut) {
-      *digestOut = alreadyPublished->digest;
-    }
-    return RenderTapeCaptureStatus::Accepted;
-  }
-  const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
-  context.phase = "blob_byte_admission";
-  if (incomingBytes > limits_.maxBlobBytes ||
-      blobBytes_ > limits_.maxBlobBytes - incomingBytes) {
-    return fail(RenderTapeCaptureStatus::CapacityExceeded, "blob_byte_limit");
-  }
-  context.phase = "blob_digest";
-  const auto digest = sha256(bytes);
-  if (digestOut) {
-    *digestOut = digest;
-  }
-  context.phase = "blob_catalogue_lookup";
-  const bool alreadyCatalogued = hasVerifiedBlob(digest, bytes.size());
-  if (!alreadyCatalogued) {
-    const auto status = registerVerifiedBlob(
-        std::span<const std::byte, kRenderTapeDigestSize>(digest),
-        bytes.size());
-    if (status != RenderTapeCaptureStatus::Accepted) {
-      return status;
-    }
+  if (retainedLease.valid()) {
+    context.phase = "blob_lease_validation";
+    if (!transferredBytes || sharedBytes ||
+        retainedLease.kind() != RenderTapeSnapshotBudgetKind::Retained ||
+        retainedLease.resourceBytes() != bytes.size() ||
+        retainedLease.chargedBytes() != bytes.size() ||
+        !retainedLease.boundPayloadMatches(transferredBytes->data(), bytes.size()))
+      return fail(RenderTapeCaptureStatus::InvalidInput, "invalid_retained_lease");
   }
   try {
-    if (sharedBytes) {
-      context.phase = "blob_publication_append";
-      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = *sharedBytes});
-    } else if (transferredBytes) {
-      // The immutable owner's metadata allocation precedes its vector move;
-      // later publication failure is fail-stop under the consuming API.
-      // The original bytes are hashed above, never a caller digest.
-      context.phase = "blob_payload_owner";
-      RenderTapeImmutablePayload owned(std::move(*transferredBytes));
-      context.phase = "blob_publication_append";
-      publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = std::move(owned)});
-    } else {
-      context.phase = "blob_payload_copy";
-      RenderTapePublishedBlob owned{
-          .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())};
-      context.phase = "blob_publication_append";
-      publishedBlobs_.push_back(std::move(owned));
+    context.phase = "blob_deduplicate";
+    const auto alreadyPublished = std::find_if(
+        publishedBlobs_.begin(), publishedBlobs_.end(), [&](const auto& blob) {
+          return blob.bytes.readBytes().equals(bytes);
+        });
+    if (alreadyPublished != publishedBlobs_.end()) {
+      if (digestOut) {
+        *digestOut = alreadyPublished->digest;
+      }
+      return RenderTapeCaptureStatus::Accepted;
     }
-    blobBytes_ += incomingBytes;
+    const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
+    context.phase = "blob_byte_admission";
+    if (incomingBytes > limits_.maxBlobBytes ||
+        blobBytes_ > limits_.maxBlobBytes - incomingBytes) {
+      return fail(RenderTapeCaptureStatus::CapacityExceeded, "blob_byte_limit");
+    }
+    context.phase = "blob_digest";
+    const auto digest = sha256(bytes);
+    if (digestOut) {
+      *digestOut = digest;
+    }
+    context.phase = "blob_catalogue_lookup";
+    const bool alreadyCatalogued = hasVerifiedBlob(digest, bytes.size());
+    if (!alreadyCatalogued) {
+      const auto status = registerVerifiedBlob(
+          std::span<const std::byte, kRenderTapeDigestSize>(digest),
+          bytes.size());
+      if (status != RenderTapeCaptureStatus::Accepted) {
+        return status;
+      }
+    }
+    try {
+      if (sharedBytes) {
+        context.phase = "blob_publication_append";
+        publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = *sharedBytes});
+      } else if (transferredBytes) {
+        // The immutable owner's metadata allocation precedes its vector move;
+        // later publication failure is fail-stop under the consuming API.
+        // The original bytes are hashed above, never a caller digest.
+        context.phase = "blob_payload_owner";
+        RenderTapeImmutablePayload owned(std::move(*transferredBytes), retainedLease);
+        context.phase = "blob_publication_append";
+        publishedBlobs_.push_back(RenderTapePublishedBlob{.digest = digest, .bytes = std::move(owned)});
+      } else {
+        context.phase = "blob_payload_copy";
+        RenderTapePublishedBlob owned{
+            .digest = digest, .bytes = RenderTapeImmutablePayload::copyToScratch(bytes, payloadArena_)};
+        context.phase = "blob_publication_append";
+        publishedBlobs_.push_back(std::move(owned));
+      }
+      blobBytes_ += incomingBytes;
+    } catch (...) {
+      if (!alreadyCatalogued && !catalogue_.blobs.empty()) {
+        catalogue_.blobs.pop_back();
+      }
+      return fail(RenderTapeCaptureStatus::CapacityExceeded, "exception",
+                  captureMutationExceptionKind());
+    }
+    return RenderTapeCaptureStatus::Accepted;
   } catch (...) {
-    if (!alreadyCatalogued && !catalogue_.blobs.empty()) {
-      catalogue_.blobs.pop_back();
-    }
     return fail(RenderTapeCaptureStatus::CapacityExceeded, "exception",
                 captureMutationExceptionKind());
   }
-  return RenderTapeCaptureStatus::Accepted;
 }
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationBytes(
@@ -652,10 +715,11 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationOwnedBytes(
     const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
     std::uint32_t subresource, std::uint64_t byteOffset,
     std::vector<std::byte>&& bytes,
-    RenderTapeBufferMutationDisposition bufferDisposition) {
+    RenderTapeBufferMutationDisposition bufferDisposition,
+    const RenderTapeSnapshotBudgetLease& retainedLease) {
   const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
   RenderTapeDigest digest{};
-  const auto blobStatus = registerOwnedBlobBytes(std::move(bytes), &digest);
+  const auto blobStatus = registerOwnedBlobBytes(std::move(bytes), &digest, retainedLease);
   if (blobStatus != RenderTapeCaptureStatus::Accepted) {
     if (mutationFailure_.valid) {
       mutationFailure_.hasIdentity = true;
@@ -1138,7 +1202,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
   identityValidationResult_ = {};
   if (state_ != RenderTapeCaptureState::Sealed || captureToken == 0u ||
       presentOrdinal == 0u || sources.empty() || ranges.empty() ||
-      !publicationBundle_.identity.empty()) {
+      !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
     return RenderTapeCaptureStatus::InvalidState;
   }
   try {
@@ -1193,6 +1257,181 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentity(
     abortInternal();
     return RenderTapeCaptureStatus::CapacityExceeded;
   }
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV3(
+    RenderTapeIdentityV3CaptureKey expectedCapture,
+    std::uint64_t presentOrdinal,
+    std::span<const std::byte> completeSidecar) {
+  if (state_ != RenderTapeCaptureState::Sealed ||
+      !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
+    return RenderTapeCaptureStatus::InvalidState;
+  }
+  identityV3ValidationStatus_ = RenderTapeIdentityV3Status::InvalidHeader;
+  try {
+    identityV3ValidationStatus_ = validateRenderTapeIdentityV3(
+        sealedArtifact_, catalogue_, completeSidecar, nullptr, true);
+    if (identityV3ValidationStatus_ != RenderTapeIdentityV3Status::Valid) {
+      abortInternal();
+      const bool capacityFailure =
+          identityV3ValidationStatus_ == RenderTapeIdentityV3Status::AllocationFailed ||
+          identityV3ValidationStatus_ == RenderTapeIdentityV3Status::CapacityExceeded;
+      return capacityFailure
+          ? RenderTapeCaptureStatus::CapacityExceeded
+          : RenderTapeCaptureStatus::ValidationFailed;
+    }
+    RenderTapeIdentityV3Header header{};
+    std::memcpy(&header, completeSidecar.data(), sizeof(header));
+    if (!expectedCapture.token || !expectedCapture.epoch || !presentOrdinal ||
+        header.captureToken != expectedCapture.token ||
+        header.captureEpoch != expectedCapture.epoch ||
+        header.presentOrdinal != presentOrdinal) {
+      identityV3ValidationStatus_ = RenderTapeIdentityV3Status::InvalidHeader;
+      abortInternal();
+      return RenderTapeCaptureStatus::ValidationFailed;
+    }
+    // All fallible work precedes publication. Borrowed Unix bytes never
+    // survive the call, and no v3 rows are coerced into v2 source tables.
+    std::vector<std::byte> identity(completeSidecar.begin(), completeSidecar.end());
+    publicationBundle_.identity = std::move(identity);
+    return RenderTapeCaptureStatus::Complete;
+  } catch (...) {
+    identityV3ValidationStatus_ = RenderTapeIdentityV3Status::AllocationFailed;
+    abortInternal();
+    return RenderTapeCaptureStatus::CapacityExceeded;
+  }
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV3(
+    RenderTapeIdentityV3CaptureKey expectedCapture,
+    std::uint64_t presentOrdinal,
+    const RenderTapeIdentityV3View& snapshot) {
+  if (state_ != RenderTapeCaptureState::Sealed ||
+      !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
+    return RenderTapeCaptureStatus::InvalidState;
+  }
+  auto identity = buildRenderTapeIdentityV3(
+      sealedArtifact_, catalogue_, snapshot, &identityV3ValidationStatus_);
+  if (identity.empty()) {
+    abortInternal();
+    const bool capacityFailure =
+        identityV3ValidationStatus_ == RenderTapeIdentityV3Status::AllocationFailed ||
+        identityV3ValidationStatus_ == RenderTapeIdentityV3Status::CapacityExceeded;
+    return capacityFailure
+        ? RenderTapeCaptureStatus::CapacityExceeded
+        : RenderTapeCaptureStatus::ValidationFailed;
+  }
+  return attachCaptureIdentityV3(expectedCapture, presentOrdinal,
+                               std::span<const std::byte>(identity));
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
+    RenderTapeIdentityV4CaptureKey expectedCapture,
+    std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
+    std::span<const std::byte> completeIdentity,
+    std::span<const std::byte> completeTopology,
+    const RenderTapeActionWitnessV1& actionWitness) {
+  if (state_ != RenderTapeCaptureState::Sealed ||
+      !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
+    return RenderTapeCaptureStatus::InvalidState;
+  }
+  identityV4ValidationStatus_ = RenderTapeIdentityV4Status::InvalidHeader;
+  topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::InvalidHeader;
+  const auto reject = [&]() {
+    abortInternal();
+    const bool capacity = identityV4ValidationStatus_ == RenderTapeIdentityV4Status::AllocationFailed ||
+        identityV4ValidationStatus_ == RenderTapeIdentityV4Status::CapacityExceeded ||
+        topologyV1ValidationStatus_ == RenderTapeExecutionTopologyV1Status::AllocationFailed ||
+        topologyV1ValidationStatus_ == RenderTapeExecutionTopologyV1Status::CapacityExceeded;
+    return capacity ? RenderTapeCaptureStatus::CapacityExceeded : RenderTapeCaptureStatus::ValidationFailed;
+  };
+  if (!renderTapeActionWitnessV1Valid(actionWitness) ||
+      (actionWitness.evidence != static_cast<std::uint32_t>(
+           RenderTapeActionWitnessEvidenceV1::LegacyUnknown) &&
+       !renderTapeActionWitnessV1MatchesBinding(actionWitness,
+           expectedCapture.token, expectedCapture.epoch, expectedQueue))) {
+    return reject();
+  }
+  try {
+    RenderTapeIdentityV4View identityView;
+    identityV4ValidationStatus_ = validateRenderTapeIdentityV4(
+        sealedArtifact_, catalogue_, completeIdentity, &identityView, true);
+    if (identityV4ValidationStatus_ != RenderTapeIdentityV4Status::Valid) return reject();
+    const auto& h = identityView.header;
+    if (!expectedCapture.token || !expectedCapture.epoch || !expectedQueue || !presentOrdinal ||
+        h.captureToken != expectedCapture.token || h.captureEpoch != expectedCapture.epoch ||
+        h.queue != expectedQueue || h.presentOrdinal != presentOrdinal) {
+      identityV4ValidationStatus_ = RenderTapeIdentityV4Status::InvalidHeader;
+      topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::BindingMismatch;
+      return reject();
+    }
+    topologyV1ValidationStatus_ = validateRenderTapeExecutionTopologyV1(
+        sealedArtifact_, catalogue_, completeIdentity, completeTopology);
+    if (topologyV1ValidationStatus_ != RenderTapeExecutionTopologyV1Status::Valid) return reject();
+    // All allocations/validation precede this pair-and-witness commit. Both borrowed
+    // inputs become independent owned bytes; no v2 mirrors or v3 Pass rows
+    // are synthesized, and GPU/query output qualification remains separate.
+    std::vector<std::byte> identity(completeIdentity.begin(), completeIdentity.end());
+    std::vector<std::byte> topology(completeTopology.begin(), completeTopology.end());
+    publicationBundle_.identity = std::move(identity);
+    publicationBundle_.executionTopology = std::move(topology);
+    publicationBundle_.actionWitness = actionWitness;
+    return RenderTapeCaptureStatus::Complete;
+  } catch (...) {
+    identityV4ValidationStatus_ = RenderTapeIdentityV4Status::AllocationFailed;
+    topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::AllocationFailed;
+    return reject();
+  }
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
+    RenderTapeIdentityV4CaptureKey expectedCapture,
+    std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
+    const RenderTapeIdentityV4View& identitySnapshot,
+    const RenderTapeExecutionTopologyV1View& topologySnapshot,
+    const RenderTapeActionWitnessV1& actionWitness) {
+  if (state_ != RenderTapeCaptureState::Sealed ||
+      !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
+    return RenderTapeCaptureStatus::InvalidState;
+  }
+  identityV4ValidationStatus_ = RenderTapeIdentityV4Status::InvalidHeader;
+  topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::InvalidHeader;
+  const auto& i = identitySnapshot.header;
+  const auto& t = topologySnapshot.header;
+  if (!renderTapeActionWitnessV1Valid(actionWitness) ||
+      (actionWitness.evidence != static_cast<std::uint32_t>(
+           RenderTapeActionWitnessEvidenceV1::LegacyUnknown) &&
+       !renderTapeActionWitnessV1MatchesBinding(actionWitness,
+           expectedCapture.token, expectedCapture.epoch, expectedQueue)) ||
+      !expectedCapture.token || !expectedCapture.epoch || !expectedQueue || !presentOrdinal ||
+      i.captureToken != expectedCapture.token || i.captureEpoch != expectedCapture.epoch ||
+      i.queue != expectedQueue || i.presentOrdinal != presentOrdinal ||
+      t.captureToken != expectedCapture.token || t.captureEpoch != expectedCapture.epoch ||
+      t.queue != expectedQueue || i.eventsBytes || i.eventsDigest != RenderTapeDigest{} ||
+      t.identityBytes || t.eventsBytes || t.identityDigest != RenderTapeDigest{} ||
+      t.eventsDigest != RenderTapeDigest{}) {
+    topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::BindingMismatch;
+    abortInternal();
+    return RenderTapeCaptureStatus::ValidationFailed;
+  }
+  auto identity = buildRenderTapeIdentityV4(
+      sealedArtifact_, catalogue_, identitySnapshot, &identityV4ValidationStatus_);
+  if (identity.empty()) {
+    abortInternal();
+    const bool capacity = identityV4ValidationStatus_ == RenderTapeIdentityV4Status::AllocationFailed ||
+        identityV4ValidationStatus_ == RenderTapeIdentityV4Status::CapacityExceeded;
+    return capacity ? RenderTapeCaptureStatus::CapacityExceeded : RenderTapeCaptureStatus::ValidationFailed;
+  }
+  auto topology = buildRenderTapeExecutionTopologyV1(
+      sealedArtifact_, catalogue_, identity, topologySnapshot, &topologyV1ValidationStatus_);
+  if (topology.empty()) {
+    abortInternal();
+    const bool capacity = topologyV1ValidationStatus_ == RenderTapeExecutionTopologyV1Status::AllocationFailed ||
+        topologyV1ValidationStatus_ == RenderTapeExecutionTopologyV1Status::CapacityExceeded;
+    return capacity ? RenderTapeCaptureStatus::CapacityExceeded : RenderTapeCaptureStatus::ValidationFailed;
+  }
+  return attachCaptureIdentityV4(expectedCapture, expectedQueue, presentOrdinal,
+      identity, topology, actionWitness);
 }
 
 void RenderTapeCaptureSession::abortInternal() noexcept {

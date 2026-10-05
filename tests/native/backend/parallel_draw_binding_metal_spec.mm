@@ -4,6 +4,9 @@
 // BGRA8 bytes through two MTLParallelRenderCommandEncoder children. Additive
 // blending makes the intermediate B draw observable, so a stale A binding
 // cannot accidentally match merely because the sequence ends at A.
+// Hot-row-only cases hold all three payload hashes constant while a source or
+// segment or row identity edge changes consumed slot-3 fog-like fields. This fixture
+// shares production plan/apply, not the chunk factory or hot-row demarshal.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -25,6 +28,7 @@ namespace {
 using dxmt9::uniform::DirectCbufPayloadCounts;
 using dxmt9::uniform::DirtyState;
 using dxmt9::uniform::DrawBindingAbi;
+using dxmt9::uniform::DrawBindingHotStateIdentity;
 using dxmt9::uniform::DrawBindingPath;
 using dxmt9::uniform::DrawBindingPayloadIdentity;
 
@@ -43,7 +47,11 @@ struct alignas(16) FragmentUniform {
 struct alignas(16) FixedUniform {
   float vertexBias[2]{};
   float colorScale[2]{};
+  std::uint32_t fogMode = 0;
+  std::uint32_t fogSource = 0;
+  std::uint32_t padding[2]{};
 };
+static_assert(sizeof(FixedUniform) == 32);
 
 struct DrawPayload {
   DrawBindingPayloadIdentity identity{};
@@ -54,6 +62,12 @@ struct DrawPayload {
 
 struct ChildPayloads {
   std::array<DrawPayload, 3> draws{};
+};
+
+enum class HotStateAxis : std::uint8_t {
+  StateIndex,
+  SourceSequence,
+  SegmentIndex,
 };
 
 void fail(std::string_view message) {
@@ -78,6 +92,9 @@ struct FragmentUniform {
 struct FixedUniform {
   float2 vertexBias;
   float2 colorScale;
+  uint fogMode;
+  uint fogSource;
+  uint2 padding;
 };
 
 struct VertexOut {
@@ -103,7 +120,9 @@ vertex VertexOut binding_vs(
 fragment float4 binding_fs(
     constant FragmentUniform& uniform [[buffer(0)]],
     constant FixedUniform& fixed [[buffer(3)]]) {
-  return uniform.color * fixed.colorScale.x;
+  const float fogScale = fixed.fogMode == 2u ? 0.5 : 1.0;
+  const float sourceScale = fixed.fogSource != 0u ? 0.75 : 1.0;
+  return uniform.color * fixed.colorScale.x * fogScale * sourceScale;
 }
 )msl";
 
@@ -197,6 +216,36 @@ ChildPayloads makeChild(float centerX, std::uint64_t childSalt) {
   return ChildPayloads{.draws = {a, b, a}};
 }
 
+ChildPayloads makeHotStateChild(float centerX,
+                               std::uint64_t childSalt,
+                               HotStateAxis axis) {
+  auto a = makeChild(centerX, childSalt).draws[0];
+  a.identity.hotState = DrawBindingHotStateIdentity{
+      .sourceSequence = childSalt + 1u,
+      .segmentIndex = 3u,
+      .stateIndex = 7u,
+  };
+  a.fixed.fogMode = 1u;
+  a.fixed.fogSource = 0u;
+  auto b = a;
+  switch (axis) {
+  case HotStateAxis::StateIndex:
+    b.identity.hotState.stateIndex = 8u;
+    break;
+  case HotStateAxis::SourceSequence:
+    b.identity.hotState.sourceSequence = childSalt + 2u;
+    break;
+  case HotStateAxis::SegmentIndex:
+    b.identity.hotState.segmentIndex = 4u;
+    break;
+  }
+  b.fixed.fogMode = 2u;
+  b.fixed.fogSource = 1u;
+  // VS, PS and fixedFunction hashes deliberately remain identical to A.
+  // The shader consumes B's different slot-3 bytes, not the identity itself.
+  return ChildPayloads{.draws = {a, b, a}};
+}
+
 void encodeSerialChild(id<MTLRenderCommandEncoder> encoder,
                        id<MTLRenderPipelineState> pipeline,
                        const ChildPayloads& child) {
@@ -221,7 +270,8 @@ void encodeSerialChild(id<MTLRenderCommandEncoder> encoder,
 void encodeTransitionChild(id<MTLRenderCommandEncoder> encoder,
                            id<MTLRenderPipelineState> pipeline,
                            const ChildPayloads& child,
-                           bool omitPayloadDirtyTransition) {
+                           bool omitPayloadDirtyTransition,
+                           bool omitHotStateIdentity = false) {
   [encoder setRenderPipelineState:pipeline];
   DirtyState dirty{};
   dxmt9::uniform::markAllDirty(dirty);
@@ -232,9 +282,15 @@ void encodeTransitionChild(id<MTLRenderCommandEncoder> encoder,
   };
 
   for (const auto& draw : child.draws) {
+    auto current = draw.identity;
+    if (omitHotStateIdentity) {
+      // Negative control: reproduce the old hash-only predicate while still
+      // sharing production plan/apply and the same encoder binding consumer.
+      current.hotState = {};
+    }
     const auto transition = dxmt9::uniform::planDrawBindingTransition(
         previous.has_value(), previous.value_or(DrawBindingPayloadIdentity{}),
-        draw.identity, DrawBindingAbi::Stage2DirectCbuf,
+        current, DrawBindingAbi::Stage2DirectCbuf,
         DrawBindingPath::Direct);
     if (!omitPayloadDirtyTransition || !previous.has_value()) {
       if (!dxmt9::uniform::applyDrawBindingTransition(
@@ -301,11 +357,29 @@ bool renderSerial(id<MTLCommandQueue> queue,
   return finish(commandBuffer, "serial");
 }
 
+bool renderTransitionSerial(id<MTLCommandQueue> queue,
+                            id<MTLRenderPipelineState> pipeline,
+                            id<MTLTexture> target,
+                            const std::array<ChildPayloads, 2>& children,
+                            bool omitHotStateIdentity) {
+  id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+  id<MTLRenderCommandEncoder> encoder =
+      [commandBuffer renderCommandEncoderWithDescriptor:makePass(target)];
+  for (const auto& child : children) {
+    encodeTransitionChild(encoder, pipeline, child,
+                          /*omitPayloadDirtyTransition=*/false,
+                          omitHotStateIdentity);
+  }
+  [encoder endEncoding];
+  return finish(commandBuffer, "transition-serial");
+}
+
 bool renderParallel(id<MTLCommandQueue> queue,
                     id<MTLRenderPipelineState> pipeline,
                     id<MTLTexture> target,
                     const std::array<ChildPayloads, 2>& children,
-                    bool omitPayloadDirtyTransition) {
+                    bool omitPayloadDirtyTransition,
+                    bool omitHotStateIdentity = false) {
   id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
   id<MTLParallelRenderCommandEncoder> parent =
       [commandBuffer parallelRenderCommandEncoderWithDescriptor:makePass(target)];
@@ -317,7 +391,7 @@ bool renderParallel(id<MTLCommandQueue> queue,
                  dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
                  ^(std::size_t i) {
     encodeTransitionChild(childEncoders[i], pipeline, children[i],
-                          omitPayloadDirtyTransition);
+                          omitPayloadDirtyTransition, omitHotStateIdentity);
     [childEncoders[i] endEncoding];
   });
   [parent endEncoding];
@@ -366,7 +440,9 @@ int main() {
     id<MTLTexture> serialTarget = makeTarget(device);
     id<MTLTexture> parallelTarget = makeTarget(device);
     id<MTLTexture> staleTarget = makeTarget(device);
-    if (!serialTarget || !parallelTarget || !staleTarget) {
+    id<MTLTexture> transitionSerialTarget = makeTarget(device);
+    if (!serialTarget || !parallelTarget || !staleTarget ||
+        !transitionSerialTarget) {
       fail("failed to allocate shared offscreen targets");
     }
 
@@ -394,6 +470,56 @@ int main() {
                   << " parallel=0x" << hash(parallelBytes) << std::dec
                   << '\n';
         return 1;
+      }
+    }
+
+    // Independently vary each canonical identity axis. In particular, the
+    // segment case collides on both sourceSequence and segment-local stateIndex.
+    constexpr std::array<HotStateAxis, 3> kHotStateAxes{
+        HotStateAxis::StateIndex,
+        HotStateAxis::SourceSequence,
+        HotStateAxis::SegmentIndex,
+    };
+    for (const auto axis : kHotStateAxes) {
+      const std::array<ChildPayloads, 2> hotChildren{
+          makeHotStateChild(-0.5f, 0x30000000u, axis),
+          makeHotStateChild(0.5f, 0x40000000u, axis),
+      };
+      if (!renderSerial(queue, pipeline, serialTarget, hotChildren) ||
+          !renderTransitionSerial(queue, pipeline, transitionSerialTarget,
+                                  hotChildren, /*omitHotStateIdentity=*/false)) {
+        return 1;
+      }
+      const auto hotOracle = readback(serialTarget);
+      if (readback(transitionSerialTarget) != hotOracle) {
+        fail("serial production transition missed a hot-row-only dirty edge");
+      }
+      if (!renderTransitionSerial(queue, pipeline, staleTarget, hotChildren,
+                                  /*omitHotStateIdentity=*/true)) {
+        return 1;
+      }
+      if (readback(staleTarget) == hotOracle) {
+        fail("hot-row oracle does not distinguish the old serial hash-only predicate");
+      }
+      if (!renderParallel(queue, pipeline, staleTarget, hotChildren,
+                          /*omitPayloadDirtyTransition=*/false,
+                          /*omitHotStateIdentity=*/true)) {
+        return 1;
+      }
+      if (readback(staleTarget) == hotOracle) {
+        fail("hot-row oracle does not distinguish the old parallel hash-only predicate");
+      }
+      for (std::uint32_t repeat = 0; repeat < 8u; ++repeat) {
+        if (!renderParallel(queue, pipeline, parallelTarget, hotChildren,
+                            /*omitPayloadDirtyTransition=*/false)) {
+          return 1;
+        }
+        if (readback(parallelTarget) != hotOracle) {
+          std::cerr << "FAIL: hot-row-only serial/parallel pixel mismatch at repeat "
+                    << repeat << " identity-axis=" << static_cast<std::uint32_t>(axis)
+                    << '\n';
+          return 1;
+        }
       }
     }
   }

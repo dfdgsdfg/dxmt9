@@ -60,6 +60,13 @@ def main() -> int:
         assert validated["valid"] is True
         assert validated["events"] == 7
         assert validated["presents"] == 1
+        legacy_action_profile = {
+            "present": False,
+            "evidence": "legacy-unknown",
+            "stable_exact": False,
+            "witness": None,
+        }
+        assert validated["action_profile_validation"] == legacy_action_profile
         assert validated["scope"] == {
             "production_capture": False,
             "production_provider_replay": False,
@@ -78,6 +85,7 @@ def main() -> int:
             ).stdout
         )
         assert inspected == {
+            "action_profile_validation": legacy_action_profile,
             "bootstraps": 1,
             "buffer_definitions": [],
             "buffer_destroys": [],

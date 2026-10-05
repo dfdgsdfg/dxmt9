@@ -71,6 +71,7 @@
 #undef dxmt9c_device_draw_primitive
 #undef dxmt9c_device_commit_chunk
 #undef dxmt9c_device_commit_chunk_segmented
+#undef dxmt9c_device_classify_render_tape_primary_backbuffer
 #undef dxmt9c_device_reserve_render_tape_present_capture
 #undef dxmt9c_device_finish_render_tape_present_capture
 #undef dxmt9c_device_finish_render_tape_present_source_capture

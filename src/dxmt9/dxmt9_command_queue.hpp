@@ -33,6 +33,7 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_render_tape_action_profile.hpp"
 #include "dxmt9_render_scheduling.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_session_release.hpp"
@@ -457,7 +458,8 @@ class CommandQueue {
   struct ArenaLeaseTestQueueTag {};
   CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits,
                WMT::Reference<WMT::CommandQueue> queue = {},
-               render::RenderPartitionConfig renderPartitionConfig = {});
+               render::RenderPartitionConfig renderPartitionConfig = {},
+               bool exactRenderTapeActionProfile = false);
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -1078,6 +1080,36 @@ class CommandQueue {
   query::EndReceipt publishQueryEnd() noexcept;
   query::Poll pollQueryFence(const query::EndReceipt& receipt, bool flush) noexcept;
   query::Progress queryProgress() noexcept;
+  struct RenderTapeArmState {
+    RenderTapeCheckpointCompletionState checkpoint{};
+    bool initializerPresent = false;
+    bool initializerProgressAvailable = false;
+  };
+  // Cold observation only: never publishes, waits, reaps or refreshes progress.
+  // A live Initializer's progress/failure values remain explicitly unavailable;
+  // its exact pending-upload predicate can be sampled without mutating it.
+  std::optional<RenderTapeArmState> inspectRenderTapeArmState() noexcept;
+  // Persistent cold capture. Installation observes an already-completed arm
+  // checkpoint and never publishes a writer to make that checkpoint true.
+  bool installTapeRuntimeObserver(render::TapeRuntimeObserverSink sink,
+      render::TapeRuntimeBaseline& baseline) noexcept;
+  bool installTapeRuntimeCapture(
+      std::shared_ptr<render::TapeRuntimeCaptureAttachment> owner,
+      render::TapeRuntimeBaseline& baseline) noexcept;
+  render::TapeRuntimeCaptureLease acquireTapeRuntimeCapture() noexcept;
+  // Caller has admitted the real coordinator effect and owns no queue/Direct
+  // lease lock. Only the matching retained V4 arm may receive this cold edge.
+  void observeTapeRuntimeOrdinaryCoordinatorAdmission(
+      const render::TapeRuntimeCaptureLease& expectedLease,
+      render::TapeOrdinaryCoordinatorAdmission value) noexcept;
+  bool removeTapeRuntimeObserver(render::TapeRuntimeObserverSink sink) noexcept;
+  bool refreshTapeRuntimeCompletions(render::TapeRuntimeObserverSink sink) noexcept;
+  void revokeTapeRuntimeObserver(render::TapeRuntimeObserverSink sink) noexcept;
+  render::TapeRuntimeObserverSink tapeRuntimeObserverLocked() const noexcept {
+    return tapeRuntimeObserver_;
+  }
+  void observeTapeRuntimePublicationLocked(
+      core::CpuReadyTape::SourceRef source) noexcept;
 
   // Cold Render Tape discriminator: publish the current ordinary source but
   // do not wait for GPU completion. Capacity admission retains its existing
@@ -1338,14 +1370,15 @@ class CommandQueue {
   // attachment policy. Their event/chunk boundaries are serialization
   // boundaries, not D3D discard points, so preserve first-use contents and
   // every live-out store while exact tape mode is active.
-  void setRenderTapeExactAttachmentPreservation(bool enabled) noexcept {
-    renderTapeExactAttachmentPreservation_.store(enabled,
-                                                  std::memory_order_release);
-  }
+  void setRenderTapeExactAttachmentPreservation(bool enabled) noexcept;
   bool renderTapeExactAttachmentPreservation() const noexcept {
     return renderTapeExactAttachmentPreservation_.load(
         std::memory_order_acquire);
   }
+  // Cold coherent construction/current/revision history. Qualification must
+  // compare arm/freeze observations; the hot getter above remains one load.
+  [[nodiscard]] RenderTapeActionProfileSnapshot
+  renderTapeActionProfileSnapshot() const noexcept;
   // Provider-only cold seed settlement: caller has authenticated and copied a
   // complete swapchain seed, then waited for actual queue completion. Default
   // rendering policy is untouched; a failed admission changes no discard state.
@@ -1590,6 +1623,8 @@ class CommandQueue {
   bool forceDrawResourceMarkingAfterSplit_ = false;
 
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
+  render::TapeRuntimeObserverSink tapeRuntimeObserver_{};
+  render::TapeRuntimeObserverEndpoint tapeRuntimeObserverEndpoint_{};
   std::unique_ptr<dxmt9::queue::PipelineLifecycleObserver>
       pipelineLifecycleObserver_{};
   // Cached generic pipeline sink. Direct leases do not copy this facade;
@@ -1639,6 +1674,11 @@ class CommandQueue {
   friend class resources::Initializer;
   friend struct CommandQueueArenaLeaseTestAccess;
   friend struct SchedulingProgressTestAccess;
+  friend struct RenderTapeEncodeDrawWitnessAccess;
+
+  void initializeRenderTapeActionProfile(bool exact) noexcept;
+  mutable std::mutex renderTapeActionProfileMutex_{};
+  RenderTapeActionProfileHistory renderTapeActionProfileHistory_{};
 
   template<bool Observe>
   query::Poll pollQueryFenceImpl(const query::EndReceipt& receipt, bool flush) noexcept;

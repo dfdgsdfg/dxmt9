@@ -339,6 +339,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
   const bool cacheEligible = bufferReadonlyCacheEligible(desc, descValid, flags);
   if (cacheEligible &&
       state.readonlyCache.canServe(off, size, desc.size)) {
+    if (recorder && recorder->IsRenderTapeCaptureActiveForChild())
+      recorder->BeginRenderTapeOrderedControlForChild(wireObject.identity);
     *pp = state.readonlyCache.dataFor(off);
     state.locked = true;
     state.servedFromReadonlyCache = true;
@@ -349,6 +351,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
     state.offset = off;
     state.size = size != 0u ? size : desc.size - off;
     notifyCpuRead();
+    if (recorder && recorder->IsRenderTapeCaptureActiveForChild())
+      recorder->EndRenderTapeExternalEffectForChild();
     return S_OK;
   }
 
@@ -362,6 +366,9 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
   // and diagnostics; only the internal cache-fill lock is widened.
   const UINT backendOff = cacheEligible ? 0u : off;
   const UINT backendSize = cacheEligible ? desc.size : size;
+  if (recorder && (flags & D3DLOCK_READONLY) != 0u &&
+      recorder->IsRenderTapeCaptureActiveForChild())
+    recorder->BeginRenderTapeOrderedControlForChild(wireObject.identity);
   const HRESULT lockHr =
       hr32(dxmt9c_buffer_lock(buffer, backendOff, backendSize, pp, flags));
   if (SUCCEEDED(lockHr)) {
@@ -391,6 +398,9 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
     }
     notifyCpuRead();
   }
+  if (recorder && (flags & D3DLOCK_READONLY) != 0u &&
+      recorder->IsRenderTapeCaptureActiveForChild())
+    recorder->EndRenderTapeExternalEffectForChild();
   return lockHr;
 }
 
@@ -445,6 +455,8 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
           wireObject, mutationCopy.size());
     }
   }
+  if (captureTrackingEnabled && mutationReady && !mutationCopy.empty())
+    recorder->BeginRenderTapeResourceMutationForChild(wireObject.identity);
   const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
   if (SUCCEEDED(unlockHr)) {
     if (snapshotStatus ==
@@ -472,6 +484,8 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
     state.offset = 0;
     state.size = 0;
   }
+  if (captureTrackingEnabled)
+    recorder->EndRenderTapeExternalEffectForChild();
   return unlockHr;
 }
 

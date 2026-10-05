@@ -306,6 +306,41 @@ RenderTapeOriginLocator renderTapeLocateOrigin(
   return result;
 }
 
+bool renderTapeNullRtUsesAdmitted(const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& parentTexture) noexcept {
+  if (!originIdentity.generation || !originIdentity.objectId ||
+      (originIdentity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+       originIdentity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE)) return false;
+  for (std::uint32_t handleIndex = 0u; handleIndex < chunk.handles.size(); ++handleIndex) {
+    const auto& handle = chunk.handles[handleIndex];
+    const D9CWireObjectIdentity identity{handle.kind, handle.generation, handle.objectId};
+    const bool origin = sameIdentity(identity, originIdentity);
+    const bool parent = parentTexture.objectId && sameIdentity(identity, parentTexture);
+    if (!origin && !parent) continue;
+    for (std::size_t index = 0u; index < chunk.records.size(); ++index) {
+      const auto record = chunk.record(index);
+      if (!recordOwnsHandle(record, handleIndex)) continue;
+      // A parent texture's direct reference is a sampler/content operation;
+      // only its exact Surface alias can be an attachment marker.
+      if (parent || identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE || !record.sparseState())
+        return false;
+      bool renderTarget = false;
+      for (std::size_t sectionIndex = 0u; sectionIndex < record.sections.size(); ++sectionIndex) {
+        const auto section = record.section(sectionIndex);
+        std::uint32_t slot = kRenderTapeOriginSentinel;
+        bool matched = false;
+        if (!sparseSectionBinding(section, handleIndex, slot, matched)) return false;
+        if (!matched) continue;
+        if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) return false;
+        renderTarget = true;
+      }
+      if (!renderTarget) return false;
+    }
+  }
+  return true;
+}
+
 const char* renderTapeCommandRoleName(RenderTapeCommandRole role) noexcept {
   switch (role) {
   case RenderTapeCommandRole::Unknown:

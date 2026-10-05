@@ -1343,6 +1343,560 @@ void versionedSubresourceDescriptorsFailClosed() {
         "surface alias accepts the exact generation-qualified parent identity");
 }
 
+void textureDispositionDiagnosticsPreserveCanonicalLevel0() {
+  auto descriptor = texture2DDescriptor(
+      1u, RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+  const D9CSurfaceDesc depthLevel0{
+      .format = 75u,
+      .resourceType = 3u,
+      .usage = 2u,
+      .pool = 0u,
+      .multiSampleType = 0u,
+      .multiSampleQuality = 0u,
+      .width = 37u,
+      .height = 19u,
+      .depth = 1u,
+  };
+  const auto writeLevel0 = [&](const D9CSurfaceDesc& level0) {
+    std::memcpy(descriptor.data() + sizeof(RenderTapeTextureDescriptorV2),
+                &level0, sizeof(level0));
+  };
+  const auto matchesLevel0 = [](const D9CSurfaceDesc& actual,
+                                const D9CSurfaceDesc& expected) {
+    return actual.format == expected.format &&
+           actual.resourceType == expected.resourceType &&
+           actual.usage == expected.usage && actual.pool == expected.pool &&
+           actual.multiSampleType == expected.multiSampleType &&
+           actual.multiSampleQuality == expected.multiSampleQuality &&
+           actual.width == expected.width && actual.height == expected.height &&
+           actual.depth == expected.depth;
+  };
+  const RenderTapeObjectDefineHeader fixed{
+      .identity = kTexture,
+      .descriptorKind = kTextureDescriptorKind,
+      .descriptorBytes = static_cast<std::uint32_t>(descriptor.size()),
+  };
+  writeLevel0(depthLevel0);
+  const auto detail = renderTapeClassifyObjectDefineValidation(fixed, descriptor);
+  check(detail.subreason ==
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorDisposition &&
+            detail.hasTextureLevel0 &&
+            matchesLevel0(detail.textureLevel0, depthLevel0) &&
+            sameWireIdentity(detail.identity, kTexture) &&
+            detail.expectedContentBytes == 0u &&
+            detail.expectedContentCount == 0u,
+        "depth-usage Produced rejects with the exact canonical level-zero descriptor");
+
+  const auto makeTape = [&]() {
+    const auto outputDescriptor = outputSurfaceDescriptor();
+    const RenderTapeOracleAttachment oracle{
+        .identity = kSurface,
+        .descriptorKind = kSurfaceDescriptorKind,
+    };
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(makeApplyStateChunk());
+    builder.appendObjectDefine(
+        kSurface, kSurfaceDescriptorKind,
+        std::as_bytes(std::span(&outputDescriptor, 1u)), 0u, {});
+    builder.appendObjectDefine(kTexture, kTextureDescriptorKind, descriptor, 0u,
+                               {});
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u},
+        makePresentChunk());
+    builder.appendPresentComplete(
+        4u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    return builder.seal();
+  };
+  const auto rejected = validateRenderTape(makeTape(), {});
+  check(rejected.status == RenderTapeValidationStatus::InvalidObjectDefine &&
+            rejected.failedEventIndex == 2u &&
+            rejected.objectDefine.subreason == detail.subreason &&
+            rejected.objectDefine.hasTextureLevel0 &&
+            matchesLevel0(rejected.objectDefine.textureLevel0, depthLevel0),
+        "canonical validation preserves the rejected texture's actual descriptor");
+
+  auto rtLevel0 = depthLevel0;
+  rtLevel0.format = 21u;
+  rtLevel0.usage = 1u;
+  writeLevel0(rtLevel0);
+  const auto rtDetail = renderTapeClassifyObjectDefineValidation(fixed, descriptor);
+  check(!rtDetail.valid() && rtDetail.hasTextureLevel0 &&
+            matchesLevel0(rtDetail.textureLevel0, rtLevel0),
+        "RT-usage Produced keeps its existing descriptor admission unchanged");
+  const auto unresolved = validateRenderTape(makeTape(), {});
+  check(unresolved.status == RenderTapeValidationStatus::IncompleteFrame &&
+            unresolved.incompleteFrameReason ==
+                RenderTapeIncompleteFrameReason::ProducedProofUnresolvedAtPresent,
+        "diagnostic level-zero data cannot replace the terminal-first produced proof");
+
+  auto invalidLevel0 = depthLevel0;
+  invalidLevel0.resourceType = 1u;
+  writeLevel0(invalidLevel0);
+  const auto malformed = renderTapeClassifyObjectDefineValidation(fixed, descriptor);
+  check(malformed.subreason ==
+            RenderTapeObjectDefineValidationSubreason::TextureDescriptorDimension &&
+            !malformed.hasTextureLevel0 &&
+            matchesLevel0(malformed.textureLevel0, D9CSurfaceDesc{}),
+        "malformed texture topology cannot claim an authoritative level-zero diagnostic");
+}
+
+std::vector<std::byte> df24ProducedTextureDescriptor() {
+  auto descriptor = texture2DDescriptor(
+      1u, RenderTapeInitialContentDisposition::ProducedByCapturedPass);
+  const D9CSurfaceDesc level0{
+      .format = kRenderTapeDf24D3DFormat,
+      .resourceType = 3u,
+      .usage = 2u,
+      .pool = 0u,
+      .width = 2048u,
+      .height = 2048u,
+      .depth = 1u,
+  };
+  std::memcpy(descriptor.data() + sizeof(RenderTapeTextureDescriptorV2),
+              &level0, sizeof(level0));
+  return descriptor;
+}
+
+RenderTapeSurfaceDescriptorV2 df24ProducedAliasDescriptor(
+    const D9CWireObjectIdentity& parent) {
+  const auto texture = df24ProducedTextureDescriptor();
+  D9CSurfaceDesc level0{};
+  check(renderTapeTextureSubresourceDescriptor(texture, 0u, level0),
+        "authentic DF24 level-zero descriptor loads");
+  level0.resourceType = 1u;
+  return RenderTapeSurfaceDescriptorV2{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .parentTexture = parent,
+      .surface = level0,
+  };
+}
+
+// The binding owns the sole handle row; Clear and carried-attachment draws
+// have empty canonical handle slices. This pins the real stream rather than
+// constructing an ImportedChunkView that skips wire validation.
+std::vector<std::byte> makeDf24AttachmentProofChunk(
+    const D9CWireObjectIdentity& alias, std::uint32_t flags = 2u,
+    std::uint32_t rectCount = 0u,
+    std::uint32_t sectionKind = D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+    bool drawBeforeClear = false, bool laterZClear = false) {
+  const D9CCommandChunkWireDepthStencilBinding depthBinding{
+      .valid = 1u, .handleIndex = 0u};
+  const D9CCommandChunkWireRenderTargetBinding colorBinding{
+      .valid = 1u, .handleIndex = 0u};
+  const auto bindingBytes = sectionKind == D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL
+      ? std::as_bytes(std::span(&depthBinding, 1u))
+      : std::as_bytes(std::span(&colorBinding, 1u));
+  const auto bindingOffset = sizeof(D9CCommandChunkWireDrawHeader) +
+                             sizeof(D9CCommandChunkWireSectionDesc);
+  const D9CCommandChunkWireDrawHeader apply{
+      .sectionCount = 1u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = static_cast<std::uint32_t>(bindingOffset),
+  };
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = static_cast<std::uint16_t>(sectionKind),
+      .elementSize = static_cast<std::uint16_t>(bindingBytes.size()),
+      .count = 1u,
+      .payloadOffset = static_cast<std::uint32_t>(bindingOffset),
+      .byteSize = static_cast<std::uint32_t>(bindingBytes.size()),
+  };
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<std::byte> payload(bindingOffset + bindingBytes.size());
+  std::memcpy(payload.data(), &apply, sizeof(apply));
+  std::memcpy(payload.data() + sizeof(apply), &section, sizeof(section));
+  std::memcpy(payload.data() + bindingOffset, bindingBytes.data(),
+              bindingBytes.size());
+  records.push_back({
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payloadSize = static_cast<std::uint32_t>(payload.size()),
+      .handleCount = 1u,
+  });
+  const auto append = [&](std::uint32_t type,
+                          std::span<const std::byte> bytes) {
+    records.push_back({
+        .type = type,
+        .payloadOffset = static_cast<std::uint32_t>(payload.size()),
+        .payloadSize = static_cast<std::uint32_t>(bytes.size()),
+        .firstHandle = 1u,
+    });
+    payload.insert(payload.end(), bytes.begin(), bytes.end());
+  };
+  if (drawBeforeClear) {
+    const D9CCommandChunkWireDrawHeader draw{
+        .primitiveType = 4u,
+        .primitiveCount = 1u,
+        .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+        .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader),
+    };
+    append(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+           std::as_bytes(std::span(&draw, 1u)));
+  }
+  const auto appendClear = [&](std::uint32_t clearFlags,
+                               std::uint32_t rectangles) {
+    const D9CCommandChunkWireClear clear{
+        .flags = clearFlags,
+        .z = 0.5f,
+        .rectCount = rectangles,
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    };
+    std::vector<std::byte> bytes(sizeof(clear) + rectangles * sizeof(D9CRect));
+    std::memcpy(bytes.data(), &clear, sizeof(clear));
+    if (rectangles != 0u) {
+      const D9CRect rect{.right = 1024, .bottom = 1024};
+      std::memcpy(bytes.data() + sizeof(clear), &rect, sizeof(rect));
+    }
+    append(D9C_COMMAND_RECORD_CLEAR, bytes);
+  };
+  appendClear(flags, rectCount);
+  if (laterZClear) appendClear(2u, 0u);
+  const auto handleTableOffset = alignUp(
+      sizeof(D9CCommandChunkWireHeader) +
+          records.size() * sizeof(D9CCommandChunkWireRecordHeader),
+      alignof(D9CCommandChunkWireHandleEntry));
+  const auto payloadOffset = alignUp(
+      handleTableOffset + sizeof(D9CCommandChunkWireHandleEntry),
+      alignof(std::uint32_t));
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = sizeof(D9CCommandChunkWireHeader),
+      .recordCount = static_cast<std::uint32_t>(records.size()),
+      .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
+      .handleCount = 1u,
+      .payloadArenaOffset = static_cast<std::uint32_t>(payloadOffset),
+      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
+  };
+  const D9CCommandChunkWireHandleEntry handle{
+      .kind = alias.kind, .generation = alias.generation,
+      .objectId = alias.objectId};
+  std::vector<std::byte> bytes(payloadOffset + payload.size());
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  std::memcpy(bytes.data() + header.recordTableOffset, records.data(),
+              records.size() * sizeof(records[0]));
+  std::memcpy(bytes.data() + handleTableOffset, &handle, sizeof(handle));
+  std::memcpy(bytes.data() + payloadOffset, payload.data(), payload.size());
+  return bytes;
+}
+
+void appendDf24TestChunk(RenderTapeBuilder& builder,
+                         const std::vector<std::byte>& bytes) {
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, bytes.data(), sizeof(header));
+  const CommandChunkEnvelope envelope{
+      .recordCount = header.recordCount, .handleCount = header.handleCount};
+  check(validateCommandChunk(bytes, envelope).valid(),
+        "DF24 canonical fixture command chunk validates on the wire");
+  builder.appendCommandChunk(envelope, bytes);
+}
+
+RenderTapeBuilder beginDf24TestTape() {
+  RenderTapeBuilder builder;
+  builder.appendBootstrapState(makeApplyStateChunk());
+  const auto output = outputSurfaceDescriptor();
+  builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+                             std::as_bytes(std::span(&output, 1u)), 0u, {});
+  return builder;
+}
+
+void appendDf24TestPair(RenderTapeBuilder& builder,
+                        const D9CWireObjectIdentity& parent,
+                        const D9CWireObjectIdentity& alias) {
+  const auto descriptor = df24ProducedTextureDescriptor();
+  const auto aliasDescriptor = df24ProducedAliasDescriptor(parent);
+  builder.appendObjectDefine(parent, kTextureDescriptorKind, descriptor, 0u, {});
+  builder.appendObjectDefine(alias, kSurfaceDescriptorKind,
+      std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {});
+}
+
+std::vector<std::byte> finishDf24TestTape(RenderTapeBuilder& builder) {
+  appendDf24TestChunk(builder, makeMappedPresentChunk(kSurface));
+  const RenderTapeOracleAttachment oracle{
+      .identity = kSurface, .descriptorKind = kSurfaceDescriptorKind};
+  builder.appendPresentComplete(0u, 1u,
+      RenderTapeDigestValidity::NotCaptured, {},
+      std::as_bytes(std::span(&oracle, 1u)));
+  // Seal only after the required terminal event, then derive the immediately
+  // preceding Present ordinal from the serialized event layout.
+  auto tape = builder.seal();
+  RenderTapeHeader header{};
+  std::memcpy(&header, tape.data(), sizeof(header));
+  eventPayload<RenderTapePresentCompleteHeader>(tape, header.eventCount - 1u)
+      ->presentOrdinal = header.eventCount - 1u;
+  return tape;
+}
+
+void producedDf24CanonicalObligationsAreTemporalAndPerParent() {
+  constexpr D9CWireObjectIdentity alias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u, .objectId = 4294967319ull};
+  constexpr D9CWireObjectIdentity parent{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 1u, .objectId = 4294967318ull};
+  constexpr D9CWireObjectIdentity otherParent{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+      .generation = 2u, .objectId = 4294967320ull};
+  constexpr D9CWireObjectIdentity otherAlias{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 2u, .objectId = 4294967321ull};
+  const auto proof = makeDf24AttachmentProofChunk(alias);
+  const auto reject = [&](const std::vector<std::byte>& tape,
+                          RenderTapeValidationStatus status,
+                          RenderTapeIncompleteFrameReason reason =
+                              RenderTapeIncompleteFrameReason::None,
+                          const RenderTapeBlobCatalogue& catalogue =
+                              RenderTapeBlobCatalogue{}) {
+    ImportedRenderTapeView imported;
+    const auto result = validateRenderTape(tape, catalogue, &imported);
+    check(result.status == status && result.incompleteFrameReason == reason,
+          std::string("DF24 canonical negative expected ") +
+              renderTapeValidationStatusName(status) + "/" +
+              renderTapeIncompleteFrameReasonName(reason) + ", got " +
+              renderTapeValidationStatusName(result.status) + "/" +
+              renderTapeIncompleteFrameReasonName(result.incompleteFrameReason) +
+              " at event " + std::to_string(result.failedEventIndex));
+    RecordingSink sink;
+    if (result.valid())
+      (void)replayPrevalidatedRenderTape(imported, catalogue, sink);
+    check(sink.calls.empty(), "rejected DF24 tape has zero replay callbacks");
+    return result;
+  };
+  const auto beginPair = [&]() {
+    auto builder = beginDf24TestTape();
+    appendDf24TestPair(builder, parent, alias);
+    return builder;
+  };
+  const auto appendOutput = [&](RenderTapeBuilder& builder) {
+    const auto output = outputSurfaceDescriptor();
+    builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+        std::as_bytes(std::span(&output, 1u)), 0u, {});
+  };
+  RenderTapeBuilder boundBootstrap;
+  boundBootstrap.appendBootstrapState(makeApplyStateChunk(true, parent));
+  appendOutput(boundBootstrap);
+  appendDf24TestPair(boundBootstrap, parent, alias);
+  appendDf24TestChunk(boundBootstrap, proof);
+  check(validateRenderTape(finishDf24TestTape(boundBootstrap), {}).valid(),
+        "binding-only bootstrap does not consume uninitialized DF24 content");
+  RenderTapeBuilder drawBootstrap;
+  drawBootstrap.appendBootstrapState(makeDrawChunk(parent));
+  appendOutput(drawBootstrap);
+  appendDf24TestPair(drawBootstrap, parent, alias);
+  appendDf24TestChunk(drawBootstrap, proof);
+  reject(finishDf24TestTape(drawBootstrap),
+         RenderTapeValidationStatus::BootstrapForbiddenRecord);
+  RenderTapeBuilder presentBootstrap;
+  presentBootstrap.appendBootstrapState(makeMappedPresentChunk(alias));
+  appendOutput(presentBootstrap);
+  appendDf24TestPair(presentBootstrap, parent, alias);
+  appendDf24TestChunk(presentBootstrap, proof);
+  reject(finishDf24TestTape(presentBootstrap),
+         RenderTapeValidationStatus::BootstrapForbiddenRecord);
+  auto accepted = beginPair();
+  appendDf24TestChunk(accepted, proof);
+  appendDf24TestChunk(accepted, makeDrawChunk(parent));
+  const auto positive = finishDf24TestTape(accepted);
+  ImportedRenderTapeView imported;
+  check(validateRenderTape(positive, {}, &imported).valid(),
+        "authentic DF24 Z-only full clear needs no seed and allows later sampling");
+  RecordingSink sink;
+  check(replayPrevalidatedRenderTape(imported, {}, sink).complete &&
+            sink.calls.size() == imported.events.size(),
+        "DF24 canonical tape replays each admitted event exactly once");
+
+  for (const auto flags : {0u, 1u, 3u, 4u, 5u, 6u, 7u, 0x82u}) {
+    auto builder = beginPair();
+    appendDf24TestChunk(builder, makeDf24AttachmentProofChunk(alias, flags));
+    reject(finishDf24TestTape(builder), RenderTapeValidationStatus::IncompleteFrame,
+           RenderTapeIncompleteFrameReason::ProducedProofRejected);
+  }
+  for (const auto flags : {3u, 4u, 6u}) {
+    auto builder = beginPair();
+    appendDf24TestChunk(builder,
+        makeDf24AttachmentProofChunk(alias, flags, 0u,
+            D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, false, true));
+    reject(finishDf24TestTape(builder), RenderTapeValidationStatus::IncompleteFrame,
+           RenderTapeIncompleteFrameReason::ProducedProofRejected);
+  }
+  for (const auto drawFirst : {false, true}) {
+    auto builder = beginPair();
+    appendDf24TestChunk(builder,
+        makeDf24AttachmentProofChunk(alias, 2u, drawFirst ? 0u : 1u,
+            D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, drawFirst, true));
+    reject(finishDf24TestTape(builder), RenderTapeValidationStatus::IncompleteFrame,
+           RenderTapeIncompleteFrameReason::ProducedProofRejected);
+  }
+  auto wrongBinding = beginPair();
+  appendDf24TestChunk(wrongBinding, makeDf24AttachmentProofChunk(alias, 1u, 0u,
+      D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET));
+  reject(finishDf24TestTape(wrongBinding), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofRejected);
+
+  auto directParent = beginPair();
+  appendDf24TestChunk(directParent, makeDrawChunk(parent));
+  appendDf24TestChunk(directParent, proof);
+  reject(finishDf24TestTape(directParent), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofRejected);
+
+  auto presentFirst = beginPair();
+  appendDf24TestChunk(presentFirst, makeMappedPresentChunk(alias));
+  appendDf24TestChunk(presentFirst, proof);
+  reject(finishDf24TestTape(presentFirst), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofRejected);
+  const D9CCommandChunkWireStretchRect copy{
+      .srcHandleIndex = 0u, .dstHandleIndex = 1u};
+  const std::array copyHandles{
+      D9CCommandChunkWireHandleEntry{
+          .kind = alias.kind, .generation = alias.generation,
+          .objectId = alias.objectId},
+      D9CCommandChunkWireHandleEntry{
+          .kind = kSurface.kind, .generation = kSurface.generation,
+          .objectId = kSurface.objectId},
+  };
+  auto copyFirst = beginPair();
+  appendDf24TestChunk(copyFirst, makeSingleRecordChunk(
+      D9C_COMMAND_RECORD_STRETCH_RECT, std::as_bytes(std::span(&copy, 1u)),
+      copyHandles));
+  appendDf24TestChunk(copyFirst, proof);
+  reject(finishDf24TestTape(copyFirst), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofRejected);
+
+  auto forwardParent = beginDf24TestTape();
+  appendDf24TestChunk(forwardParent, proof);
+  appendDf24TestPair(forwardParent, parent, alias);
+  reject(finishDf24TestTape(forwardParent), RenderTapeValidationStatus::UnknownIdentity);
+  auto forwardAlias = beginDf24TestTape();
+  const auto parentDescriptor = df24ProducedTextureDescriptor();
+  const auto aliasDescriptor = df24ProducedAliasDescriptor(parent);
+  forwardAlias.appendObjectDefine(parent, kTextureDescriptorKind,
+                                  parentDescriptor, 0u, {});
+  appendDf24TestChunk(forwardAlias, proof);
+  forwardAlias.appendObjectDefine(alias, kSurfaceDescriptorKind,
+      std::as_bytes(std::span(&aliasDescriptor, 1u)), 0u, {});
+  reject(finishDf24TestTape(forwardAlias), RenderTapeValidationStatus::UnknownIdentity);
+
+  for (const auto usage : {0u, 1u, 3u, 0x102u}) {
+    auto builder = beginDf24TestTape();
+    auto descriptor = parentDescriptor;
+    D9CSurfaceDesc level0{};
+    std::memcpy(&level0, descriptor.data() + sizeof(RenderTapeTextureDescriptorV2),
+                sizeof(level0));
+    level0.usage = usage;
+    std::memcpy(descriptor.data() + sizeof(RenderTapeTextureDescriptorV2),
+                &level0, sizeof(level0));
+    builder.appendObjectDefine(parent, kTextureDescriptorKind, descriptor, 0u, {});
+    auto badAlias = aliasDescriptor;
+    badAlias.surface.usage = usage;
+    builder.appendObjectDefine(alias, kSurfaceDescriptorKind,
+        std::as_bytes(std::span(&badAlias, 1u)), 0u, {});
+    appendDf24TestChunk(builder, proof);
+    reject(finishDf24TestTape(builder), RenderTapeValidationStatus::InvalidObjectDefine);
+  }
+  for (const auto staleParent : {false, true}) {
+    auto builder = beginDf24TestTape();
+    builder.appendObjectDefine(parent, kTextureDescriptorKind,
+                                parentDescriptor, 0u, {});
+    auto badAlias = aliasDescriptor;
+    if (staleParent) ++badAlias.parentTexture.generation;
+    else --badAlias.surface.width;
+    builder.appendObjectDefine(alias, kSurfaceDescriptorKind,
+        std::as_bytes(std::span(&badAlias, 1u)), 0u, {});
+    appendDf24TestChunk(builder, proof);
+    reject(finishDf24TestTape(builder), RenderTapeValidationStatus::InvalidObjectDefine);
+  }
+  for (const auto expectedCount : {0u, 1u}) {
+    auto seeded = positive;
+    auto* fixed = eventPayload<RenderTapeObjectDefineHeader>(seeded, 2u);
+    fixed->expectedContentBytes = 4u;
+    fixed->expectedContentCount = expectedCount;
+    reject(seeded, RenderTapeValidationStatus::InvalidObjectDefine);
+  }
+
+  auto noAlias = beginDf24TestTape();
+  noAlias.appendObjectDefine(parent, kTextureDescriptorKind,
+                             parentDescriptor, 0u, {});
+  const auto noAliasResult = reject(finishDf24TestTape(noAlias),
+      RenderTapeValidationStatus::InvalidObjectDefine);
+  check(noAliasResult.objectDefine.subreason ==
+            RenderTapeObjectDefineValidationSubreason::ProducedTextureAliasClosure,
+        "missing DF24 alias cannot leave an ambiguous proof origin");
+
+  auto unresolved = beginPair();
+  reject(finishDf24TestTape(unresolved), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofUnresolvedAtPresent);
+
+  auto independent = beginPair();
+  appendDf24TestPair(independent, otherParent, otherAlias);
+  appendDf24TestChunk(independent, proof);
+  appendDf24TestChunk(independent, makeDf24AttachmentProofChunk(otherAlias));
+  appendDf24TestChunk(independent, makeDrawChunk(otherParent));
+  check(validateRenderTape(finishDf24TestTape(independent), {}).valid(),
+        "independent DF24 parents each resolve their own exact-alias obligation");
+  auto crossIdentity = beginPair();
+  appendDf24TestPair(crossIdentity, otherParent, otherAlias);
+  appendDf24TestChunk(crossIdentity, proof);
+  reject(finishDf24TestTape(crossIdentity), RenderTapeValidationStatus::IncompleteFrame,
+         RenderTapeIncompleteFrameReason::ProducedProofUnresolvedAtPresent);
+
+  auto ambiguous = beginPair();
+  const auto alternate = df24ProducedAliasDescriptor(parent);
+  ambiguous.appendObjectDefine(otherAlias, kSurfaceDescriptorKind,
+      std::as_bytes(std::span(&alternate, 1u)), 0u, {});
+  appendDf24TestChunk(ambiguous, proof);
+  const auto ambiguousResult = reject(finishDf24TestTape(ambiguous),
+      RenderTapeValidationStatus::InvalidObjectDefine);
+  check(ambiguousResult.failedEventIndex == 2u &&
+            ambiguousResult.objectDefine.subreason ==
+                RenderTapeObjectDefineValidationSubreason::ProducedTextureAliasClosure,
+        "two DF24 aliases reject at the parent's closure before terminal proof");
+
+  for (const auto identity : {parent, alias}) {
+    auto mutation = beginPair();
+    appendDf24TestChunk(mutation, proof);
+    mutation.appendResourceMutation(identity, RenderTapeMutationKind::Upload,
+                                    0u, 0u, 4u, mutationDigest());
+    reject(finishDf24TestTape(mutation), RenderTapeValidationStatus::InvalidMutationKind,
+           RenderTapeIncompleteFrameReason::None, completeCatalogue());
+  }
+
+  const auto appendRead = [&](RenderTapeBuilder& builder,
+                              const D9CWireObjectIdentity& identity) {
+    const RenderTapeCpuReadControl read{.copyCount = 1u, .bytesRead = 4u};
+    const RenderTapeOrderedControlHeader control{
+        .identity = identity,
+        .kind = static_cast<std::uint32_t>(RenderTapeControlKind::CpuRead),
+        .disposition = static_cast<std::uint32_t>(
+            RenderTapeControlDisposition::Completed),
+        .controlBytes = sizeof(read),
+        .completionOrdinal = 1u,
+    };
+    builder.appendOrderedControl(control, std::as_bytes(std::span(&read, 1u)));
+  };
+  for (const auto identity : {parent, alias}) {
+    auto earlyRead = beginPair();
+    appendRead(earlyRead, identity);
+    appendDf24TestChunk(earlyRead, proof);
+    const auto result = reject(finishDf24TestTape(earlyRead),
+        RenderTapeValidationStatus::IncompleteFrame,
+        RenderTapeIncompleteFrameReason::ProducedProofRejected);
+    check(result.failedEventIndex == 4u &&
+              result.hasOffendingIdentity &&
+              sameWireIdentity(result.offendingIdentity, parent),
+          "pre-proof CPU read reports the unresolved generation-qualified parent");
+    auto lateRead = beginPair();
+    appendDf24TestChunk(lateRead, proof);
+    appendRead(lateRead, identity);
+    check(validateRenderTape(finishDf24TestTape(lateRead), {}).valid(),
+          "DF24 CPU read after its full depth initialization is canonically sound");
+  }
+}
+
 void textureAliasLogicalSlotsUseParentSubresources() {
   constexpr D9CWireObjectIdentity output{
       .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
@@ -3212,6 +3766,8 @@ int main(int argc, char** argv) {
     seedContentClosesByUniqueSubresourceAndSummedBytes();
     perIdentityLateSeedClosureIsExact();
     versionedSubresourceDescriptorsFailClosed();
+    textureDispositionDiagnosticsPreserveCanonicalLevel0();
+    producedDf24CanonicalObligationsAreTemporalAndPerParent();
     textureAliasLogicalSlotsUseParentSubresources();
     textureSurfaceAliasesCoverCanonical2DAndStandaloneSurfaces();
     textureSurfaceWrapperLifetimeIsIdempotent();

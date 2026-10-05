@@ -79,9 +79,13 @@ class Initializer {
     bool failed = false;
   };
   QueryProgress queryProgressUnlocked() noexcept;
+  // Capture-finish only; the caller owns the queue mutex and matching sink.
+  // Polls retained actual command buffers without publishing or waiting.
+  bool refreshTapeRuntimeCompletionsUnlocked() noexcept;
 
  private:
   FlushResult flushToWaitUnlocked();
+  void failTextureUploadUnlocked() noexcept;
   void enqueuePendingUploadUnlocked(Pool::StagingCopy staging);
 
   friend struct dxmt9::SchedulingProgressTestAccess;
@@ -100,6 +104,16 @@ class Initializer {
   // captures Initializer/Query lifetime and polling never waits for the GPU.
   bool queryTrackingEnabled_ = false;
   query::UploadTracker<WMT::Reference<WMT::CommandBuffer>, 64> queryUploads_;
+  struct TapeUpload {
+    WMT::Reference<WMT::CommandBuffer> buffer{};
+    std::uint64_t sequence = 0u;
+  };
+  // Capture-only status ownership; it never changes submission, upload
+  // tracking policy, shared-event behavior or the app's synchronous waits.
+  std::array<TapeUpload, 64> tapeUploads_{};
+  std::size_t tapeUploadHead_ = 0u;
+  std::size_t tapeUploadCount_ = 0u;
+  bool tapeUploadFailed_ = false;
 };
 
 }  // namespace resources

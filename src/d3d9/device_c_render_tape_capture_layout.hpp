@@ -132,6 +132,7 @@ renderTapeArmSnapshotCompletionAction(bool finalTapeComplete) noexcept {
 // values here and the PE translation unit static_asserts them against the
 // toolchain's actual D3DFMT_* enumerants.
 namespace render_tape_d3d_format {
+inline constexpr std::uint32_t NULL_RT = kRenderTapeNullRtD3DFormat;
 inline constexpr std::uint32_t R8G8B8 = 20u;
 inline constexpr std::uint32_t A8R8G8B8 = 21u;
 inline constexpr std::uint32_t X8R8G8B8 = 22u;
@@ -551,6 +552,7 @@ enum class RenderTapeBlockMutationStatus : std::uint32_t {
   InvalidBytes,
   Overflow,
   AllocationFailed,
+  IoFailed,
 };
 
 RenderTapeBlockMutationStatus applyRenderTapeBlockMutation(
@@ -598,9 +600,9 @@ bool writeRenderTapeLinearRows(std::span<const std::byte> tightBytes,
                                void* bits,
                                const RenderTapeLinearLockLayout& layout) noexcept;
 
-// Snapshot-only raw RGBA16Float upload; it does not admit this format to
-// ordinary PE locks. The caller validates the owning CompleteSeed descriptor
-// (single-level 2D) and locks only its exact subresource zero backing.
+// Exact raw RGBA16Float/R32Float checkpoint upload; it does not widen ordinary
+// PE lock admission. The caller validates the owning CompleteSeed descriptor
+// (single-level DEFAULT RT 2D) and locks only its exact subresource zero backing.
 bool writeRenderTapeColorSnapshotRows(std::span<const std::byte> tightBytes,
                                       void* bits, std::int32_t pitch,
                                       const D9CSurfaceDesc& surface) noexcept;

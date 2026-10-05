@@ -9,6 +9,7 @@
 #include "d3d9_uniform_dependency_observer.hpp"
 #include "d3d9_uniform_dependencies.hpp"
 #include "../dxmt9/dxmt9_perf_counters.hpp"
+#include "../dxmt9/dxmt9_render_tape_emission_observer.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -4089,7 +4090,11 @@ Device::flushCompatibilityReplayDrawBatch() noexcept {
     // One source-local publication carries all stateful runs. The production
     // DeviceImpl maps this to one CommandQueue transaction; the base virtual
     // hook remains a safe compatibility fallback for test providers.
-    if (!upperDevice_->submitDrawRunBatch(compatBatchEntries_)) {
+    const auto submit = [&] { return upperDevice_->submitDrawRunBatch(compatBatchEntries_); };
+    const bool submitted = render::activeTapeEmissionObserver
+        ? render::activeTapeEmissionObserver->flushCompatibilityBatch(submit)
+        : submit();
+    if (!submitted) {
       compatBatchFailed_ = true;
       return CompatibilityDrawBatchFlushStatus::Failed;
     }
@@ -4221,6 +4226,8 @@ DirectReplayDrawResult Device::submitCompatibilityReplayDrawBatched(
   if (activeOcclusionQuery_) {
     activeOcclusionCount_ += draw.primitiveCount;
   }
+  if (auto* observer = render::activeTapeEmissionObserver)
+    observer->acceptCompatibilityDraw();
   ++submittedSequenceId_;
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
   return {D3D_OK, DirectReplayDrawDisposition::Appended};

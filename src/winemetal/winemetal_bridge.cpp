@@ -339,6 +339,14 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_capture:
   case BridgeOpcode::dxmt9c_device_finish_render_tape_present_source_capture:
   case BridgeOpcode::dxmt9c_device_finish_render_tape_identity_capture:
+  case BridgeOpcode::dxmt9c_device_begin_render_tape_identity_capture_v3:
+  case BridgeOpcode::dxmt9c_device_note_render_tape_identity_cut_v3:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_identity_capture_v3:
+  case BridgeOpcode::dxmt9c_device_cancel_render_tape_identity_capture_v3:
+  case BridgeOpcode::dxmt9c_device_begin_render_tape_identity_capture_v4:
+  case BridgeOpcode::dxmt9c_device_note_render_tape_identity_cut_v4:
+  case BridgeOpcode::dxmt9c_device_finish_render_tape_identity_capture_v4:
+  case BridgeOpcode::dxmt9c_device_cancel_render_tape_identity_capture_v4:
   case BridgeOpcode::dxmt9c_device_wait_render_tape_event_completion:
   case BridgeOpcode::dxmt9c_device_wait_for_pending_work:
   case BridgeOpcode::dxmt9c_device_cancel_render_tape_present_capture:
@@ -346,6 +354,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24s8_snapshot:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_event_query_checkpoint:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:
+  case BridgeOpcode::dxmt9c_device_classify_render_tape_primary_backbuffer:
   case BridgeOpcode::dxmt9c_swapchain_present:
   case BridgeOpcode::dxmt9c_device_get_swap_chain:
   case BridgeOpcode::dxmt9c_device_get_swap_chain_count:
@@ -495,6 +504,7 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
   case BridgeOpcode::dxmt9c_device_capture_render_tape_d24s8_snapshot:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_event_query_checkpoint:
   case BridgeOpcode::dxmt9c_device_capture_render_tape_color_snapshot:
+  case BridgeOpcode::dxmt9c_device_classify_render_tape_primary_backbuffer:
     detail = BridgeDetail::RenderTapePresentCapture;
     return true;
   case BridgeOpcode::dxmt9c_swapchain_present:

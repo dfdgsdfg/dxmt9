@@ -59,6 +59,7 @@ normal_models=(
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
   RenderTapeCompletionSchedule
+  RenderTapeControlledCpuConsumer
   RenderTapeEventCompletionBinding
   RenderTapeExactEventWait
   RenderTapeGroupedPublication
@@ -77,15 +78,16 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=65
-expected_progress_count=5
-expected_counterexample_count=157
-expected_cfg_count=227
+expected_normal_count=66
+expected_progress_count=6
+expected_counterexample_count=158
+expected_cfg_count=230
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
   QueryReplayReceipt.progress
   RenderTapeExactEventWait.progress
+  RenderTapeControlledCpuConsumer.progress
   RenderTapeSingletonArenaRetirement.progress
 )
 
@@ -206,6 +208,7 @@ counterexample_models=(
   "QueueT2dReserveCopyCommit|.lost-prefix-rollback.counterexample|Invariant RollbackRestoresPrefix is violated"
   "RenderTapeCompletionSchedule|.premature-release.counterexample|Invariant NoReleaseBeforeSubmit is violated"
   "RenderTapeCompletionSchedule|.duplicate-release.counterexample|Invariant NoDuplicateRelease is violated"
+  "RenderTapeControlledCpuConsumer|.missing-publication-wake.counterexample|Temporal properties were violated"
   "RenderTapeEventCompletionBinding|.stale-identity.counterexample|Invariant Invariant is violated"
   "RenderTapeEventCompletionBinding|.premature-reuse.counterexample|Invariant Invariant is violated"
   "RenderTapeEventCompletionBinding|.premature-completion.counterexample|Invariant Invariant is violated"

@@ -2,6 +2,11 @@
 
 #include "device_c_common.hpp"
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_identity_transfer_v3.hpp"
+#include "device_c_render_tape_present_preparation.hpp"
+#include "device_c_render_tape_primary_backbuffer_classification.hpp"
+#include "device_c_render_tape_runtime_identity_v3.hpp"
+#include "device_c_render_tape_snapshot_staging.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/dxmt9_blit_encoders.hpp"
 #include "dxmt9/dxmt9_device.hpp"
@@ -103,9 +108,10 @@ bool expectedD24X8Bytes(const D9CSurfaceDesc& desc,
 
 } // namespace
 
-extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
-    D9CDevice* device) {
-  if (!device || device->renderTapePresentCapture) {
+namespace dxmt9::d3d9 {
+
+std::int32_t prepareRenderTapePresentReservation(D9CDevice* device) noexcept {
+  if (!device) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   try {
@@ -125,6 +131,88 @@ extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
       return dxmt9::core::D3DERR_NOTAVAILABLE;
     }
     upper->flush();
+    // flush() has no status result and can defer during an active build.
+    // Verify the real queue's completion without adding another publication.
+    if (upper->queryProgress().failed ||
+        !upper->queue().hasCompletedPendingWork()) {
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    return dxmt9::core::D3D_OK;
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+} // namespace dxmt9::d3d9
+
+extern "C" int32_t dxmt9c_device_classify_render_tape_primary_backbuffer(
+    D9CDevice* device, const D9CWireObjectIdentity* identity,
+    uint32_t* outIsPrimary) {
+  if (!outIsPrimary) return dxmt9::core::D3DERR_INVALIDCALL;
+  *outIsPrimary = 0u;
+  if (!device || !device->iface || !identity ||
+      identity->kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
+      identity->generation == 0u || identity->objectId == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  if (dxmt9::d3d9::replayTerminal(device)) {
+    return dxmt9::core::D3DERR_DEVICELOST;
+  }
+  D9CSurface* surface = nullptr;
+  const auto release = [&] {
+    if (surface) dxmt9c_surface_release(std::exchange(surface, nullptr));
+  };
+  try {
+    const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
+        dxmt9::d3d9::wireHandleEntry(*identity)}};
+    std::array<void*, 1u> resolved{};
+    if (!device->wireObjects.resolveAndRetain(entries, resolved,
+                                              retainSnapshotSurface)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    surface = static_cast<D9CSurface*>(resolved[0]);
+    if (!surface || surface->device != device || !surface->obj) {
+      release();
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    // The PE recorder capture guard excludes synchronous Reset/replacement.
+    // Replay can consume the backing but cannot replace this host ownership.
+    // Hold both core references through comparison; a surviving old facade
+    // after Reset must not match the new current primary backing.
+    const auto backing = surface->obj;
+    const auto swap = device->dev().swapChain(0u);
+    const auto primary = swap ? swap->backBuffer() : nullptr;
+    const bool terminal = dxmt9::d3d9::replayTerminal(device);
+    const bool classified = dxmt9::d3d9::renderTapeClassifyPrimaryBackbuffer(
+        *identity, surface->wireIdentity, device, surface->device,
+        backing.get(), primary.get(), terminal, *outIsPrimary);
+    release();
+    if (terminal) return dxmt9::core::D3DERR_DEVICELOST;
+    return classified ? dxmt9::core::D3D_OK
+                      : dxmt9::core::D3DERR_INVALIDCALL;
+  } catch (...) {
+    release();
+    *outIsPrimary = 0u;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
+    D9CDevice* device) {
+  if (!device || device->renderTapePresentCapture) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto preparation =
+      dxmt9::d3d9::prepareRenderTapePresentReservation(device);
+  if (preparation != dxmt9::core::D3D_OK) {
+    return preparation;
+  }
+  try {
+    auto swap = device->dev().swapChain(0u);
+    auto upper = device->dev().upperDevice();
+    if (!swap || !upper || !upper->pool()) {
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
     const auto source = swap->backBuffer();
     if (!source || !source->valid()) {
       return dxmt9::core::D3DERR_INVALIDCALL;
@@ -294,6 +382,72 @@ dxmt9c_device_finish_render_tape_present_source_capture(
     return dxmt9::core::D3D_OK;
   } catch (...) {
     cancelPresentCapture(device);
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_device_begin_render_tape_identity_capture_v3(
+    D9CDevice* device, std::uint64_t token, std::uint64_t epoch) {
+  if (!device || !token || !epoch) return dxmt9::core::D3DERR_INVALIDCALL;
+  // The arm checkpoint has already quiesced the real queue. Installing an
+  // observer must not manufacture another submission or completion fence.
+  return dxmt9::d3d9::beginRenderTapeRuntimeIdentityV3(device, token, epoch)
+      ? dxmt9::core::D3D_OK : dxmt9::core::D3DERR_NOTAVAILABLE;
+}
+
+extern "C" void dxmt9c_device_cancel_render_tape_identity_capture_v3(
+    D9CDevice* device, std::uint64_t token, std::uint64_t epoch) {
+  if (device && token && epoch)
+    dxmt9::d3d9::cancelRenderTapeRuntimeIdentityV3(device, token, epoch);
+}
+
+extern "C" int32_t dxmt9c_device_note_render_tape_identity_cut_v3(
+    D9CDevice* device, std::uint64_t token, std::uint64_t epoch,
+    std::uint64_t eventOrdinal, std::uint32_t cutKind) {
+  using Cut = dxmt9::d3d9::RenderTapeIdentityV3CutKind;
+  if (!device || !token || !epoch || !eventOrdinal ||
+      (cutKind != static_cast<std::uint32_t>(Cut::BeforeEvent) &&
+       cutKind != static_cast<std::uint32_t>(Cut::AfterEvent)))
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  auto* observer = device->renderTapeRuntimeIdentityV3.get();
+  // Complete older deferred dispatch before entering this *original* external
+  // operation. This does not submit GPU work or complete a source artificially.
+  if (!observer || !observer->matches({token, epoch}) ||
+      !dxmt9::d3d9::drainDeferredReplay(device, "render-tape-v3-external-cut"))
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  return observer->setCut(eventOrdinal, static_cast<Cut>(cutKind))
+      ? dxmt9::core::D3D_OK : dxmt9::core::D3DERR_NOTAVAILABLE;
+}
+
+extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture_v3(
+    D9CDevice* device, std::uint64_t token, std::uint64_t epoch,
+    std::uint64_t presentOrdinal, D9CRenderTapeIdentityCaptureV3Result* out,
+    void* bytes, std::uint64_t capacity) {
+  if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
+  *out = {};
+  out->status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED;
+  if (!device || !token || !epoch || !presentOrdinal ||
+      (capacity && !bytes) || capacity > std::numeric_limits<std::size_t>::max())
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  try {
+    if (!dxmt9::d3d9::drainDeferredReplay(device, "render-tape-v3-finish"))
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    dxmt9::d3d9::RenderTapeIdentityV3View snapshot;
+    if (!dxmt9::d3d9::finishRenderTapeRuntimeIdentityV3(
+            device, token, epoch, presentOrdinal, snapshot))
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    std::vector<std::byte> transfer;
+    if (dxmt9::d3d9::encodeRenderTapeIdentityV3SnapshotTransfer(snapshot, transfer) !=
+        dxmt9::d3d9::RenderTapeIdentityV3TransferStatus::Valid)
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    if (capacity && capacity != transfer.size())
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    if (capacity) std::memcpy(bytes, transfer.data(), transfer.size());
+    *out = {.status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE,
+        .version = 3u, .captureToken = token, .captureEpoch = epoch,
+        .presentOrdinal = presentOrdinal, .byteCount = transfer.size()};
+    return dxmt9::core::D3D_OK;
+  } catch (...) {
     return dxmt9::core::D3DERR_NOTAVAILABLE;
   }
 }
@@ -560,6 +714,13 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     out->status = D9C_RENDER_TAPE_D24X8_SNAPSHOT_CAPACITY_MISMATCH;
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  dxmt9::d3d9::RenderTapeSnapshotStagingPlan staging{};
+  if (!dxmt9::d3d9::renderTapeDeriveSnapshotStagingPlan(
+          dxmt9::d3d9::RenderTapeSnapshotStagingFamily::D24X8,
+          expectedBytes, staging)) {
+    out->status = D9C_RENDER_TAPE_D24X8_SNAPSHOT_READBACK_FAILED;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
 
   const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
       dxmt9::d3d9::wireHandleEntry(request->identity)}};
@@ -656,6 +817,13 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_d24s8_snapshot(
     out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_CAPACITY_MISMATCH;
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  dxmt9::d3d9::RenderTapeSnapshotStagingPlan staging{};
+  if (!dxmt9::d3d9::renderTapeDeriveSnapshotStagingPlan(
+          dxmt9::d3d9::RenderTapeSnapshotStagingFamily::D24S8,
+          layout.byteCount, staging)) {
+    out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_READBACK_FAILED;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
   const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
       dxmt9::d3d9::wireHandleEntry(request->identity)}};
   std::array<void*, 1u> resolved{};
@@ -749,6 +917,13 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
       capacity > std::numeric_limits<std::size_t>::max()) {
     out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_CAPACITY_MISMATCH;
     return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  dxmt9::d3d9::RenderTapeSnapshotStagingPlan staging{};
+  if (!dxmt9::d3d9::renderTapeDeriveSnapshotStagingPlan(
+          dxmt9::d3d9::RenderTapeSnapshotStagingFamily::Color,
+          layout.byteCount, staging)) {
+    out->status = D9C_RENDER_TAPE_COLOR_SNAPSHOT_READBACK_FAILED;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
   }
 
   const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
@@ -853,8 +1028,10 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     }
     const bool leasedColorTexture = layout.encodingVersion ==
         D9C_RENDER_TAPE_COLOR_ENCODING_RGBA16FLOAT_LE_V2 ||
-        (textureIdentity && actual.resourceType == 3u && actual.pool == 0u &&
-         actual.usage == 1u && actual.format == 21u);
+        (textureIdentity &&
+         ((actual.resourceType == 3u && actual.pool == 0u &&
+           actual.usage == 1u && actual.format == 21u) ||
+          dxmt9::d3d9::renderTapeArmColorSnapshotR32FloatTextureSupported(actual)));
     if (!leasedColorTexture) upper->flush();
     dxmt9::core::ReadbackPixels pixels;
     std::vector<std::byte> tight;

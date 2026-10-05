@@ -235,7 +235,9 @@ def main() -> int:
             (validation_output / "provider.stderr").read_text()[:3000])
         assert module.experiment_accepts(validation_receipt["result"], warmup=1,
             repeat=2, reset="cold-device", route="compatibility",
-            require_path=False, non_degenerate=False)
+            require_path=False, non_degenerate=False,
+            input_components=validation_receipt["input_components"],
+            input_inspection=validation_receipt["input_inspection"])
         for index, iteration in enumerate(prepared["iterations"]):
             artifacts = iteration["readback_artifacts"]
             for kind in ("output", "source"):
@@ -245,8 +247,12 @@ def main() -> int:
                 assert artifact.stat().st_size == evidence["bytes"]
                 assert module.digest(artifact) == evidence["sha256"]
         accept_options = dict(warmup=1, repeat=2, reset="cold-device",
-                              route="compatibility", require_path=False, non_degenerate=False)
+                              route="compatibility", require_path=False, non_degenerate=False,
+                              input_components=receipt["input_components"],
+                              input_inspection=receipt["input_inspection"])
         assert module.experiment_accepts(prepared, **accept_options)
+        missing_inspection = {**accept_options, "input_inspection": None}
+        assert not module.experiment_accepts(prepared, **missing_inspection)
         for change in ("partial", "reset", "stale-output", "gpu-error", "zero-encode", "observed-path", "pixel-determinism", "timing"):
             invalid = copy.deepcopy(prepared)
             if change == "partial":
@@ -416,7 +422,8 @@ def main() -> int:
                 "--reset", "warm-device", "--replay-route", route,
                 *(("--require-path",) if route == "compatibility" else ()))
             assert json.loads(route_run.stdout)["accepted"] is True
-            route_result = json.loads((route_output / "result.json").read_text())["result"]
+            route_receipt = json.loads((route_output / "result.json").read_text())
+            route_result = route_receipt["result"]
             if route == "production-slot":
                 # This 128-draw fixture takes production's pre-effect fallback;
                 # matching pixels must not qualify it as executed Direct work.
@@ -424,7 +431,9 @@ def main() -> int:
                            for item in route_result["iterations"])
                 assert not module.experiment_accepts(
                     route_result, warmup=1, repeat=2, reset="warm-device",
-                    route=route, require_path=True, non_degenerate=True)
+                    route=route, require_path=True, non_degenerate=True,
+                    input_components=route_receipt["input_components"],
+                    input_inspection=route_receipt["input_inspection"])
             route_outputs.append([
                 item["provider_result"]["validity"]["output_sha256"]
                 for item in route_result["iterations"]])

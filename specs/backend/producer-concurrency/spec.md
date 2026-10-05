@@ -113,7 +113,7 @@ the `dxmt9p_*` bodies are the same implementations compiled under macro
 renaming (`device_c_provider_macros.hpp`/`device_c_provider_undefs.hpp`), so a
 `dxmt9c_*` occurrence in a provider `.cpp` that only includes
 `device_c_provider.hpp` (no undef) is not a real wire symbol — it compiles to
-`dxmt9p_*`. **161 distinct symbols**, mechanically counted by
+`dxmt9p_*`. **169 distinct symbols**, mechanically counted by
 `scripts/check/audit_bridge_entry_classification.py`
 (`dxmt9-bridge-entry-classification-audit`), which also scans every other
 `.cpp` under `src/` for a stray non-macro-renamed `dxmt9c_*` definition so a
@@ -147,9 +147,13 @@ waits with NOOVERWRITE/DISCARD bypass classes, and the fail-fast
 | `device_cancel_render_tape_present_capture` (1) | `state-mutation-ack` | never-blocks (no drain macro; a null check on `arg0`, then a fire-and-forget call) | cold |
 | `commit_chunk` (offload path) (1) | `record-only` | enqueue + sync mark/capture, no drain unless the chunk carries a READBACK record (inline lane) | high (15.9/present) |
 
-Class totals (conserved against the audit's 161): `app-return-value` 33,
-`ordering-fence` 87, `state-mutation-ack` 27, `visibility-wait` 13,
-`record-only` 1.
+Class totals (conserved against the audit's 169): `app-return-value` 34,
+`ordering-fence` 92, `state-mutation-ack` 28, `visibility-wait` 13,
+`record-only` 2. The family table's original inventory is supplemented by
+segmented commit and V4 capture entries in the exact classification below.
+The capture-only primary-backbuffer classifier is a host metadata read with
+exact registry retention, not an ordering fence. It relies on serialized PE
+capture/Reset ownership and does not admit unsynchronized concurrent Reset.
 
 The full per-entry list lives in the fenced `classification` block
 immediately below; it is the audit's source of truth. The table above is the
@@ -165,12 +169,17 @@ dxmt9c_buffer_release state-mutation-ack
 dxmt9c_buffer_unlock visibility-wait
 dxmt9c_device_addref state-mutation-ack
 dxmt9c_device_begin_scene state-mutation-ack
+dxmt9c_device_begin_render_tape_identity_capture_v4 ordering-fence
 dxmt9c_device_begin_state_block ordering-fence
 dxmt9c_device_cancel_render_tape_present_capture state-mutation-ack
+dxmt9c_device_cancel_render_tape_identity_capture_v4 state-mutation-ack
 dxmt9c_device_capture_render_tape_color_snapshot ordering-fence
 dxmt9c_device_capture_render_tape_d24x8_snapshot ordering-fence
 dxmt9c_device_check_device_multisample ordering-fence
 dxmt9c_device_check_device_state visibility-wait
+dxmt9c_device_classify_render_tape_primary_backbuffer app-return-value
+dxmt9c_device_finish_render_tape_identity_capture_v4 ordering-fence
+dxmt9c_device_note_render_tape_identity_cut_v4 ordering-fence
 dxmt9c_device_clear ordering-fence
 dxmt9c_device_color_fill visibility-wait
 dxmt9c_device_commit_chunk record-only

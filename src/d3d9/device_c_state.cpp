@@ -29,6 +29,10 @@ D9CDevice::~D9CDevice() {
   // Replay must finish before the mirror lease is cancelled: encode may have
   // taken its raw target handle while the command buffer is still in flight.
   dxmt9c_device_cancel_render_tape_present_capture(this);
+  // Revoke even copied submission/completion callbacks while the queue still
+  // exists, before either the observer owner or its core device is released.
+  dxmt9::d3d9::detachRenderTapeRuntimeIdentityV3(this);
+  dxmt9::d3d9::detachRenderTapeRuntimeIdentityV4(this);
   if (iface) {
     iface->Release();
   }
@@ -151,6 +155,7 @@ extern "C" int32_t dxmt9c_device_reset(D9CDevice* d, const D9CPresentParams* pp)
   // The PE bridge wrapper drains deferred replay before entering this provider
   // reset path; cancel only after that ordering point is established.
   dxmt9c_device_cancel_render_tape_present_capture(d);
+  dxmt9::d3d9::detachRenderTapeRuntimeIdentityV4(d);
   if (d && d->mutationCompositionObserver) {
     d->mutationCompositionObserver->observeGlobalBarrier(
         dxmt9::resources::mutation_observer::BarrierReason::DestroyReset);
@@ -170,6 +175,7 @@ extern "C" int32_t dxmt9c_device_reset_ex(D9CDevice* d, const D9CPresentParams* 
   // The PE bridge wrapper drains deferred replay before entering this provider
   // reset path; cancel only after that ordering point is established.
   dxmt9c_device_cancel_render_tape_present_capture(d);
+  dxmt9::d3d9::detachRenderTapeRuntimeIdentityV4(d);
   if (d && d->mutationCompositionObserver) {
     d->mutationCompositionObserver->observeGlobalBarrier(
         dxmt9::resources::mutation_observer::BarrierReason::DestroyReset);

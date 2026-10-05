@@ -75,7 +75,17 @@ struct DrawRunCapture {
     std::uint32_t action = 0;
     std::uint8_t cause = 0;
   };
+  struct SourceBindingValue {
+    dxmt9::core::CpuReadyTape::SourceRef source{};
+    std::uint64_t seqId = 0u;
+  };
 
+  std::array<SourceBindingValue, 4> sourceBindings{};
+  std::size_t sourceBindingCalls = 0u;
+  bool sourceBindingOverflow = false;
+  std::size_t sourcePreambleCalls = 0u, sourceEpilogueCalls = 0u;
+  std::size_t sourceBindingCallsAtPreamble = 0u;
+  std::uint64_t preambleSeqId = 0u, epilogueSeqId = 0u;
   std::size_t drawRunBegins = 0;
   std::size_t renderPassBegins = 0;
   std::size_t renderPassEnds = 0;
@@ -115,6 +125,30 @@ struct ReplayObservationValue {
 struct ReplayObservationCapture {
   std::vector<ReplayObservationValue> values;
 };
+
+void recordSourceBindingContext(void* userdata,
+    const dxmt9::core::CpuReadyTape::SourceRef& source, std::uint64_t seqId) noexcept {
+  auto& capture = *static_cast<DrawRunCapture*>(userdata);
+  if (capture.sourceBindingCalls < capture.sourceBindings.size()) {
+    capture.sourceBindings[capture.sourceBindingCalls] = {source, seqId};
+  } else {
+    capture.sourceBindingOverflow = true;
+  }
+  ++capture.sourceBindingCalls;
+}
+
+void recordSourcePreamble(void* userdata, std::uint64_t seqId) {
+  auto& capture = *static_cast<DrawRunCapture*>(userdata);
+  ++capture.sourcePreambleCalls;
+  capture.sourceBindingCallsAtPreamble = capture.sourceBindingCalls;
+  capture.preambleSeqId = seqId;
+}
+
+void recordSourceEpilogue(void* userdata, std::uint64_t seqId, std::uint64_t) {
+  auto& capture = *static_cast<DrawRunCapture*>(userdata);
+  ++capture.sourceEpilogueCalls;
+  capture.epilogueSeqId = seqId;
+}
 
 void captureReplayObservation(
     void* userdata,
@@ -2800,6 +2834,91 @@ void preRegisteredFragmentsKeepReplayAndCompletionOrderIndependent() {
           "each selected command fragment executes exactly once");
 }
 
+void sourceBindingContextObservesEveryRealFragmentWithoutOpeningAnEncoder() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto recorder = makeDrawRunRecorder(capture, {});
+  recorder.observeSourceBindingContext = recordSourceBindingContext;
+  recorder.beginSourceFragmentPreamble = recordSourcePreamble;
+  recorder.endSourceFragmentEpilogue = recordSourceEpilogue;
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  constexpr std::size_t slotIndex = 97u;
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 907u;
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  for (std::size_t command = 0u; command < 3u; ++command) slot.appendClear(clear);
+  auto source = fullSource(slotIndex, slot.seqId, slot.commandCount());
+  // Distinct numeric generations/page coordinates catch reconstruction from
+  // legacy slot/seq. This inert fixture proves metadata forwarding only, not
+  // that a copied SourceRef grants live Tape-storage or native-read authority.
+  source.source.id.generation = 9007u;
+  source.source.storage.firstPage = 501u;
+  source.source.storage.pageCount = 2u;
+  source.source.storage.generation = 8007u;
+  const auto expectedSource = source.source;
+  check(dxmt9::encoders::appendEncodeChunkSessionSource(*session, source),
+        "source-context fixture registers one exact numeric source identity");
+
+  std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> carrier;
+  for (std::uint32_t ordinal = 0u; ordinal < 3u; ++ordinal) {
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer = carrier
+        ? std::move(carrier->commandBuffer)
+        : retainedToken<WMT::CommandBuffer>("source-binding-fragment-token");
+    const auto injectedHandle = options.commandBuffer.handle;
+    options.session = session.get();
+    options.deferSessionFinalization = true;
+    options.partitionSource = expectedSource;
+    options.preRegisteredFragment = dxmt9::encoders::PreRegisteredEncodeChunkFragment{
+        .commandBegin = ordinal,
+        .commandCount = 1u,
+        .sourceFragmentOrdinal = ordinal,
+        .sourceFragmentCount = 3u,
+        .transactionFragmentOrdinal = ordinal,
+        .transactionFragmentCount = 3u,
+    };
+    auto next = dxmt9::encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+    check(next.has_value(), "each real continuation fragment reaches the source observation");
+    if (carrier) {
+      check(dxmt9::core::metalqueue::foldEncodedSessionFragmentCarrier(
+                *next, *carrier, injectedHandle),
+            "source-context continuation folds into the existing command-buffer carrier");
+    }
+    carrier = std::move(next);
+    checkEq(capture.sourceBindingCalls, static_cast<std::size_t>(ordinal + 1u),
+            "the new callback reports every fragment, not merely the source preamble");
+    const auto& observed = capture.sourceBindings[ordinal];
+    check(observed.source == expectedSource && observed.seqId == slot.seqId,
+          "actual options SourceRef and sourceSeqId are forwarded without reconstruction");
+    checkEq(capture.sourcePreambleCalls, std::size_t{1},
+            "original source preamble remains first-fragment-only");
+    checkEq(capture.sourceEpilogueCalls, ordinal == 2u ? std::size_t{1} : std::size_t{0},
+            "original source epilogue remains last-fragment-only");
+  }
+  check(!capture.sourceBindingOverflow && capture.sourceBindingCallsAtPreamble == 1u &&
+            capture.preambleSeqId == slot.seqId && capture.epilogueSeqId == slot.seqId,
+        "bounded identity observations preserve existing source-boundary ordering");
+  check(!capture.renderPassBegins && !capture.renderPassEnds,
+        "source-identity observations do not imply a fresh or active render encoder");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(ctx, *session, *carrier),
+        "source-context fragment session finalizes normally");
+  checkEq(capture.sourceBindingCalls, std::size_t{3},
+          "finalization does not fabricate another Encode source scope");
+
+  source.source = {};
+  check(capture.sourceBindings[0].source == expectedSource,
+        "the callback retains only copied numeric identity, not a borrowed source reference");
+  dxmt9::encoders::EncodeChunkOptions invalid{};
+  invalid.commandBuffer = retainedToken<WMT::CommandBuffer>("source-binding-invalid-token");
+  check(!dxmt9::encoders::encodeChunk(ctx, slotIndex, slot, std::move(invalid)).has_value(),
+        "invalid source identity rejects before the source callback boundary");
+  checkEq(capture.sourceBindingCalls, std::size_t{3},
+          "rejected source does not fabricate an identity observation");
+}
+
 void malformedPreRegisteredFragmentsRejectBeforeRecorderEffects() {
   Harness harness;
   DrawRunCapture capture;
@@ -3259,6 +3378,7 @@ int main() {
     closePassRejectsMissingCarrierWithoutMutation();
     partialCommandSegmentSessionFinalizesWithoutTargets();
     preRegisteredFragmentsKeepReplayAndCompletionOrderIndependent();
+    sourceBindingContextObservesEveryRealFragmentWithoutOpeningAnEncoder();
     malformedPreRegisteredFragmentsRejectBeforeRecorderEffects();
     effectiveReplayObserverCoversLegacyArenaSelectionAndResources();
     effectiveReplayObserverCoversSubrangesFragmentsAndInvalidRanges();

@@ -15,30 +15,43 @@
 #include "device_c_render_tape_runtime_objects.hpp"
 #include "device_c_render_tape_completion.hpp"
 #include "device_c_render_tape_cpu_window.hpp"
+#include "device_c_render_tape_execution_v4.hpp"
 
 #include "render_tape_cpu_semantics.hpp"
+#include "render_tape_cpu_resource_observation.hpp"
 #include "render_tape_cpu_snapshot_proof.hpp"
 #include "render_tape_cpu_work_boundary.hpp"
 #include "render_tape_cpu_mutation_boundary.hpp"
 #include "render_tape_cpu_source_oracle.hpp"
 #include "render_tape_cpu_source_admission.hpp"
+#include "render_tape_cpu_source_observation.hpp"
 #include "render_tape_cpu_policy.hpp"
 #include "render_tape_cpu_diagnostic.hpp"
 #include "render_tape_cpu_general_grammar.hpp"
+#include "render_tape_cpu_initial_setup_v4.hpp"
+#include "render_tape_cpu_resource_context.hpp"
+#include "render_tape_cpu_producer_resource_ledger_v4.hpp"
+#include "render_tape_cpu_v4_admission.hpp"
+#include "render_tape_cpu_v4_consumer.hpp"
+#include "render_tape_cpu_v4_logical_semantics.hpp"
 
 #include "dxmt9/dxmt9_source_payload.hpp"
 #include "dxmt9/attachment_contents.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
 #include <deque>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -47,12 +60,6 @@
 #include <vector>
 
 namespace dxmt9::test {
-
-inline constexpr std::size_t kCpuGeneralMaxEvents = 4096u;
-inline constexpr std::size_t kCpuGeneralMaxCommandRecords = 16384u;
-inline constexpr std::size_t kCpuGeneralMaxDraws = 4096u;
-inline constexpr std::size_t kCpuGeneralMaxObjects = 1024u;
-inline constexpr std::size_t kCpuGeneralMaxSources = 4096u;
 
 struct CpuGeneralTapeTrace {
   std::uint32_t event = 0xffffffffu;
@@ -152,8 +159,140 @@ struct CpuGeneralTapeExecutionResult {
   std::vector<dxmt9::d3d9::RenderTapeSourceReplayPublicationEvidence>
       captureSourceReplayPublications{};
   bool captureSourceReplayStorageOverflow = false;
+  dxmt9::d3d9::RenderTapeSourceReplayV3Evidence captureSourceReplayV3{};
   dxmt9::d3d9::RenderTapeQueryReplayEvidence queryReplay{};
   std::uint64_t querySemanticDigest = 1469598103934665603ull;
+  d3d9::render_tape_runtime::GeneralCpuAdmissionResult inputAdmission{};
+  d3d9::render_tape_runtime::GeneralCpuSourceDemand sourceDemand{};
+  std::size_t sourcePublications = 0u;
+  std::size_t progressSteps = 0u;
+};
+
+// Actual retained Replay payload values, not a predicted or executed Metal
+// Encode route. No payload span, CPU address, shader owner or wrapper survives
+// the synchronous source borrow. Canonical raw facts remain keyed by record.
+struct CpuGeneralTapeControlledV4DrawInventory {
+  std::uint32_t physicalCommandIndex = 0u, subdrawIndex = 0u;
+  render::TapeEmissionRecordLocator record{};
+  core::DrawParam parameters{};
+  std::array<core::Handle, core::kMaxStreams> streamBuffers{};
+  std::array<std::uint32_t, core::kMaxStreams> streamOffsets{}, streamStrides{}, streamFrequencies{};
+  std::uint32_t streamMask = 0u;
+  core::Handle indexBuffer{};
+  std::uint64_t userVertexBytes = 0u, userIndexBytes = 0u;
+  bool hasBindingOverride = false, hasBindingSnapshot = false;
+  CpuTapeSourceObservation sourceRows{};
+};
+
+struct CpuGeneralTapeControlledV4InventoryOrigin {
+  d3d9::RenderTapeRuntimePublishedSourceOriginV4 origin{};
+  std::shared_ptr<const CpuTapeResourceContext> context{};
+};
+
+struct CpuGeneralTapeControlledV4InventorySource {
+  core::metalqueue::ReplaySourcePublicationReceipt publication{};
+  std::vector<d3d9::RenderTapeIdentityV4PhysicalCommand> commands{};
+  std::vector<CpuGeneralTapeControlledV4InventoryOrigin> origins{};
+  std::vector<CpuGeneralTapeControlledV4DrawInventory> draws{};
+};
+
+struct CpuGeneralTapeControlledV4CanonicalDrawRecord {
+  render::TapeEmissionRecordLocator record{};
+  std::uint32_t eventIndex = 0u, type = 0u;
+  // Exact admitted original payload, including raw minVertex/vertexCount,
+  // stream/base/index/instance-adjacent facts and any UP bytes. Owned values
+  // only; the consumer never accesses this producer-built result table.
+  std::vector<std::byte> payload{};
+};
+
+struct CpuGeneralTapeControlledV4BufferVersionInventory {
+  D9CWireObjectIdentity identity{};
+  std::uint64_t logicalContentEpoch = 0u;
+  resources::BufferVersionObservation observation{};
+};
+
+struct CpuGeneralTapeControlledV4ResourceVersionFailure {
+  const char* stage = nullptr;
+  D9CWireObjectIdentity requestedIdentity{}, normalizedIdentity{};
+  std::uint32_t nativeKind = 0u;
+  core::Handle nativeHandle{};
+  std::uint64_t priorLogicalContentEpoch = 0u;
+  CpuTapeResourceContextStatus status = CpuTapeResourceContextStatus::InvalidInput;
+  std::vector<D9CWireObjectIdentity> installedNativeOwners{};
+};
+
+// Genuine body replay diagnostics only. The selected provider policy is not a
+// promise that every draw takes Direct: ProductionSlot retains natural fallback.
+struct CpuGeneralTapeControlledV4RouteCoverage {
+  d3d9::ProviderReplayPolicy requestedRoute = d3d9::ProviderReplayPolicy::Compatibility;
+  d3d9::ProviderReplayPolicy effectiveRoute = d3d9::ProviderReplayPolicy::Compatibility;
+  bool policySelected = false, observed = false, monotonic = false, complete = false;
+  std::uint64_t directLeases = 0u, directDraws = 0u;
+  std::uint64_t compatibilityDraws = 0u, compatibilityBatches = 0u;
+  std::uint64_t compatibilityUnbatchedDraws = 0u, fallbackDraws = 0u;
+};
+
+enum class CpuGeneralTapeControlledV4ExecutionMode : std::uint8_t {
+  Observe,
+  ExecutionOnly,
+};
+
+struct CpuGeneralTapeControlledV4ClockScope {
+  bool started = false, valid = false, complete = false;
+  std::uint64_t wallNs = 0u, processCpuNs = 0u;
+};
+
+struct CpuGeneralTapeControlledV4Clocks {
+  CpuGeneralTapeControlledV4ClockScope setup{}, body{}, teardown{};
+};
+
+// Omission applies to diagnostic shadows/observers, never the genuine
+// provider resources, uploads, immutable original input or V4 provenance.
+struct CpuGeneralTapeControlledV4ExecutionOnlyEvidence {
+  bool requested = false, complete = false, lifecycleCoverageComplete = false;
+  bool resourceVersionsOmitted = false, recordContextsOmitted = false;
+  bool expectedImagesOmitted = false, canonicalDrawCopiesOmitted = false;
+  bool payloadObserverOmitted = false, sourceRowReadsOmitted = false;
+  bool logicalHashingOmitted = false, diagnosticMutationReceiptsOmitted = false;
+  bool capturedBindingImagesOmitted = false, uploadByteComparisonsOmitted = false;
+  std::size_t sources = 0u, commands = 0u, draws = 0u;
+  std::size_t submitted = 0u, acknowledged = 0u, retired = 0u;
+};
+
+// Controlled driver result; complete never means full CPU semantics, GPU
+// correctness, policy qualification or timing eligibility. V4 provenance
+// semanticMappingComplete is a separate canonical-origin correspondence.
+struct CpuGeneralTapeControlledV4InventoryResult {
+  explicit CpuGeneralTapeControlledV4InventoryResult(ControlledCpuV4InputAdmission input)
+      : inputAdmission(std::move(input)) {}
+  ControlledCpuV4InputAdmission inputAdmission;
+  bool complete = false, resetOk = false, metadataInventoryComplete = false;
+  bool fullSemanticOracleComplete = false, actualMetal = false;
+  bool gpuResultOracle = false, policyQualified = false, timingEligible = false;
+  bool runtimeBudgetedAttempt = true, sourceProgressComplete = false;
+  std::string failure{};
+  std::uint32_t failedEvent = 0xffffffffu;
+  std::size_t events = 0u, commands = 0u, draws = 0u;
+  std::size_t resourcesCreated = 0u, resourcesReleased = 0u;
+  std::size_t observedMutations = 0u, observedTextureUploads = 0u, recordContexts = 0u;
+  std::size_t setupSubmissions = 0u, setupAcknowledgements = 0u;
+  std::size_t bufferVersionsObserved = 0u, bufferVersionsUnavailable = 0u;
+  d3d9::RenderTapeExecutionV4Evidence provenance{};
+  d3d9::RenderTapeControlledCpuV4Evidence controlledCpu{};
+  CpuInitialSetupV4Evidence initialSetup{};
+  d3d9::RenderTapeQueryReplayEvidence queryReplay{};
+  CpuV4ConsumerSnapshot consumer{};
+  std::vector<CpuV4ConsumerReceipt> consumerReceipts{};
+  CpuTapeExpectedBufferBudgetSnapshot expectedBufferBudget{};
+  std::vector<CpuGeneralTapeControlledV4InventorySource> inventory{};
+  std::vector<CpuGeneralTapeControlledV4CanonicalDrawRecord> canonicalDrawRecords{};
+  std::vector<CpuGeneralTapeControlledV4BufferVersionInventory> bufferVersions{};
+  std::optional<CpuGeneralTapeControlledV4ResourceVersionFailure> resourceVersionFailure{};
+  CpuGeneralTapeControlledV4LogicalSemanticResult logicalSemantics{};
+  CpuGeneralTapeControlledV4RouteCoverage routeCoverage{};
+  CpuGeneralTapeControlledV4ExecutionMode executionMode = CpuGeneralTapeControlledV4ExecutionMode::Observe;
+  CpuGeneralTapeControlledV4ExecutionOnlyEvidence executionOnly{};
+  CpuGeneralTapeControlledV4Clocks clocks{};
 };
 
 namespace detail {
@@ -300,12 +439,7 @@ inline bool cpuGeneralWriteTextureMutationRows(
   return cpuGeneralWriteTextureRows(desc, texture, subresource, lock, bytes);
 }
 
-struct LogicalReceipt {
-  D9CWireObjectIdentity identity{};
-  std::uint32_t subresource = 0u;
-  RenderTapeDigest digest{};
-  std::uint64_t revision = 0u;
-};
+using LogicalReceipt = CpuTapeResourceReceipt;
 
 inline LogicalReceipt* cpuGeneralFindReceipt(
     std::vector<LogicalReceipt>& receipts,
@@ -350,6 +484,269 @@ inline void cpuGeneralHashDigest(std::uint64_t& hash,
                                digest.size()));
 }
 
+// The original canonical event dispatcher is shared by legacy scheduling and
+// the controlled inventory session. Each callback performs that event's real
+// effect; this helper neither fabricates events nor changes their order.
+template <class Bootstrap, class Define, class Mutation, class Chunk,
+          class Destroy, class Control, class PresentComplete>
+bool dispatchCpuGeneralTapeEvent(d3d9::RenderTapeEventType type,
+    Bootstrap&& bootstrap, Define&& define, Mutation&& mutation, Chunk&& chunk,
+    Destroy&& destroy, Control&& control, PresentComplete&& presentComplete) {
+  switch (type) {
+  case d3d9::RenderTapeEventType::BootstrapState: return bootstrap();
+  case d3d9::RenderTapeEventType::ObjectDefine: return define();
+  case d3d9::RenderTapeEventType::ResourceMutation: return mutation();
+  case d3d9::RenderTapeEventType::CommandChunk: return chunk();
+  case d3d9::RenderTapeEventType::ObjectDestroy: return destroy();
+  case d3d9::RenderTapeEventType::OrderedControl: return control();
+  case d3d9::RenderTapeEventType::PresentComplete: return presentComplete();
+  }
+  return false;
+}
+
+// Independent consumer-owned collector. Its only producer-visible dependency
+// is the thread-safe write-once record store; it never reads the mutable live
+// object, receipt, tombstone or current-version tables.
+class CpuGeneralTapeControlledV4InventoryObserver {
+ public:
+  CpuGeneralTapeControlledV4InventoryObserver(
+      std::shared_ptr<d3d9::RenderTapeRuntimeIdentityV4> root,
+      render::TapeTopologyCaptureIdentity capture,
+      const CpuTapeRecordContextStore& records,
+      std::shared_ptr<CpuTapeExpectedBufferBudget> budget,
+      CpuV4ConsumerLimits limits,
+      std::shared_ptr<const std::vector<CpuTapeV4OriginalSurfaceRoleEntry>> logicalRoles = {},
+      bool observeLogicalSemantics = false, bool legalCandidateNoOverwriteContract = false)
+      : root_(std::move(root)), capture_(capture), records_(records),
+        budget_(std::move(budget)), limits_(limits) {
+    if (observeLogicalSemantics)
+      logical_ = std::make_unique<CpuTapeV4LogicalSemanticObserver>(
+          std::move(logicalRoles), budget_, legalCandidateNoOverwriteContract);
+  }
+
+  template <class Payload>
+  void observe(CommandQueue& queue,
+               const core::metalqueue::ReplaySourcePublicationReceipt& publication,
+               const Payload& payload) noexcept {
+    try {
+      std::lock_guard lock(mutex_);
+      if (failure_) return;
+      d3d9::RenderTapeRuntimePublishedSourceOriginsV4 projection;
+      if (!root_ || !budget_ ||
+          !root_->copyPublishedSourceOrigins(capture_, publication, projection) ||
+          projection.commands.size() != payload.commandCount()) {
+        failure_ = "controlled-v4-inventory-source-origins";
+        return;
+      }
+      if (sources_.size() >= limits_.maxSources ||
+          payload.commandCount() > limits_.maxCommands - commands_ ||
+          projection.origins.size() > limits_.maxCommands - origins_) {
+        failure_ = "controlled-v4-inventory-capacity";
+        return;
+      }
+      // observeReady releases the queue mutex before this callback. Pull one
+      // genuine window while the actual Represented source remains pinned;
+      // no source submit/ACK/retirement can occur before the callback returns.
+      const auto progress = queue.queryProgress();
+      if (progress.queue != capture_.queue || progress.failed ||
+          !publication.metadata.seqId || progress.completed >= publication.metadata.seqId) {
+        failure_ = "controlled-v4-inventory-source-window";
+        return;
+      }
+      CpuGeneralTapeControlledV4InventorySource candidate;
+      candidate.publication = publication;
+      candidate.commands = projection.commands;
+      candidate.origins.reserve(projection.origins.size());
+      for (const auto& origin : projection.origins) {
+        const auto context = records_.lookup(origin.record);
+        if (!context) {
+          failure_ = "controlled-v4-inventory-missing-record-context";
+          return;
+        }
+        if (context->purpose() != CpuTapeResourceContextPurpose::V4SurfaceAliasInventory ||
+            context->hasSemanticUniqueNativeAuthority()) {
+          failure_ = "controlled-v4-inventory-context-purpose";
+          return;
+        }
+        for (const auto& version : context->entries()) {
+          if (!version || !version->usesExpectedBufferBudget(*budget_)) {
+            failure_ = "controlled-v4-inventory-foreign-version-budget";
+            return;
+          }
+        }
+        candidate.origins.push_back({origin, context});
+      }
+      std::size_t selectedOrigins = 0u;
+      for (std::size_t commandIndex = 0u; commandIndex < payload.commandCount(); ++commandIndex) {
+        const auto view = payload.commandAt(commandIndex);
+        const auto kind = render::tapeTopologyCommandKind(view.kind());
+        const auto& command = view.command;
+        if (projection.commands[commandIndex].physicalCommandIndex != commandIndex ||
+            projection.commands[commandIndex].kind != kind ||
+            projection.commands[commandIndex].drawCount != command.drawParams.size()) {
+          failure_ = "controlled-v4-inventory-command-shape";
+          return;
+        }
+        const bool draw = view.kind() == core::MetalCommandKind::DrawRun;
+        const auto locations = draw ? command.drawParams.size() : 1u;
+        if (draw && (!command.drawState.hot || !locations)) {
+          failure_ = "controlled-v4-inventory-draw-state";
+          return;
+        }
+        for (std::size_t subdraw = 0u; subdraw < locations; ++subdraw) {
+          const d3d9::RenderTapeRuntimePublishedSourceOriginV4* found = nullptr;
+          for (const auto& origin : projection.origins) {
+            if (origin.physicalCommandIndex != commandIndex || origin.kind != kind ||
+                (draw ? origin.firstSubdraw != subdraw || origin.subdrawCount != 1u
+                      : origin.firstSubdraw || origin.subdrawCount)) continue;
+            if (found) {
+              failure_ = "controlled-v4-inventory-ambiguous-origin";
+              return;
+            }
+            found = &origin;
+          }
+          if (!found) {
+            failure_ = "controlled-v4-inventory-unmapped-command";
+            return;
+          }
+          ++selectedOrigins;
+          if (!draw) continue;
+          const auto& param = command.drawParams[subdraw];
+          auto hot = *command.drawState.hot;
+          std::optional<core::DrawShaderLayoutContext> effectiveLayout;
+          if (command.drawState.shaderLayout) effectiveLayout = *command.drawState.shaderLayout;
+          core::DrawBindingOverride binding{};
+          core::DrawBindingSnapshot snapshot{};
+          const auto validRange = [&](core::DrawPayloadRange range) {
+            return !range.size || (range.offset <= command.drawPayloadBytes.size() &&
+                range.size <= command.drawPayloadBytes.size() - range.offset);
+          };
+          if (!validRange(param.userVertexRange) || !validRange(param.userIndexRange) ||
+              !validRange(param.bindingOverrideRange) || !validRange(param.bindingSnapshotRange) ||
+              (param.bindingOverrideRange.size && param.bindingOverrideRange.size != sizeof(binding)) ||
+              (param.bindingSnapshotRange.size &&
+                  param.bindingSnapshotRange.size != sizeof(core::DrawBindingSnapshot))) {
+            failure_ = "controlled-v4-inventory-payload-range";
+            return;
+          }
+          const auto overrideBytes = core::drawPayloadRangeBytes(
+              param.bindingOverrideRange, command.drawPayloadBytes);
+          const auto snapshotBytes = core::drawPayloadRangeBytes(
+              param.bindingSnapshotRange, command.drawPayloadBytes);
+          if ((!overrideBytes.empty() && overrideBytes.size() != sizeof(binding)) ||
+              (!snapshotBytes.empty() && snapshotBytes.size() != sizeof(core::DrawBindingSnapshot))) {
+            failure_ = "controlled-v4-inventory-binding-shape";
+            return;
+          }
+          if (!overrideBytes.empty()) {
+            std::memcpy(&binding, overrideBytes.data(), sizeof(binding));
+            encoders::applyDrawBindingOverride(hot,
+                effectiveLayout ? &*effectiveLayout : nullptr, binding);
+          }
+          if (!snapshotBytes.empty())
+            std::memcpy(&snapshot, snapshotBytes.data(), sizeof(snapshot));
+          const auto context = records_.lookup(found->record);
+          if (!context) {
+            failure_ = "controlled-v4-inventory-missing-record-context";
+            return;
+          }
+          CpuGeneralTapeControlledV4DrawInventory item;
+          item.physicalCommandIndex = static_cast<std::uint32_t>(commandIndex);
+          item.subdrawIndex = static_cast<std::uint32_t>(subdraw);
+          item.record = found->record;
+          item.parameters = param;
+          item.streamBuffers = hot.streamBuffers;
+          item.streamOffsets = hot.streamOffsets;
+          item.streamStrides = hot.streamStrides;
+          item.streamFrequencies = hot.streamFrequencies;
+          item.streamMask = hot.streamMask;
+          item.indexBuffer = hot.indexBuffer;
+          item.userVertexBytes = core::drawPayloadRangeBytes(
+              param.userVertexRange, command.drawPayloadBytes).size();
+          item.userIndexBytes = core::drawPayloadRangeBytes(
+              param.userIndexRange, command.drawPayloadBytes).size();
+          item.hasBindingOverride = !overrideBytes.empty();
+          item.hasBindingSnapshot = !snapshotBytes.empty();
+          item.sourceRows = observeCpuTapeSourceRows(queue.pool(), hot,
+              effectiveLayout ? &*effectiveLayout : nullptr, param,
+              snapshotBytes.empty() ? nullptr : &snapshot, *context,
+              publication.metadata.seqId, progress, capture_.queue);
+          candidate.draws.push_back(std::move(item));
+        }
+      }
+      if (selectedOrigins != projection.origins.size()) {
+        failure_ = "controlled-v4-inventory-origin-coverage";
+        return;
+      }
+      if (logical_) {
+        const auto rows = [&](std::size_t commandIndex, std::size_t subdraw) -> const CpuTapeSourceObservation* {
+          const auto found = std::find_if(candidate.draws.begin(), candidate.draws.end(), [&](const auto& draw) {
+            return draw.physicalCommandIndex == commandIndex && draw.subdrawIndex == subdraw;
+          });
+          return found == candidate.draws.end() ? nullptr : &found->sourceRows;
+        };
+        // The exact retained payload goes through the existing full serializer.
+        // Its source-row gate reuses the genuine scoped observation above;
+        // logical hashing never replaces it or reads an entire live backing.
+        if (!logical_->observe(publication, payload, projection, records_, rows)) {
+          failure_ = "controlled-v4-logical-observation-rejected";
+          return;
+        }
+      }
+      commands_ += payload.commandCount();
+      origins_ += projection.origins.size();
+      sources_.push_back(std::move(candidate));
+    } catch (...) {
+      try {
+        std::lock_guard lock(mutex_);
+        failure_ = "controlled-v4-inventory-allocation";
+      } catch (...) {}
+    }
+  }
+
+  const char* failure() const noexcept {
+    try { std::lock_guard lock(mutex_); return failure_; }
+    catch (...) { return "controlled-v4-inventory-lock"; }
+  }
+  std::vector<CpuGeneralTapeControlledV4InventorySource> takeSources() {
+    std::lock_guard lock(mutex_);
+    return std::move(sources_);
+  }
+  bool finishLogical(std::size_t sources, std::size_t commands) {
+    std::lock_guard lock(mutex_);
+    if (!logical_) return true;
+    if (failure_ || !logical_->finish(sources, commands)) {
+      if (!failure_) failure_ = "controlled-v4-logical-coverage-rejected";
+      return false;
+    }
+    return true;
+  }
+  CpuGeneralTapeControlledV4LogicalSemanticResult takeLogicalResult() {
+    std::lock_guard lock(mutex_);
+    return logical_ ? logical_->takeResult() : CpuGeneralTapeControlledV4LogicalSemanticResult{};
+  }
+
+ private:
+  std::shared_ptr<d3d9::RenderTapeRuntimeIdentityV4> root_{};
+  render::TapeTopologyCaptureIdentity capture_{};
+  const CpuTapeRecordContextStore& records_;
+  std::shared_ptr<CpuTapeExpectedBufferBudget> budget_{};
+  CpuV4ConsumerLimits limits_{};
+  mutable std::mutex mutex_{};
+  const char* failure_ = nullptr;
+  std::size_t commands_ = 0u, origins_ = 0u;
+  std::vector<CpuGeneralTapeControlledV4InventorySource> sources_{};
+  std::unique_ptr<CpuTapeV4LogicalSemanticObserver> logical_{};
+};
+
+// Thrown only into the controlled backend's existing exception/fail-stop seam
+// after the synchronous borrow observer returns and releases its own lock.
+struct CpuGeneralTapeControlledV4InventoryRejected {};
+
+// The shared production Present preparation converts a rejected fixture flush
+// into its real failed HRESULT rather than accepting a no-op flush adapter.
+struct CpuGeneralTapeControlledV4FlushRejected {};
+
 }  // namespace detail
 
 // Fixture is intentionally duck-typed: it must expose cDevice (unique_ptr
@@ -379,6 +776,12 @@ class CpuGeneralTapeExecutor {
     DoubleRestore,
   };
 
+  enum class ContinuationIdentityFault : std::uint8_t {
+    None,
+    StaleWriterGeneration,
+    ForeignQueue,
+  };
+
   struct Options {
     dxmt9::d3d9::ProviderReplayPolicy route =
         dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
@@ -394,6 +797,7 @@ class CpuGeneralTapeExecutor {
     bool dropRetiredAliasReceiptForTest = false;
     PendingIdentityFault pendingIdentityFault = PendingIdentityFault::None;
     CheckpointFault checkpointFault = CheckpointFault::None;
+    ContinuationIdentityFault continuationIdentityFault = ContinuationIdentityFault::None;
     // Measurement keeps production replay and lifetime work intact while
     // omitting the cold semantic/resource oracle.  It is intentionally
     // constrained to immediate, single-source publication until the caller
@@ -403,6 +807,7 @@ class CpuGeneralTapeExecutor {
     // object for the duration of run(); the executor only borrows its
     // immutable ranges and digest.
     const dxmt9::d3d9::CaptureSourceReplayPlan* captureSourcePlan = nullptr;
+    const dxmt9::d3d9::CaptureSourceReplayPlanV3* captureSourcePlanV3 = nullptr;
     // Input bytes used to bind the pre-authenticated plan to this exact
     // GeneralPreflightPlan before any device effects. Both spans must outlive
     // run() when captureSourcePlan is set.
@@ -412,15 +817,1081 @@ class CpuGeneralTapeExecutor {
     // Oracle probes are disclosed separately from the recorded transcript.
     // A zero budget is useful to prove exhaustion without an implicit drain.
     std::uint32_t maxQueryOraclePolls = 4u;
+    d3d9::render_tape_runtime::GeneralCpuAdmissionCaps inputCaps{};
+    d3d9::render_tape_runtime::GeneralCpuSourceCapacity sourceCapacity{};
+  };
+
+  struct ControlledV4InventoryOptions {
+    d3d9::ProviderReplayPolicy route = d3d9::ProviderReplayPolicy::Compatibility;
+    CpuGeneralTapeControlledV4ExecutionMode executionMode = CpuGeneralTapeControlledV4ExecutionMode::Observe;
+    const d3d9::CaptureSourceReplayPlanV4* sourcePlan = nullptr;
+    std::span<const std::byte> exactTape{};
+    ControlledCpuV4InputProfile inputProfile = ControlledCpuV4InputProfile::Raw256;
+    CpuTapeExpectedBufferBudgetLimits expectedBufferBudget{512u * 1024u * 1024u};
+    CpuV4ConsumerLimits consumerLimits{};
+    d3d9::RenderTapeInitialSetupV4Limits initialSetupLimits{};
+    std::chrono::steady_clock::time_point deadline{};
+    std::uint32_t maxQueryOraclePolls = 64u;
+    // Explicit authenticated launcher attestation, never inferred from a
+    // captured publication or Present. NONE remains the default.
+    d3d9::RenderTapeExecutionV4ProducerContract producerContract =
+        d3d9::RenderTapeExecutionV4ProducerContract::None;
+    bool observeLogicalSemantics = false;
+    bool legalCandidateNoOverwriteContract = false;
+    // Caller-qualified fresh fixture with automatic depth creation disabled.
+    // This grants only initial RT1..3/DS null roles, never RT0 alias identity.
+    bool freshNoAutoDepthSurfaceDefaults = false;
   };
 
   CpuGeneralTapeExecutor(Fixture& fixture, const Plan& plan,
                          std::span<const Blob> blobs, Options options = {})
       : fixture_(fixture), plan_(plan), blobs_(blobs), options_(options) {}
 
+  CpuGeneralTapeControlledV4InventoryResult runControlledV4Inventory(
+      ControlledV4InventoryOptions options) {
+    namespace runtime = d3d9::render_tape_runtime;
+    using Status = CpuTapeResourceContextStatus;
+    using Object = runtime::OwnedObject;
+    using Clock = std::chrono::steady_clock;
+    CpuGeneralTapeControlledV4InventoryResult result(
+        admitControlledCpuV4Input(plan_, options.inputProfile));
+    result.executionMode = options.executionMode;
+    const bool executionOnly = options.executionMode == CpuGeneralTapeControlledV4ExecutionMode::ExecutionOnly;
+    result.executionOnly.requested = executionOnly;
+    result.routeCoverage.requestedRoute = options.route;
+    result.logicalSemantics.requested = options.observeLogicalSemantics;
+    result.logicalSemantics.legalCandidateNoOverwriteContract = options.observeLogicalSemantics &&
+        options.legalCandidateNoOverwriteContract;
+    result.logicalSemantics.conditionalOnLegalNoOverwrite = result.logicalSemantics.legalCandidateNoOverwriteContract;
+    result.events = plan_.events.size();
+    const auto fail = [&](std::uint32_t event, const char* reason) {
+      if (result.failure.empty()) {
+        result.failure = reason;
+        result.failedEvent = event;
+      }
+      return false;
+    };
+    if (!result.inputAdmission.accepted()) {
+      fail(result.inputAdmission.eventIndex(), "controlled-v4-inventory-input-admission");
+      return result;
+    }
+    if (options.executionMode != CpuGeneralTapeControlledV4ExecutionMode::Observe && !executionOnly) {
+      fail(0xffffffffu, "controlled-v4-inventory-execution-mode");
+      return result;
+    }
+    if (executionOnly && options.observeLogicalSemantics) {
+      fail(0xffffffffu, "controlled-v4-execution-observer-contract");
+      return result;
+    }
+    if (options.route != d3d9::ProviderReplayPolicy::Compatibility &&
+        options.route != d3d9::ProviderReplayPolicy::ProductionSlot) {
+      fail(0xffffffffu, "controlled-v4-inventory-route-policy");
+      return result;
+    }
+    if (options.observeLogicalSemantics && !options.legalCandidateNoOverwriteContract) {
+      result.logicalSemantics.failure = "controlled-v4-logical-legal-nooverwrite-contract-required";
+      fail(0xffffffffu, result.logicalSemantics.failure.c_str());
+      return result;
+    }
+    // This is a bounded live-budget attempt. Input acceptance cannot grant
+    // source occupancy or promise a universal candidate emission upper bound.
+    if (!options.sourcePlan || !options.sourcePlan->valid() || options.exactTape.empty() ||
+        !options.consumerLimits.valid() ||
+        options.consumerLimits.maxSources > options.consumerLimits.maxLifecycleActions / 4u ||
+        options.deadline <= Clock::now() || options.maxQueryOraclePolls > 64u ||
+        !fixture_.cDevice || !fixture_.routing || !fixture_.device ||
+        fixture_.cDevice->replayOffload || !Access::cpuTapeWorkersDisabled(fixture_.routing->queue_) ||
+        fixture_.routing->supportsGpuReadback()) {
+      fail(0xffffffffu, "controlled-v4-inventory-session-contract");
+      return result;
+    }
+    const bool productionSlot = options.route == d3d9::ProviderReplayPolicy::ProductionSlot;
+    if (fixture_.routing->supportsDirectChunkSlotReplay() != productionSlot ||
+        fixture_.routing->supportsCpuReadyArenaReplay() != !productionSlot) {
+      fail(0xffffffffu, "controlled-v4-inventory-route-contract");
+      return result;
+    }
+    result.routeCoverage.observed = perf::enabled();
+    if (executionOnly && !result.routeCoverage.observed) {
+      fail(0xffffffffu, "controlled-v4-execution-route-counters-disabled");
+      return result;
+    }
+    if (options.observeLogicalSemantics && !result.routeCoverage.observed) {
+      result.logicalSemantics.failure = "controlled-v4-logical-route-counters-disabled";
+      fail(0xffffffffu, result.logicalSemantics.failure.c_str());
+      return result;
+    }
+    if (fixture_.routing->flushHook) {
+      fail(0xffffffffu, "controlled-v4-inventory-flush-adapter-preexisting");
+      return result;
+    }
+    if (options_.measurement || options_.diagnostic || options_.captureSourcePlan ||
+        options_.captureSourcePlanV3 || options_.beforeNextWork || options_.holdSafeBufferMutation ||
+        !options_.sourceOracle.empty() || options_.dropRetiredAliasReceiptForTest ||
+        options_.corruptRetainedBytesForTest || options_.corruptRetainedBytesAfterMutationForTest ||
+        options_.deferOneObjectReleaseForResetTest ||
+        options_.pendingIdentityFault != PendingIdentityFault::None ||
+        options_.checkpointFault != CheckpointFault::None ||
+        options_.continuationIdentityFault != ContinuationIdentityFault::None) {
+      fail(0xffffffffu, "controlled-v4-inventory-legacy-options");
+      return result;
+    }
+    d3d9::RenderTapeExecutionV4 execution;
+    if (!execution.admit(*options.sourcePlan, plan_, options.exactTape, result.provenance,
+            d3d9::RenderTapeExecutionV4PublicationMode::SemanticMapping, options.producerContract)) {
+      fail(0xffffffffu, execution.failure());
+      return result;
+    }
+    d3d9::RenderTapeInitialSetupV4Plan setupPlan;
+    if (d3d9::buildRenderTapeInitialSetupV4(*options.sourcePlan, plan_, options.exactTape,
+            execution.snapshotPrefixEvents(), setupPlan, options.initialSetupLimits) !=
+        d3d9::RenderTapeInitialSetupV4Status::Valid) {
+      fail(0xffffffffu, "controlled-v4-inventory-initial-setup-admission");
+      return result;
+    }
+    std::shared_ptr<CpuTapeExpectedBufferBudget> budget;
+    if (!executionOnly && createCpuTapeExpectedBufferBudget(options.expectedBufferBudget, budget) != Status::Accepted) {
+      fail(0xffffffffu, "controlled-v4-inventory-expected-byte-budget");
+      return result;
+    }
+    std::shared_ptr<const std::vector<CpuTapeV4OriginalSurfaceRoleEntry>> logicalRoles;
+    if (options.observeLogicalSemantics && !buildCpuTapeV4OriginalSurfaceRoles(plan_,
+            options.freshNoAutoDepthSurfaceDefaults, logicalRoles, result.logicalSemantics.failure)) {
+      fail(0xffffffffu, result.logicalSemantics.failure.c_str());
+      return result;
+    }
+    const auto& inputCaps = result.inputAdmission.inputCaps();
+    std::optional<CpuTapeProducerResourceLedgerV4> versions;
+    if (!executionOnly)
+      versions.emplace(budget,
+          CpuTapeProducerResourceLedgerV4Limits{inputCaps.maxObjects, inputCaps.maxTotalRecords},
+          CpuTapeResourceContextPurpose::V4SurfaceAliasInventory);
+    std::vector<Object> objects;
+    std::vector<detail::LogicalReceipt> receipts;
+    std::vector<CpuGeneralTapeTombstone> tombstones;
+    struct QueryCycle {
+      D9CWireObjectIdentity identity{};
+      d3d9::RenderTapeQueryCycleState state{};
+      core::QueryPollSnapshot snapshot{};
+      std::uint64_t expectedLocalIssueOrdinal = 0u;
+    };
+    struct HiddenCheckpoint {
+      Object object{};
+      QueryCycle cycle{};
+      std::size_t evidenceIndex = 0u;
+      bool activated = false;
+    };
+    std::vector<QueryCycle> queries;
+    std::vector<HiddenCheckpoint> checkpoints;
+    struct SetupReleaseContext {
+      CpuGeneralTapeControlledV4InventoryResult& result;
+      static void release(void* opaque, Object& object) noexcept {
+        if (!object.value) return;
+        runtime::releaseOwnedObject(object);
+        ++static_cast<SetupReleaseContext*>(opaque)->result.resourcesReleased;
+      }
+    } setupRelease{result};
+    CpuInitialSetupV4 setup({&setupRelease, &SetupReleaseContext::release});
+    d3d9::RenderTapeControlledCpuV4Capability capability;
+    using ConsumerHandle = decltype(fixture_.makeControlledCpuConsumer(
+        capability, result.provenance.localArm, options.consumerLimits, options.deadline));
+    ConsumerHandle handle;
+    std::shared_ptr<detail::CpuGeneralTapeControlledV4InventoryObserver> inventory;
+    core::Handle expectedUploadHandle{};
+    std::uint32_t expectedUploadLevel = 0u;
+    detail::CpuGeneralTextureUploadShape expectedUploadShape{};
+    std::span<const std::byte> expectedUploadBytes;
+    bool observedUpload = false, bootstrapDone = false, bootstrapPending = false;
+    bool armed = false, cleaned = false, controlledFlushInstalled = false;
+    bool consumerEvidenceTaken = false;
+    bool routeStarted = false;
+    perf::RenderTapeReplaySnapshot routeBefore{};
+    struct ClockStart {
+      Clock::time_point wall{};
+      std::optional<std::uint64_t> processCpu{};
+      bool active = false;
+    } setupClock, bodyClock, teardownClock;
+    const auto sampleProcessCpu = []() noexcept -> std::optional<std::uint64_t> {
+#if defined(CLOCK_PROCESS_CPUTIME_ID)
+      timespec value{};
+      if (::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &value) != 0 ||
+          value.tv_sec < 0 || value.tv_nsec < 0 || value.tv_nsec >= 1000000000l)
+        return std::nullopt;
+      constexpr std::uint64_t scale = 1000000000u;
+      const auto seconds = static_cast<std::uint64_t>(value.tv_sec);
+      const auto nanoseconds = static_cast<std::uint64_t>(value.tv_nsec);
+      if (seconds > (std::numeric_limits<std::uint64_t>::max() - nanoseconds) / scale)
+        return std::nullopt;
+      return seconds * scale + nanoseconds;
+#else
+      return std::nullopt;
+#endif
+    };
+    const auto startClock = [&](CpuGeneralTapeControlledV4ClockScope& scope, ClockStart& start) noexcept {
+      if (!executionOnly) return true;
+      scope.started = true;
+      start.wall = Clock::now();
+      start.processCpu = sampleProcessCpu();
+      start.active = true;
+      return start.processCpu.has_value();
+    };
+    const auto stopClock = [&](CpuGeneralTapeControlledV4ClockScope& scope,
+                               ClockStart& start, bool complete) noexcept {
+      if (!executionOnly || !start.active) return true;
+      const auto wall = Clock::now();
+      const auto cpu = sampleProcessCpu();
+      start.active = false;
+      const auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(wall - start.wall).count();
+      if (duration >= 0) scope.wallNs = static_cast<std::uint64_t>(duration);
+      scope.valid = duration >= 0 && start.processCpu && cpu && *cpu >= *start.processCpu;
+      if (scope.valid) scope.processCpuNs = *cpu - *start.processCpu;
+      scope.complete = scope.valid && complete;
+      return scope.valid;
+    };
+    std::size_t publicationCursor = 0u, canonicalPayloadBytes = 0u;
+    std::vector<core::metalqueue::ReplaySourcePublicationReceipt> publications;
+    std::optional<core::metalqueue::ReplaySourcePublicationReceipt> lastPublication;
+    const auto nativeHandle = [](const Object& object) -> core::Handle {
+      if (!object.value) return {};
+      if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+        const auto* value = static_cast<const D9CBuffer*>(object.value);
+        return value->obj ? value->obj->handle() : core::Handle{};
+      }
+      if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+        const auto* value = static_cast<const D9CTexture*>(object.value);
+        return value->obj ? value->obj->handle() : core::Handle{};
+      }
+      if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+        const auto* value = static_cast<const D9CSurface*>(object.value);
+        return value->obj ? value->obj->handle() : core::Handle{};
+      }
+      return {};
+    };
+    const auto clearControlledFlushAdapter = [&]() noexcept {
+      if (!controlledFlushInstalled) return;
+      fixture_.routing->flushHook = {};
+      controlledFlushInstalled = false;
+    };
+    const auto cleanup = [&]() noexcept {
+      if (cleaned) return;
+      cleaned = true;
+      // Join/poison before revocation, observer detachment or wrapper release.
+      // Quarantine is not a successful drain/reset and never fabricates ACKs.
+      try { if (handle) handle->cancelAndJoin(); } catch (...) {}
+      stopClock(result.clocks.body, bodyClock, false);
+      stopClock(result.clocks.setup, setupClock, false);
+      startClock(result.clocks.teardown, teardownClock);
+      clearControlledFlushAdapter();
+      execution.cancel();
+      capability.revoke();
+      setup.releaseHidden();
+      for (auto& owner : checkpoints) {
+        if (owner.object.value) {
+          runtime::releaseOwnedObject(owner.object);
+          ++result.resourcesReleased;
+        }
+      }
+      for (auto it = objects.rbegin(); it != objects.rend(); ++it) {
+        if (!it->value) continue;
+        const auto native = nativeHandle(*it);
+        if (native) {
+          try { tombstones.push_back({it->identity, native}); } catch (...) {}
+        }
+        runtime::releaseOwnedObject(*it);
+        ++result.resourcesReleased;
+      }
+      fixture_.routing->generalTextureUpload = {};
+      try {
+        fixture_.releaseCoreForInspection();
+        Access::reclaimCompletedPool(fixture_.routing->queue_);
+        bool resourcesGone = true;
+        for (const auto& retired : tombstones) {
+          const auto& pool = fixture_.routing->queue_.pool();
+          if (retired.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER)
+            resourcesGone &= !pool.findBuffer(retired.nativeHandle.value);
+          else if (retired.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE)
+            resourcesGone &= !pool.findTexture(retired.nativeHandle.value);
+          else if (retired.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE)
+            resourcesGone &= !pool.findSurface(retired.nativeHandle.value);
+        }
+        result.resetOk = resourcesGone && !Access::readyCount(fixture_.routing->queue_) &&
+            !Access::pendingCompletionCount(fixture_.routing->queue_) &&
+            !Access::writingCommandCount(fixture_.routing->queue_) &&
+            !Access::residentCount(fixture_.routing->queue_) &&
+            !Access::controlledCpuQueueStopped(fixture_.routing->queue_);
+      } catch (...) { result.resetOk = false; }
+      result.initialSetup = setup.evidence();
+      if (versions) result.recordContexts = versions->recordCount();
+      if (budget) result.expectedBufferBudget = budget->snapshot();
+      stopClock(result.clocks.teardown, teardownClock, result.resetOk && result.failure.empty());
+    };
+    struct CleanupGuard {
+      const decltype(cleanup)& action;
+      ~CleanupGuard() { action(); }
+    } cleanupGuard{cleanup};
+    const auto live = [&](std::uint32_t event) {
+      if (Clock::now() >= options.deadline) return fail(event, "controlled-v4-inventory-deadline");
+      if (inventory && inventory->failure()) return fail(event, inventory->failure());
+      if (handle && handle->consumer->snapshot().failure != CpuV4ConsumerFailure::None)
+        return fail(event, "controlled-v4-inventory-consumer-failed");
+      return true;
+    };
+    const auto mutate = [&](std::uint32_t event, const auto& mutation,
+                            std::span<const Object> owners) {
+      return replayCpuMutation(event, mutation, owners, receipts, result,
+          expectedUploadHandle, expectedUploadLevel, expectedUploadShape,
+          expectedUploadBytes, observedUpload, fail, !executionOnly);
+    };
+    const auto normalize = [&](std::uint32_t event, const Object& object) {
+      if (executionOnly) return true;
+      const auto native = nativeHandle(object);
+      if (!native) return true; // Queries/shaders/declarations are not resources.
+      CpuTapeResourceObservation observation;
+      if (!captureResourceObservation(objects, receipts, tombstones,
+              object.identity.kind, native, observation, &object.identity))
+        return fail(event, "controlled-v4-inventory-resource-normalization");
+      const auto previous = versions->find(object.identity);
+      const auto versionFailure = [&](const char* stage, Status status) {
+        CpuGeneralTapeControlledV4ResourceVersionFailure facts;
+        facts.stage = stage;
+        facts.requestedIdentity = object.identity;
+        facts.normalizedIdentity = observation.identity();
+        facts.nativeKind = object.identity.kind;
+        facts.nativeHandle = native;
+        facts.priorLogicalContentEpoch = previous.version ? previous.version->contentEpoch() : 0u;
+        facts.status = status;
+        for (const auto& candidate : objects) {
+          const auto installed = versions->find(candidate.identity);
+          if (installed.version && installed.version->nativeKind() == object.identity.kind &&
+              installed.version->nativeHandle() == native)
+            facts.installedNativeOwners.push_back(installed.version->identity());
+        }
+        result.resourceVersionFailure = std::move(facts);
+        return fail(event, "controlled-v4-inventory-version-conflict");
+      };
+      if (!detail::cpuGeneralSameIdentity(observation.identity(), object.identity))
+        return versionFailure("normalized-identity", Status::Conflict);
+      if (previous.version && previous.version->contentEpoch() == std::numeric_limits<std::uint64_t>::max())
+        return fail(event, "controlled-v4-inventory-content-epoch");
+      const auto epoch = previous.version ? previous.version->contentEpoch() + 1u : 1u;
+      const auto* buffer = object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER
+          ? static_cast<const D9CBuffer*>(object.value) : nullptr;
+      // One producer-side arena observation, after the real successful
+      // definition/mutation and before immutable version/context construction.
+      // Facts become part of that exact historical version, not a consumer
+      // lookup in the mutable current ledger. A failed observation is absent;
+      // local revision still does not authenticate the logical content epoch.
+      std::optional<resources::BufferVersionObservation> localFacts;
+      if (buffer) {
+        const auto actual = fixture_.routing->queue_.pool().observeBufferVersion(native);
+        result.bufferVersions.push_back({object.identity, epoch, actual});
+        if (actual.observed()) { localFacts = actual; ++result.bufferVersionsObserved; }
+        else ++result.bufferVersionsUnavailable; // Explicit absence, no backing/byte claim.
+      }
+      const CpuTapeResourceVersionInput input{.nativeKind = object.identity.kind,
+          .nativeHandle = native, .contentEpoch = epoch,
+          .expectedBufferByteSize = buffer ? buffer->desc.size : 0u,
+          .expectedBufferBytes = buffer ? buffer->obj->bytes() : std::span<const std::uint8_t>{},
+          .localBufferFacts = localFacts};
+      std::shared_ptr<const CpuTapeResourceVersion> version;
+      if (buildBudgetedCpuTapeResourceVersion(input, observation, budget, version) != Status::Accepted)
+        return fail(event, "controlled-v4-inventory-version-budget-or-allocation");
+      const auto status = previous.version
+          ? versions->replace(object.identity, previous.version->contentEpoch(), version)
+          : versions->define(version);
+      return status == Status::Accepted || versionFailure(previous.version ? "replace" : "define", status);
+    };
+    const auto refreshMutation = [&](std::uint32_t event, D9CWireObjectIdentity identity) {
+      if (executionOnly) return true;
+      for (const auto& object : objects) {
+        if (!object.value) continue;
+        bool affected = detail::cpuGeneralSameIdentity(object.identity, identity);
+        if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+          const auto* surface = static_cast<const D9CSurface*>(object.value);
+          if (surface->ownerTex) {
+            const auto definition = std::find_if(plan_.definitions.begin(), plan_.definitions.end(),
+                [&](const auto& candidate) {
+                  return detail::cpuGeneralSameIdentity(candidate.fixed.identity, object.identity);
+                });
+            d3d9::RenderTapeSurfaceDescriptorV2 descriptor{};
+            if (definition == plan_.definitions.end() ||
+                !d3d9::renderTapeLoadSurfaceDescriptorV2(definition->descriptor, descriptor))
+              return fail(event, "controlled-v4-inventory-alias-descriptor");
+            affected |= detail::cpuGeneralSameIdentity(descriptor.parentTexture, identity);
+          }
+        }
+        if (affected && !normalize(event, object)) return false;
+      }
+      return true;
+    };
+    const auto bootstrap = [&](std::uint32_t event) {
+      if (bootstrapDone) return true;
+      std::vector<Object> owners(objects.begin(), objects.end());
+      for (const auto& hidden : setup.hiddenObjects()) if (hidden.value) owners.push_back(hidden);
+      for (const auto& chunk : plan_.bootstrapChunks) {
+        std::vector<void*> resolved(chunk.envelope.handleCount);
+        std::size_t count = 0u;
+        if (!runtime::resolveCommandHandles(chunk, owners, resolved, count) ||
+            d3d9::replayPrevalidatedResolvedCommandChunk(fixture_.cDevice.get(), chunk.bytes,
+                chunk.envelope, std::span<void* const>(resolved.data(), count),
+                options.route) != core::D3D_OK)
+          return fail(event, "controlled-v4-inventory-bootstrap");
+        result.commands += chunk.envelope.recordCount;
+      }
+      bootstrapDone = true;
+      return true;
+    };
+    const auto pullPublications = [&](std::uint32_t event) {
+      if (!execution.publishedSources(publicationCursor, publications)) return fail(event, execution.failure());
+      if (!publications.empty()) lastPublication = publications.back();
+      return live(event);
+    };
+    const auto waitLastPublication = [&](std::uint32_t event) {
+      if (!pullPublications(event)) return false;
+      if (!lastPublication) return true;
+      const auto& receipt = *lastPublication;
+      const CpuV4ConsumerIdentity target{.queue = result.provenance.localArm.queue,
+          .captureToken = result.provenance.localArm.captureToken,
+          .captureEpoch = result.provenance.localArm.captureEpoch,
+          .sequence = receipt.metadata.seqId, .sourceIndex = receipt.source.id.index,
+          .sourceGeneration = receipt.source.id.generation,
+          .storageFirstPage = receipt.source.storage.firstPage,
+          .storagePageCount = receipt.source.storage.pageCount,
+          .storageGeneration = receipt.source.storage.generation};
+      return handle && handle->consumer->waitThrough(target, options.deadline)
+          ? live(event) : fail(event, "controlled-v4-inventory-publication-wait");
+    };
+    fixture_.routing->controlledQueries = result.inputAdmission.counts().queryDefinitions != 0u;
+    fixture_.routing->attachmentOwner = AttachmentContentOwner::BackendCommands;
+    if (executionOnly) {
+      fixture_.routing->recordBoundedCapturedBindings = false;
+      auto& omitted = result.executionOnly;
+      omitted.resourceVersionsOmitted = omitted.recordContextsOmitted = omitted.expectedImagesOmitted = true;
+      omitted.canonicalDrawCopiesOmitted = omitted.payloadObserverOmitted = omitted.sourceRowReadsOmitted = true;
+      omitted.logicalHashingOmitted = omitted.diagnosticMutationReceiptsOmitted = true;
+      omitted.capturedBindingImagesOmitted = omitted.uploadByteComparisonsOmitted = true;
+    }
+    fixture_.routing->generalTextureUpload = [&](core::TextureHandle handle, std::uint32_t level,
+        std::uint32_t width, std::uint32_t height, std::uint32_t depth, std::uint32_t pitch,
+        std::uint32_t slicePitch, std::span<const std::uint8_t> bytes) {
+      const bool exact = handle == expectedUploadHandle && level == expectedUploadLevel &&
+          detail::cpuGeneralTextureUploadShapeMatches(expectedUploadShape,
+              width, height, depth, pitch, slicePitch, bytes.size()) &&
+          bytes.size() == expectedUploadBytes.size() && !bytes.empty() &&
+          (executionOnly || std::memcmp(bytes.data(), expectedUploadBytes.data(), bytes.size()) == 0);
+      observedUpload |= exact;
+      result.observedTextureUploads += exact;
+      return exact;
+    };
+    try {
+      objects.reserve(plan_.definitions.size());
+      if (!executionOnly) receipts.reserve(plan_.mutations.size());
+      tombstones.reserve(plan_.definitions.size());
+      queries.reserve(result.inputAdmission.counts().queryDefinitions);
+      checkpoints.reserve(result.inputAdmission.counts().queryDefinitions);
+      auto& queryEvidence = result.queryReplay;
+      queryEvidence.present = result.inputAdmission.counts().queryDefinitions != 0u;
+      queryEvidence.queryDefinitions = result.inputAdmission.counts().queryDefinitions;
+      queryEvidence.issueRecords = result.inputAdmission.counts().queryIssues;
+      queryEvidence.recordedPolls = result.inputAdmission.counts().queryPolls;
+      queryEvidence.maxOraclePolls = options.maxQueryOraclePolls *
+          static_cast<std::uint32_t>(queryEvidence.recordedPolls);
+      if (!startClock(result.clocks.setup, setupClock)) {
+        fail(0xffffffffu, "controlled-v4-execution-clock");
+      }
+      if (result.failure.empty() && (!setup.adopt(std::move(setupPlan), options.sourcePlan->digest(), options.initialSetupLimits) ||
+          !setup.prepare([&](const auto& entry, std::span<const Object> hidden) {
+            if (!live(entry.definitionEventIndex)) return static_cast<void*>(nullptr);
+            auto* value = runtime::createRenderTapeObject(fixture_.cDevice.get(),
+                entry.definition, entry.descriptor, blobs_, hidden);
+            result.resourcesCreated += value != nullptr;
+            return value;
+          }, [&](const auto&, const auto& seed, const Object& object) {
+            return live(seed.eventIndex) && mutate(seed.eventIndex, seed.mutation, {&object, 1u});
+          }))) {
+        fail(0xffffffffu, "controlled-v4-inventory-hidden-setup");
+      }
+      // Separate genuine pre-arm EVENT setup. This is not interval source
+      // replay, and its actual receipts are never projected as captured work.
+      if (result.failure.empty()) for (const auto& definition : plan_.definitions) {
+        if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+        d3d9::RenderTapeQueryDescriptorDecoded descriptor{};
+        if (!d3d9::renderTapeLoadQueryDescriptor(definition.descriptor, descriptor)) {
+          fail(0xffffffffu, "controlled-v4-inventory-checkpoint-descriptor"); break;
+        }
+        if (descriptor.initialState != static_cast<std::uint32_t>(
+                d3d9::RenderTapeQueryInitialState::CompletedEventCheckpoint)) continue;
+        auto* query = static_cast<D9CQuery*>(runtime::createRenderTapeObject(fixture_.cDevice.get(),
+            definition.fixed, definition.descriptor, blobs_, objects));
+        if (!query || !query->obj) { fail(0xffffffffu, "controlled-v4-inventory-checkpoint-create"); break; }
+        ++result.resourcesCreated;
+        ++queryEvidence.checkpointDefinitions;
+        checkpoints.push_back({.object = {definition.fixed.identity, query},
+            .cycle = {.identity = definition.fixed.identity,
+                .state = d3d9::renderTapeInitialQueryCycle(descriptor)},
+            .evidenceIndex = queryEvidence.checkpoints.size()});
+        auto& owner = checkpoints.back();
+        const auto before = fixture_.routing->queryProgress();
+        if (dxmt9c_query_issue(query, 1u) != core::D3D_OK) {
+          fail(0xffffffffu, "controlled-v4-inventory-checkpoint-end"); break;
+        }
+        ++queryEvidence.checkpointSetupEnds;
+        owner.cycle.expectedLocalIssueOrdinal = 1u;
+        owner.cycle.snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+        const auto& snapshot = owner.cycle.snapshot;
+        const auto fence = snapshot.backendFence.snapshot();
+        const auto after = fixture_.routing->queryProgress();
+        queryEvidence.checkpointSetupPublications += static_cast<std::uint32_t>(after.published - before.published);
+        d3d9::RenderTapeQueryCheckpointReplayRow row{.identity = definition.fixed.identity,
+            .capturedIssueCycle = descriptor.checkpoint.issueCycle,
+            .capturedIssueOrdinal = descriptor.checkpoint.issueOrdinal,
+            .capturedDeviceEpoch = descriptor.checkpoint.deviceEpoch,
+            .localQueryIdentity = snapshot.identity, .localIssueOrdinal = snapshot.issueOrdinal,
+            .localDeviceEpoch = snapshot.issueDeviceEpoch, .localQueue = fence.queue,
+            .localSequence = fence.sequence, .localInitializer = fence.initializer, .setupIssued = true};
+        if (!snapshot.eligible || snapshot.active || snapshot.failed || snapshot.issueOrdinal != 1u ||
+            snapshot.identity != query->obj->identity() || !snapshot.issueDeviceEpoch || !fence.queue) {
+          fail(0xffffffffu, "controlled-v4-inventory-checkpoint-authority"); break;
+        }
+        auto hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
+        ++row.setupPolls; ++queryEvidence.checkpointSetupPolls;
+        while (hr == core::S_FALSE && row.setupPolls <= options.maxQueryOraclePolls && live(0xffffffffu)) {
+          if (!Access::peekReadyCompletion(fixture_.routing->queue_).seqId) {
+            fail(0xffffffffu, "controlled-v4-inventory-checkpoint-progress-unavailable"); break;
+          }
+          const auto source = Access::submitOneWithheld(fixture_.routing->queue_);
+          if (!source.submitted) { fail(0xffffffffu, "controlled-v4-inventory-checkpoint-submit"); break; }
+          ++result.setupSubmissions;
+          if (!Access::acknowledgeOne(fixture_.routing->queue_)) {
+            fail(0xffffffffu, "controlled-v4-inventory-checkpoint-acknowledge"); break;
+          }
+          ++result.setupAcknowledgements;
+          if (!Access::finishQueue(fixture_.routing->queue_)) {
+            fail(0xffffffffu, "controlled-v4-inventory-checkpoint-fifo"); break;
+          }
+          Access::reclaimCompletedPool(fixture_.routing->queue_);
+          ++queryEvidence.checkpointSetupWaits;
+          ++row.setupPolls; ++queryEvidence.checkpointSetupPolls;
+          hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
+        }
+        const auto progress = fixture_.routing->queryProgress();
+        row.completedSequence = progress.completed;
+        row.completedInitializer = progress.initializerCompleted;
+        if (!result.failure.empty() || hr != core::D3D_OK ||
+            dxmt9::query::classifyEnd(snapshot.backendFence, progress) != dxmt9::query::Poll::Complete) {
+          fail(0xffffffffu, "controlled-v4-inventory-checkpoint-incomplete"); break;
+        }
+        row.completed = true;
+        ++queryEvidence.checkpointCompleted;
+        queryEvidence.checkpoints.push_back(row);
+      }
+      // Hidden host preparation and the genuine completed EVENT setup must
+      // join before ANY managed original definition/seed activation. The
+      // later pre-arm bootstrap boundary performs its own live quiescence
+      // check; it cannot repeat or retroactively grant this ownership join.
+      if (result.failure.empty() && !setup.joinHostCheckpoint([&] {
+            return !Access::readyCount(fixture_.routing->queue_) &&
+                !Access::writingCommandCount(fixture_.routing->queue_) &&
+                !Access::pendingCompletionCount(fixture_.routing->queue_) &&
+                !Access::residentCount(fixture_.routing->queue_);
+          })) fail(0xffffffffu, "controlled-v4-inventory-hidden-host-checkpoint");
+      const auto replayPoll = [&](std::uint32_t event, std::uint32_t index) {
+        if (index >= plan_.controls.size() || index >= plan_.controlBytes.size() ||
+            plan_.controlBytes[index].size() != sizeof(d3d9::RenderTapeQueryGetDataControlV2))
+          return fail(event, "controlled-v4-inventory-query-control");
+        const auto& fixed = plan_.controls[index];
+        d3d9::RenderTapeQueryGetDataControlV2 poll{};
+        std::memcpy(&poll, plan_.controlBytes[index].data(), sizeof(poll));
+        const auto cycle = std::find_if(queries.begin(), queries.end(), [&](const auto& value) {
+          return detail::cpuGeneralSameIdentity(value.identity, fixed.identity);
+        });
+        auto* query = static_cast<D9CQuery*>(runtime::findExactObject(objects, fixed.identity));
+        if (cycle == queries.end() || !query || !query->obj ||
+            !d3d9::renderTapeQueryPollCycleAdmitted(cycle->state, poll.issueCycle, fixed.resultCode))
+          return fail(event, "controlled-v4-inventory-query-cycle");
+        const auto snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+        if (!snapshot.eligible || snapshot.identity != query->obj->identity() ||
+            snapshot.issueOrdinal != cycle->expectedLocalIssueOrdinal ||
+            (snapshot.issueOrdinal && snapshot.issueDeviceEpoch != cycle->snapshot.issueDeviceEpoch))
+          return fail(event, "controlled-v4-inventory-query-snapshot");
+        d3d9::RenderTapeQueryReplayRow row{.eventIndex = event,
+            .eventOrdinal = plan_.tape.event(event).header.ordinal, .identity = fixed.identity,
+            .issueCycle = poll.issueCycle, .flags = poll.flags, .hasOutput = poll.hasOutput != 0u,
+            .dataSize = poll.dataSize, .capturedResult = fixed.resultCode,
+            .definedBytes = poll.definedBytes, .capturedBytes = poll.result,
+            .resultRequired = fixed.resultCode == core::D3D_OK};
+        row.localQueryIdentity = snapshot.identity;
+        row.localIssueOrdinal = snapshot.issueOrdinal;
+        row.localDeviceEpoch = snapshot.issueDeviceEpoch;
+        const auto fence = snapshot.backendFence.snapshot();
+        row.localQueue = fence.queue; row.localSequence = fence.sequence; row.localInitializer = fence.initializer;
+        std::array<std::byte, 8> output;
+        output.fill(std::byte{0xa5});
+        row.replayResult = dxmt9c_query_get_data(query, poll.hasOutput ? output.data() : nullptr,
+            poll.dataSize, poll.flags);
+        ++queryEvidence.replayedPolls;
+        queryEvidence.capturedPending += fixed.resultCode == core::S_FALSE;
+        queryEvidence.capturedReady += fixed.resultCode == core::D3D_OK;
+        queryEvidence.replayPending += row.replayResult == core::S_FALSE;
+        queryEvidence.replayReady += row.replayResult == core::D3D_OK;
+        row.oracleResult = row.replayResult;
+        if ((row.replayResult < 0 && fixed.resultCode >= 0) ||
+            (fixed.resultCode < 0 && row.replayResult != fixed.resultCode) ||
+            (row.replayResult != core::D3D_OK && std::any_of(output.begin(), output.end(),
+                [](auto byte) { return byte != std::byte{0xa5}; })))
+          return fail(event, "controlled-v4-inventory-query-result");
+        if (row.resultRequired) {
+          ++queryEvidence.readinessRequired;
+          queryEvidence.requiredResults += poll.definedBytes != 0u;
+          if (row.oracleResult == core::S_FALSE && options.maxQueryOraclePolls) {
+            // Only the already-published genuine prefix can be waited here.
+            // There is no raw ACK/after-raw wait inside a record callback.
+            if (!waitLastPublication(event)) return false;
+            ++row.oraclePolls; ++queryEvidence.supplementalPolls;
+            row.supplemental = true;
+            row.oracleResult = fixture_.cDevice->dev().pollQuerySnapshot(snapshot,
+                poll.hasOutput ? output.data() : nullptr, poll.dataSize, poll.flags);
+          }
+          const auto progress = fixture_.routing->queryProgress();
+          if (row.oracleResult != core::D3D_OK ||
+              (!snapshot.constant() && !snapshot.preIssue() &&
+                  dxmt9::query::classifyEnd(snapshot.backendFence, progress) != dxmt9::query::Poll::Complete))
+            return fail(event, "controlled-v4-inventory-query-progress-incomplete");
+          row.completedSequence = progress.completed;
+          row.completedInitializer = progress.initializerCompleted;
+          row.readinessSatisfied = true;
+          ++queryEvidence.readinessSatisfied;
+          row.resultSubstituted = cycle->state.type == 9u && poll.definedBytes != 0u;
+          queryEvidence.substitutedResults += row.resultSubstituted;
+          if (poll.definedBytes) {
+            std::copy_n(output.begin(), poll.definedBytes, row.replayBytes.begin());
+            if (!row.resultSubstituted) {
+              row.resultMatched = std::equal(poll.result.begin(), poll.result.begin() + poll.definedBytes,
+                  output.begin());
+              if (!row.resultMatched) return fail(event, "controlled-v4-inventory-query-bytes");
+              ++queryEvidence.matchedResults;
+            }
+          }
+        }
+        queryEvidence.rows.push_back(row);
+        return true;
+      };
+      for (const auto& event : plan_.events) {
+        if (!result.failure.empty() || !live(event.eventIndex)) break;
+        if (event.eventIndex == execution.snapshotPrefixEvents()) {
+          if (!bootstrap(event.eventIndex) || Access::readyCount(fixture_.routing->queue_) ||
+              Access::writingCommandCount(fixture_.routing->queue_) ||
+              Access::pendingCompletionCount(fixture_.routing->queue_) ||
+              Access::residentCount(fixture_.routing->queue_)) {
+            fail(event.eventIndex, "controlled-v4-inventory-pre-arm-quiescence"); break;
+          }
+          for (const auto& object : objects)
+            if (object.value && !normalize(event.eventIndex, object)) break;
+          if (!result.failure.empty()) break;
+          // Setup is quiescent before this snapshot. The same original body
+          // runs once, and the final snapshot follows the consumer join.
+          if (result.routeCoverage.observed) routeBefore = perf::snapshotRenderTapeReplay();
+          routeStarted = true;
+          std::vector<d3d9::RenderTapeExecutionV4QueryBaselineInput> baselines;
+          for (const auto& owner : checkpoints) {
+            auto* query = owner.object.value ? static_cast<D9CQuery*>(owner.object.value)
+                : static_cast<D9CQuery*>(runtime::findExactObject(objects, owner.object.identity));
+            baselines.push_back({owner.object.identity, query, owner.cycle.snapshot});
+          }
+          capability = fixture_.issueControlledCpuCapability();
+          if (!execution.armControlledCpu(fixture_.cDevice.get(), capability, baselines)) {
+            fail(event.eventIndex, execution.failure()); break;
+          }
+          armed = true;
+          const auto& arm = result.provenance.localArm;
+          if (executionOnly) {
+            handle = fixture_.makeControlledCpuConsumer(capability, arm, options.consumerLimits, options.deadline);
+          } else {
+            inventory = std::make_shared<detail::CpuGeneralTapeControlledV4InventoryObserver>(
+                d3d9::acquireRenderTapeRuntimeIdentityV4(fixture_.cDevice.get()),
+                render::TapeTopologyCaptureIdentity{arm.captureToken, arm.captureEpoch, arm.queue},
+                versions->recordContexts(), budget, options.consumerLimits, logicalRoles,
+                options.observeLogicalSemantics, options.legalCandidateNoOverwriteContract);
+            handle = fixture_.makeControlledCpuConsumer(capability, arm, options.consumerLimits, options.deadline,
+                [observer = inventory](auto& queue, const auto& publication, const auto& payload) {
+                  observer->observe(queue, publication, payload);
+                  if (observer->failure()) throw detail::CpuGeneralTapeControlledV4InventoryRejected{};
+                });
+          }
+          if (!handle || !handle->start()) { fail(event.eventIndex, "controlled-v4-inventory-consumer-start"); break; }
+          if (options.producerContract == d3d9::RenderTapeExecutionV4ProducerContract::PePresentReservationV1) {
+            // RoutingDevice's default flush is deliberately inert. Only this
+            // live controlled session adapts the original production flush to
+            // the real queue; its concurrent consumer services publication and
+            // completion while submitFlush waits unchanged.
+            fixture_.routing->flushHook = [this, &capability] {
+              struct Context {
+                D9CDevice* expectedDevice;
+                dxmt9::Device* expectedBackend;
+              } context{fixture_.cDevice.get(), fixture_.routing};
+              const bool flushed = capability.lease().visitBackend(
+                  d3d9::RenderTapeControlledCpuV4Boundary::Replay, &context,
+                  [](void* opaque, D9CDevice* actual, dxmt9::Device& backend) noexcept {
+                    const auto& input = *static_cast<Context*>(opaque);
+                    if (actual != input.expectedDevice || &backend != input.expectedBackend) return false;
+                    try {
+                      backend.queue().submitFlush();
+                      return true;
+                    } catch (...) { return false; }
+                  });
+              if (!flushed) throw detail::CpuGeneralTapeControlledV4FlushRejected{};
+            };
+            controlledFlushInstalled = true;
+          }
+          if (!stopClock(result.clocks.setup, setupClock, true) ||
+              !startClock(result.clocks.body, bodyClock)) {
+            fail(event.eventIndex, "controlled-v4-execution-clock"); break;
+          }
+        }
+        if (!execution.beginEvent(event.eventIndex)) { fail(event.eventIndex, execution.failure()); break; }
+        const bool dispatched = detail::dispatchCpuGeneralTapeEvent(event.type, [&] {
+          bootstrapPending = true;
+          for (const auto& gamma : plan_.bootstrapGamma) {
+            if (gamma.empty()) continue;
+            if (gamma.size() != d3d9::kRenderTapeGammaRampBytes)
+              return fail(event.eventIndex, "controlled-v4-inventory-gamma");
+            dxmt9c_device_set_gamma_ramp(fixture_.cDevice.get(),
+                reinterpret_cast<const std::uint16_t*>(gamma.data()));
+          }
+          return true;
+        }, [&] {
+          if (event.index >= plan_.definitions.size()) return fail(event.eventIndex, "controlled-v4-inventory-definition");
+          const auto& definition = plan_.definitions[event.index];
+          auto managed = setup.activate(event.index, event.eventIndex, definition, objects);
+          if (managed == CpuInitialSetupV4EventResult::Rejected)
+            return fail(event.eventIndex, "controlled-v4-inventory-activation");
+          if (managed == CpuInitialSetupV4EventResult::NotManaged) {
+            auto hidden = std::find_if(checkpoints.begin(), checkpoints.end(), [&](const auto& owner) {
+              return detail::cpuGeneralSameIdentity(owner.object.identity, definition.fixed.identity);
+            });
+            void* value = nullptr;
+            if (hidden != checkpoints.end()) {
+              if (hidden->activated || !hidden->object.value)
+                return fail(event.eventIndex, "controlled-v4-inventory-query-double-activation");
+              objects.push_back(hidden->object);
+              value = std::exchange(hidden->object.value, nullptr);
+              hidden->activated = true;
+              queries.push_back(hidden->cycle);
+              ++queryEvidence.checkpointActivated;
+              queryEvidence.checkpoints[hidden->evidenceIndex].activated = true;
+            } else {
+              value = runtime::createRenderTapeObject(fixture_.cDevice.get(), definition.fixed,
+                  definition.descriptor, blobs_, objects);
+              if (!value) return fail(event.eventIndex, "controlled-v4-inventory-object-create");
+              objects.push_back({definition.fixed.identity, value});
+              ++result.resourcesCreated;
+              if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+                d3d9::RenderTapeQueryDescriptorDecoded descriptor{};
+                if (!d3d9::renderTapeLoadQueryDescriptor(definition.descriptor, descriptor))
+                  return fail(event.eventIndex, "controlled-v4-inventory-query-descriptor");
+                queries.push_back({.identity = definition.fixed.identity,
+                    .state = d3d9::renderTapeInitialQueryCycle(descriptor)});
+              }
+            }
+            if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY &&
+                !execution.bindQueryObject(fixture_.cDevice.get(), definition.fixed.identity,
+                    static_cast<D9CQuery*>(value))) return fail(event.eventIndex, execution.failure());
+          }
+          const auto alias = setup.qualifyAlias(event.index, event.eventIndex, definition, objects);
+          if (alias == CpuInitialSetupV4EventResult::Rejected)
+            return fail(event.eventIndex, "controlled-v4-inventory-alias-activation");
+          return !armed || normalize(event.eventIndex, objects.back());
+        }, [&] {
+          if (event.index >= plan_.mutations.size()) return fail(event.eventIndex, "controlled-v4-inventory-mutation");
+          const auto& mutation = plan_.mutations[event.index];
+          const auto managed = setup.consumeSeed(event.index, event.eventIndex, mutation, objects);
+          if (managed == CpuInitialSetupV4EventResult::Rejected)
+            return fail(event.eventIndex, "controlled-v4-inventory-seed-consumption");
+          if (managed == CpuInitialSetupV4EventResult::Accepted) return true;
+          return mutate(event.eventIndex, mutation, objects) &&
+              (!armed || refreshMutation(event.eventIndex, mutation.identity));
+        }, [&] {
+          if (!armed || event.index >= plan_.commandChunks.size())
+            return fail(event.eventIndex, "controlled-v4-inventory-raw-boundary");
+          if (bootstrapPending && !bootstrap(event.eventIndex)) return false;
+          const auto& chunk = plan_.commandChunks[event.index];
+          d3d9::ImportedChunkView imported;
+          if (!d3d9::importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported))
+            return fail(event.eventIndex, "controlled-v4-inventory-raw-import");
+          std::vector<void*> resolved(chunk.envelope.handleCount);
+          std::size_t count = 0u;
+          if (!runtime::resolveCommandHandles(chunk, objects, resolved, count) ||
+              !execution.bindCommandChunk(chunk.bytes, chunk.envelope, {resolved.data(), count}))
+            return fail(event.eventIndex, execution.failed() ? execution.failure() : "controlled-v4-inventory-raw-handles");
+          const auto ordinal = plan_.tape.event(event.eventIndex).header.ordinal;
+          if (!executionOnly) for (std::uint32_t index = 0u; index < imported.records.size(); ++index) {
+            const auto type = imported.records[index].type;
+            if (type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE && type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) continue;
+            const auto view = imported.record(index);
+            constexpr std::size_t payloadLimit = 512u * 1024u * 1024u;
+            if (view.payload.size() > payloadLimit - canonicalPayloadBytes)
+              return fail(event.eventIndex, "controlled-v4-inventory-canonical-payload-cap");
+            CpuGeneralTapeControlledV4CanonicalDrawRecord raw{{ordinal, index}, event.eventIndex, type};
+            raw.payload.assign(view.payload.begin(), view.payload.end());
+            canonicalPayloadBytes += view.payload.size();
+            result.canonicalDrawRecords.push_back(std::move(raw));
+          }
+          CpuTapeProducerResourceLedgerV4::Context eventContext;
+          if (!executionOnly && versions->freezeCurrent(eventContext) != Status::Accepted)
+            return fail(event.eventIndex, "controlled-v4-inventory-event-context");
+          const auto bindRecord = [&](std::uint32_t index, std::uint32_t) {
+            if (executionOnly) return true;
+            CpuTapeProducerResourceLedgerV4::Context bound;
+            return versions->bindRecord({ordinal, index}, eventContext, bound) == Status::Accepted ||
+                fail(event.eventIndex, "controlled-v4-inventory-record-context");
+          };
+          const auto afterRecord = [&](std::uint32_t index, std::uint32_t type, std::int32_t hr) {
+            if (hr != core::D3D_OK || type != D9C_COMMAND_RECORD_QUERY_ISSUE) return true;
+            D9CCommandChunkWireQueryIssue issue{};
+            const auto view = imported.record(index);
+            if (view.payload.size() < sizeof(issue)) return fail(event.eventIndex, "controlled-v4-inventory-query-issue");
+            std::memcpy(&issue, view.payload.data(), sizeof(issue));
+            if (issue.queryHandleIndex >= count) return fail(event.eventIndex, "controlled-v4-inventory-query-handle");
+            const auto& wire = imported.handles[issue.queryHandleIndex];
+            const D9CWireObjectIdentity identity{wire.kind, wire.generation, wire.objectId};
+            const auto cycle = std::find_if(queries.begin(), queries.end(), [&](const auto& value) {
+              return detail::cpuGeneralSameIdentity(value.identity, identity);
+            });
+            auto* query = static_cast<D9CQuery*>(resolved[issue.queryHandleIndex]);
+            if (cycle == queries.end() || !query || !query->obj ||
+                !d3d9::renderTapeAdvanceQueryCycle(cycle->state, issue.flags, true))
+              return fail(event.eventIndex, "controlled-v4-inventory-query-transition");
+            ++cycle->expectedLocalIssueOrdinal;
+            cycle->snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+            ++queryEvidence.replayedIssueRecords;
+            return cycle->snapshot.issueOrdinal == cycle->expectedLocalIssueOrdinal ||
+                fail(event.eventIndex, "controlled-v4-inventory-query-issue-coverage");
+          };
+          struct ObservationContext {
+            d3d9::ProviderReplayObservationV4 original;
+            const decltype(bindRecord)& bind;
+            const decltype(afterRecord)& after;
+            static bool rawStarted(void* opaque, std::uint64_t event, std::uint64_t raw, std::uint32_t count) noexcept {
+              auto& self = *static_cast<ObservationContext*>(opaque);
+              return self.original.rawStarted && self.original.rawStarted(self.original.context, event, raw, count);
+            }
+            static bool beforeRecord(void* opaque, std::uint32_t index, std::uint32_t type) noexcept {
+              auto& self = *static_cast<ObservationContext*>(opaque);
+              bool bound = false;
+              try { bound = self.bind(index, type); } catch (...) {}
+              const bool forwarded = self.original.beforeRecord &&
+                  self.original.beforeRecord(self.original.context, index, type);
+              return bound && forwarded;
+            }
+            static bool beforeDispatch(void* opaque, std::uint32_t index, std::uint32_t type) noexcept {
+              auto& self = *static_cast<ObservationContext*>(opaque);
+              return self.original.beforeDispatch && self.original.beforeDispatch(self.original.context, index, type);
+            }
+            static bool recordDispatched(void* opaque, std::uint32_t index, std::uint32_t type, std::int32_t hr) noexcept {
+              auto& self = *static_cast<ObservationContext*>(opaque);
+              const bool forwarded = self.original.recordDispatched &&
+                  self.original.recordDispatched(self.original.context, index, type, hr);
+              bool observed = false;
+              try { observed = self.after(index, type, hr); } catch (...) {}
+              return forwarded && observed;
+            }
+            static bool rawSettled(void* opaque, std::uint64_t raw, std::uint32_t count, bool succeeded) noexcept {
+              auto& self = *static_cast<ObservationContext*>(opaque);
+              return self.original.rawSettled && self.original.rawSettled(self.original.context, raw, count, succeeded);
+            }
+          } observer{execution.observation(), bindRecord, afterRecord};
+          auto observation = observer.original;
+          observation.context = &observer;
+          observation.rawStarted = &ObservationContext::rawStarted;
+          observation.beforeRecord = &ObservationContext::beforeRecord;
+          observation.beforeDispatch = &ObservationContext::beforeDispatch;
+          observation.recordDispatched = &ObservationContext::recordDispatched;
+          observation.rawSettled = &ObservationContext::rawSettled;
+          d3d9::ProviderReplayObservationV4Result observed;
+          const auto hr = d3d9::replayPrevalidatedResolvedCommandChunkObservedV4(fixture_.cDevice.get(),
+              chunk.bytes, chunk.envelope, {resolved.data(), count},
+              options.route, observation, observed);
+          if (hr != core::D3D_OK || !observed.captureAccepted || !observed.qualificationSucceeded ||
+              !observed.ledgerSettlementObserved || !observed.localRawOrdinal || execution.failed())
+            return fail(event.eventIndex, execution.failed() ? execution.failure() : "controlled-v4-inventory-raw-replay");
+          result.routeCoverage.effectiveRoute = options.route;
+          result.routeCoverage.policySelected = true;
+          result.commands += imported.records.size();
+          for (const auto& record : imported.records)
+            result.draws += record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+                record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+          return pullPublications(event.eventIndex);
+        }, [&] {
+          if (event.index >= plan_.destroys.size()) return fail(event.eventIndex, "controlled-v4-inventory-destroy");
+          const auto identity = plan_.destroys[event.index].identity;
+          const auto owner = std::find_if(objects.begin(), objects.end(), [&](const auto& value) {
+            return value.value && detail::cpuGeneralSameIdentity(value.identity, identity);
+          });
+          if (owner == objects.end()) return fail(event.eventIndex, "controlled-v4-inventory-stale-destroy");
+          const auto native = nativeHandle(*owner);
+          if (native) tombstones.push_back({identity, native});
+          runtime::releaseOwnedObject(*owner);
+          ++result.resourcesReleased;
+          if (!executionOnly && armed && native) {
+            const auto previous = versions->find(identity);
+            if (!previous.version || versions->destroy(identity, previous.version->contentEpoch()) != Status::Accepted)
+              return fail(event.eventIndex, "controlled-v4-inventory-destroy-version");
+          }
+          return true;
+        }, [&] {
+          return replayPoll(event.eventIndex, event.index);
+        }, [] { return true; });
+        if (!dispatched) { fail(event.eventIndex, "controlled-v4-inventory-event-dispatch"); break; }
+        if (event.type != d3d9::RenderTapeEventType::CommandChunk && !execution.replayedEvent(event.eventIndex)) {
+          fail(event.eventIndex, execution.failure()); break;
+        }
+      }
+      const auto lastEvent = plan_.events.empty() ? 0xffffffffu : plan_.events.back().eventIndex;
+      if (result.failure.empty()) {
+        queryEvidence.transcriptComplete = queryEvidence.replayedIssueRecords == queryEvidence.issueRecords &&
+            queryEvidence.replayedPolls == queryEvidence.recordedPolls;
+        queryEvidence.oracleComplete = queryEvidence.transcriptComplete &&
+            queryEvidence.readinessRequired == queryEvidence.readinessSatisfied &&
+            queryEvidence.checkpointDefinitions == queryEvidence.checkpointCompleted &&
+            queryEvidence.checkpointDefinitions == queryEvidence.checkpointActivated;
+        if (!armed || !setup.intervalComplete() || !queryEvidence.oracleComplete)
+          fail(lastEvent, "controlled-v4-inventory-interval-incomplete");
+        else if (!waitLastPublication(lastEvent) || !fixture_.closeControlledCpuProducer() ||
+            !handle->consumer->closeProducer() || !handle->consumer->stopAndJoin())
+          fail(lastEvent, "controlled-v4-inventory-consumer-close");
+        else {
+          handle->join();
+          if (!stopClock(result.clocks.body, bodyClock, true))
+            fail(lastEvent, "controlled-v4-execution-clock");
+          clearControlledFlushAdapter();
+          result.consumer = handle->consumer->snapshot();
+          result.consumerReceipts = handle->consumer->takeReceipts();
+          if (inventory) result.inventory = inventory->takeSources();
+          consumerEvidenceTaken = true;
+          if (inventory && inventory->failure()) fail(lastEvent, inventory->failure());
+          else if (!result.consumer.workerExited || !result.consumer.cleanupComplete ||
+              result.consumer.cleanupFailed ||
+              (!executionOnly && result.inventory.size() != result.consumer.state.retired) ||
+              result.consumer.state.retired != result.consumerReceipts.size())
+            fail(lastEvent, "controlled-v4-inventory-consumer-coverage");
+          else if (!execution.finishControlledCpu(capability, result.controlledCpu))
+            fail(lastEvent, execution.failure());
+          else {
+            result.metadataInventoryComplete = !executionOnly;
+            result.sourceProgressComplete = true;
+            result.complete = result.failure.empty();
+          }
+        }
+      }
+    } catch (...) { fail(result.failedEvent, "controlled-v4-inventory-exception"); }
+    if (handle && !result.complete) {
+      handle->cancelAndJoin();
+      if (!consumerEvidenceTaken) {
+        result.consumer = handle->consumer->snapshot();
+        result.consumerReceipts = handle->consumer->takeReceipts();
+        if (inventory) result.inventory = inventory->takeSources();
+        consumerEvidenceTaken = true;
+      }
+    }
+    if (!stopClock(result.clocks.body, bodyClock, false) ||
+        !stopClock(result.clocks.setup, setupClock, false)) {
+      fail(result.failedEvent, "controlled-v4-execution-clock");
+      result.complete = false;
+    }
+    if (executionOnly) {
+      auto& cheap = result.executionOnly;
+      cheap.sources = result.consumer.state.observed;
+      cheap.commands = result.consumer.state.commands;
+      cheap.submitted = result.consumer.state.submitted;
+      cheap.acknowledged = result.consumer.state.acknowledged;
+      cheap.retired = result.consumer.state.retired;
+      std::size_t receiptCommands = 0u;
+      bool receiptCoverage = true;
+      for (const auto& receipt : result.consumerReceipts) {
+        if (!receipt.observation) { receiptCoverage = false; continue; }
+        receiptCoverage &= receipt.submitted && receipt.acknowledged && receipt.retired && receipt.cleanupComplete;
+        for (const auto& command : receipt.observation->commands) {
+          ++receiptCommands;
+          if (command.drawCount > std::numeric_limits<std::size_t>::max() - cheap.draws) {
+            receiptCoverage = false;
+            break;
+          }
+          cheap.draws += command.drawCount;
+        }
+      }
+      cheap.lifecycleCoverageComplete = result.complete && receiptCoverage &&
+          cheap.sources == result.consumerReceipts.size() && cheap.sources == cheap.submitted &&
+          cheap.sources == cheap.acknowledged && cheap.sources == cheap.retired &&
+          cheap.commands == receiptCommands && cheap.draws == result.draws;
+      if (result.complete && !cheap.lifecycleCoverageComplete) {
+        fail(result.failedEvent, "controlled-v4-execution-lifecycle-coverage");
+        result.complete = false;
+      }
+    }
+    if (routeStarted && result.routeCoverage.observed) {
+      const auto after = perf::snapshotRenderTapeReplay();
+      auto& route = result.routeCoverage;
+      route.monotonic = after.directLeases >= routeBefore.directLeases &&
+          after.directLeaseDraws >= routeBefore.directLeaseDraws &&
+          after.compatibilityDraws >= routeBefore.compatibilityDraws &&
+          after.compatibilityBatches >= routeBefore.compatibilityBatches &&
+          after.compatibilityUnbatchedDraws >= routeBefore.compatibilityUnbatchedDraws &&
+          after.fallbackDraws >= routeBefore.fallbackDraws;
+      if (route.monotonic) {
+        route.directLeases = after.directLeases - routeBefore.directLeases;
+        route.directDraws = after.directLeaseDraws - routeBefore.directLeaseDraws;
+        route.compatibilityDraws = after.compatibilityDraws - routeBefore.compatibilityDraws;
+        route.compatibilityBatches = after.compatibilityBatches - routeBefore.compatibilityBatches;
+        route.compatibilityUnbatchedDraws =
+            after.compatibilityUnbatchedDraws - routeBefore.compatibilityUnbatchedDraws;
+        route.fallbackDraws = after.fallbackDraws - routeBefore.fallbackDraws;
+      }
+      route.complete = result.complete && route.policySelected && route.monotonic &&
+          route.directDraws <= std::numeric_limits<std::uint64_t>::max() - route.compatibilityDraws &&
+          route.directDraws + route.compatibilityDraws == result.draws &&
+          (productionSlot || route.directDraws == 0u);
+      if (result.complete && !route.complete) {
+        fail(result.failedEvent, "controlled-v4-inventory-route-coverage");
+        result.complete = false;
+      }
+    }
+    if (options.observeLogicalSemantics && inventory) {
+      if (result.complete && !inventory->finishLogical(result.consumer.state.retired, result.consumer.state.commands)) {
+        fail(result.failedEvent, inventory->failure());
+        result.complete = false;
+      }
+      result.logicalSemantics = inventory->takeLogicalResult();
+      if (!result.complete) {
+        result.logicalSemantics.accepted = result.logicalSemantics.complete =
+            result.logicalSemantics.logicalStreamComplete = false;
+        if (result.logicalSemantics.failure.empty()) result.logicalSemantics.failure = result.failure;
+      }
+    }
+    cleanup();
+    result.complete = result.complete && result.resetOk;
+    if (executionOnly && (!result.clocks.setup.valid || !result.clocks.body.valid || !result.clocks.teardown.valid)) {
+      fail(result.failedEvent, "controlled-v4-execution-clock");
+      result.complete = false;
+    }
+    result.executionOnly.complete = executionOnly && result.complete && result.executionOnly.lifecycleCoverageComplete;
+    result.executionOnly.lifecycleCoverageComplete = result.executionOnly.lifecycleCoverageComplete && result.complete;
+    if (!result.complete) {
+      result.clocks.setup.complete = result.clocks.body.complete = result.clocks.teardown.complete = false;
+    }
+    result.routeCoverage.complete = result.routeCoverage.complete && result.complete;
+    if (options.observeLogicalSemantics && !result.complete) {
+      result.logicalSemantics.accepted = result.logicalSemantics.complete =
+          result.logicalSemantics.logicalStreamComplete = false;
+      if (result.logicalSemantics.failure.empty()) result.logicalSemantics.failure = "controlled-v4-logical-reset-incomplete";
+    }
+    if (!result.resetOk && result.failure.empty()) fail(result.failedEvent, "controlled-v4-inventory-reset-incomplete");
+    return result;
+  }
+
   Result run() {
     CpuDiagnosticLedger::Scope diagnostic(options_.diagnostic, CpuDiagnosticPhase::Admission);
     Result result;
+    d3d9::RenderTapeExecutionV3 executionV3;
     if (options_.diagnostic && !options_.measurement) {
       result.failure = "general-executor-diagnostic-requires-measurement";
       return result;
@@ -438,7 +1909,7 @@ class CpuGeneralTapeExecutor {
       result.failure = "general-executor-measurement-policy";
       return result;
     }
-    if (options_.captureSourcePlan &&
+    if ((options_.captureSourcePlan || options_.captureSourcePlanV3) &&
         (options_.beforeNextWork || options_.maxPendingSources != 1u ||
          !options_.sourceOracle.empty() || options_.holdSafeBufferMutation)) {
       result.failure = "general-executor-capture-source-policy";
@@ -464,8 +1935,23 @@ class CpuGeneralTapeExecutor {
       return result;
     }
     if (!admitCaptureSourcePlan(result)) return result;
+    if (options_.captureSourcePlanV3) {
+      d3d9::CaptureSourceReplayPlanV3 rebound;
+      if (options_.captureSourcePlan || options_.route != d3d9::ProviderReplayPolicy::Compatibility ||
+          !Access::cpuTapeWorkersDisabled(fixture_.routing->queue_) ||
+          fixture_.cDevice->replayOffload || fixture_.routing->supportsCpuReadyArenaReplay() ||
+          d3d9::buildCaptureSourceReplayPlanV3(options_.captureSourceTape, plan_.catalogue,
+              options_.captureSourceIdentitySidecar, rebound) !=
+              d3d9::CaptureSourceReplayPlanV3Status::Valid ||
+          !detail::cpuGeneralSameDigest(rebound.digest(), options_.captureSourcePlanV3->digest()) ||
+          !executionV3.admit(*options_.captureSourcePlanV3, plan_, options_.captureSourceTape,
+                            result.captureSourceReplayV3)) {
+        result.failure = "general-executor-v3-capture-source-admission";
+        return result;
+      }
+    }
     if (!admitEmission(result)) return result;
-    const auto queryAdmission = d3d9::render_tape_runtime::admitGeneralCpuPlan(plan_);
+    const auto& queryAdmission = result.inputAdmission;
     const bool queryBearing = std::any_of(plan_.definitions.begin(), plan_.definitions.end(),
         [](const auto& definition) {
           return definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY;
@@ -477,6 +1963,8 @@ class CpuGeneralTapeExecutor {
       result.failure = "general-executor-query-policy-or-transcript";
       return result;
     }
+    if (!admitSourceCapacity(result)) return result;
+    const auto publicationBaseline = fixture_.routing->queue_.queryProgress().published;
     fixture_.routing->controlledQueries = queryBearing;
     if (queryBearing) {
       result.queryReplay.present = true;
@@ -722,12 +2210,32 @@ class CpuGeneralTapeExecutor {
       }
       return false;
     };
+    bool recovering = false;
+    const auto checkPublications = [&](std::uint32_t event) {
+      const auto published = fixture_.routing->queue_.queryProgress().published;
+      if (published < publicationBaseline ||
+          (!recovering && published - publicationBaseline >
+              options_.sourceCapacity.maxPublications))
+        return fail(event, "general-executor-publication-cap");
+      if (!recovering && published - publicationBaseline > result.sourceDemand.publications)
+        return fail(event, "general-executor-publication-demand-exceeded");
+      result.sourcePublications = static_cast<std::size_t>(published - publicationBaseline);
+      return true;
+    };
+    const auto consumeProgress = [&](std::uint32_t event) {
+      if (!recovering && result.progressSteps >= options_.sourceCapacity.maxProgressSteps)
+        return fail(event, "general-executor-progress-cap");
+      if (!recovering && result.progressSteps >= result.sourceDemand.progressSteps)
+        return fail(event, "general-executor-progress-demand-exceeded");
+      ++result.progressSteps;
+      return true;
+    };
 
     const auto setupBegin = options_.measurement
         ? std::chrono::steady_clock::time_point{}
         : std::chrono::steady_clock::now();
     const auto create = [&](const auto& definition) {
-      if (objects.size() >= kCpuGeneralMaxObjects)
+      if (objects.size() >= options_.inputCaps.maxObjects)
         return static_cast<void*>(nullptr);
       return dxmt9::d3d9::render_tape_runtime::createRenderTapeObject(
           fixture_.cDevice.get(), definition.fixed, definition.descriptor,
@@ -829,22 +2337,32 @@ class CpuGeneralTapeExecutor {
     const auto publishReady = [&](
                                    std::uint32_t event,
                                    bool windowEligible = false,
-                                   const std::span<const core::metalqueue::ReplaySourcePublicationReceipt>* strictExpected = nullptr) {
+                                   const std::span<const core::metalqueue::ReplaySourcePublicationReceipt>* strictExpected = nullptr,
+                                   bool preserveWriter = false) {
       CpuDiagnosticLedger::Scope phase(options_.diagnostic, CpuDiagnosticPhase::Publication);
       const bool strictMode = strictExpected != nullptr;
-      if (strictMode && Access::writingCommandCount(fixture_.routing->queue_) != 0u)
+      if (!checkPublications(event)) return false;
+      if (!recovering && !preserveWriter &&
+          Access::writingCommandCount(fixture_.routing->queue_) != 0u &&
+          result.sourcePublications >= options_.sourceCapacity.maxPublications)
+        return fail(event, "general-executor-publication-cap");
+      if (strictMode && !preserveWriter && Access::writingCommandCount(fixture_.routing->queue_) != 0u)
         return fail(event, "general-executor-source-writing-preexisting");
-      if (!Access::publishWriting(fixture_.routing->queue_))
+      if (!preserveWriter && !Access::publishWriting(fixture_.routing->queue_))
         return fail(event, "general-executor-publish-failed");
+      if (!checkPublications(event)) return false;
       const std::size_t expectedReady =
           strictMode ? strictExpected->size() : 0u;
-      if (strictMode && Access::readyCount(fixture_.routing->queue_) != expectedReady)
+      if (strictMode && (preserveWriter
+              ? Access::readyCount(fixture_.routing->queue_) < expectedReady
+              : Access::readyCount(fixture_.routing->queue_) != expectedReady))
         return fail(event, "general-executor-source-ready-count");
       std::size_t drained = 0u;
       while (strictMode ? drained < expectedReady
                         : Access::readyCount(fixture_.routing->queue_) != 0u) {
-        if (strictMode && Access::readyCount(fixture_.routing->queue_) !=
-                              expectedReady - drained)
+        if (strictMode && (preserveWriter
+                ? Access::readyCount(fixture_.routing->queue_) < expectedReady - drained
+                : Access::readyCount(fixture_.routing->queue_) != expectedReady - drained))
           return fail(event, "general-executor-source-ready-count");
         // Keep one actual submitted source outstanding for recorded polls.
         // Earlier publications settle in order before the bounded queue
@@ -874,6 +2392,7 @@ class CpuGeneralTapeExecutor {
             !candidate.schedule.beginIteration(1u).accepted() ||
             !candidate.schedule.submit(candidate.key).accepted())
           return fail(event, "general-executor-schedule-submit-failed");
+        if (!consumeProgress(event)) return false;
         auto submission = Access::submitOneWithheld(
             fixture_.routing->queue_, [&](const auto& payload) {
               const auto observeBegin = options_.measurement
@@ -956,7 +2475,7 @@ class CpuGeneralTapeExecutor {
                                          kind, handle, hash);
                 };
                 auto draw = [&](std::uint64_t cumulativeHash) {
-                  if (result.drawObservations.size() >= kCpuGeneralMaxDraws) {
+                  if (result.drawObservations.size() >= options_.inputCaps.maxDraws) {
                     observeFailure = "general-executor-draw-cap";
                     return false;
                   }
@@ -1019,7 +2538,7 @@ class CpuGeneralTapeExecutor {
         if (!options_.beforeNextWork && !queryBearing && !releasePending(event)) return false;
       }
       if (strictMode && (drained != expectedReady ||
-                         Access::readyCount(fixture_.routing->queue_) != 0u))
+                         (!preserveWriter && Access::readyCount(fixture_.routing->queue_) != 0u)))
         return fail(event, "general-executor-source-ready-drain");
       return result.failure.empty();
     };
@@ -1034,8 +2553,8 @@ class CpuGeneralTapeExecutor {
                                                         chunk.envelope,
                                                         imported))
         return fail(event, "general-executor-command-import-failed");
-      if (result.commands + imported.records.size() >
-          kCpuGeneralMaxCommandRecords)
+      if (imported.records.size() > options_.inputCaps.maxTotalRecords ||
+          result.commands > options_.inputCaps.maxTotalRecords - imported.records.size())
         return fail(event, "general-executor-command-cap");
       const auto replayBegin = options_.measurement
           ? std::chrono::steady_clock::time_point{}
@@ -1045,12 +2564,24 @@ class CpuGeneralTapeExecutor {
           std::all_of(imported.records.begin(), imported.records.end(), [](const auto& record) {
             return record.type == D9C_COMMAND_RECORD_QUERY_ISSUE;
           });
+      std::optional<d3d9::RenderTapeExecutionV3::WritingContinuation> writing;
+      if (options_.captureSourcePlanV3)
+        writing = Access::writingContinuation(fixture_.routing->queue_);
+      if (writing) {
+        if (options_.continuationIdentityFault == ContinuationIdentityFault::StaleWriterGeneration)
+          ++writing->writer.generation;
+        else if (options_.continuationIdentityFault == ContinuationIdentityFault::ForeignQueue)
+          ++writing->writer.queue;
+      }
+      const bool ownedV3Writer = options_.captureSourcePlanV3 && writing &&
+          executionV3.ownsWritingContinuation(*writing);
       if (Access::readyCount(fixture_.routing->queue_) ||
-          Access::writingCommandCount(fixture_.routing->queue_) ||
+          (Access::writingCommandCount(fixture_.routing->queue_) && !ownedV3Writer) ||
           Access::pendingCompletionCount(fixture_.routing->queue_) != pendingSources.size() ||
-          Access::residentCount(fixture_.routing->queue_) != pendingSources.size() ||
+          Access::residentCount(fixture_.routing->queue_) !=
+              pendingSources.size() + std::size_t(ownedV3Writer) ||
           (!pendingSources.empty() &&
-           !queryOnly && (!windowEligible || !pendingWindowEligible())))
+           !options_.captureSourcePlanV3 && !queryOnly && (!windowEligible || !pendingWindowEligible())))
         return fail(event, "general-executor-nonquiescent-chunk-entry");
       if (options_.maxPendingSources > 1u &&
           !Access::noWaitHeadroom(fixture_.routing->queue_).admitsOne())
@@ -1187,6 +2718,14 @@ class CpuGeneralTapeExecutor {
               ? elapsedReplay - callbackNs
               : 0u;
         }
+      } else if (options_.captureSourcePlanV3 && commandChunkIndex.has_value()) {
+        sourceDriven = true;
+        if (!executionV3.bindCommandChunk(chunk.bytes, chunk.envelope, resolved) ||
+            d3d9::replayPrevalidatedResolvedCommandChunkV3(
+                fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
+                options_.route, executionV3.recordConsumer()) != core::D3D_OK)
+          return fail(event, executionV3.failed() ? executionV3.failure()
+              : "general-executor-v3-command-replay");
       } else if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
                      fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
                      options_.route) != core::D3D_OK) {
@@ -1248,120 +2787,28 @@ class CpuGeneralTapeExecutor {
       return true;
     };
 
+    std::uint32_t v3PublicationEvent = 0xffffffffu;
+    const auto drainV3Source = [&](const core::metalqueue::ReplaySourcePublicationReceipt& receipt) {
+      const std::span<const core::metalqueue::ReplaySourcePublicationReceipt> receipts(&receipt, 1u);
+      return publishReady(v3PublicationEvent, false, &receipts, true);
+    };
+    struct V3SourceContext {
+      const decltype(drainV3Source)* drain = nullptr;
+      static bool consume(void* opaque,
+          const core::metalqueue::ReplaySourcePublicationReceipt& receipt) noexcept {
+        try { return (*static_cast<V3SourceContext*>(opaque)->drain)(receipt); }
+        catch (...) { return false; }
+      }
+    } v3SourceContext{&drainV3Source};
+
     const auto mutation = [&](std::uint32_t event,
                               const auto& fixed) {
       // Cached byte proofs never survive a possible CPU mutation, including
       // DISCARD that legally reuses an address after immediate completion.
       snapshotProofs.invalidate();
-      const auto* blob = detail::cpuGeneralFindBlob(blobs_, fixed.digest);
-      void* value = dxmt9::d3d9::render_tape_runtime::findExactObject(
-          objects, fixed.identity);
-      if (!blob || !value || blob->bytes.size() != fixed.byteSize)
-        return fail(event, "general-executor-mutation-object-or-blob");
-      bool ok = false;
-      if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
-        dxmt9::d3d9::RenderTapeBufferMutationReplayPlan replayPlan{};
-        void* bits = nullptr;
-        auto* buffer = static_cast<D9CBuffer*>(value);
-        ok = dxmt9::d3d9::renderTapeBufferMutationReplayPlan(fixed,
-                                                              replayPlan) &&
-             dxmt9c_buffer_lock(buffer, replayPlan.byteOffset,
-                                replayPlan.byteSize, &bits,
-                                replayPlan.lockFlags) == core::D3D_OK &&
-             bits != nullptr;
-        if (ok) {
-          std::memcpy(bits, blob->bytes.data(), blob->bytes.size());
-          ok = dxmt9c_buffer_unlock(buffer) == core::D3D_OK;
-        }
-      } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
-        const auto definition = std::find_if(
-            plan_.definitions.begin(), plan_.definitions.end(),
-            [&](const auto& candidate) {
-              return detail::cpuGeneralSameIdentity(candidate.fixed.identity,
-                                                     fixed.identity);
-            });
-        D9CSurfaceDesc desc{};
-        D9CLockedRect lock{};
-        auto* texture = static_cast<D9CTexture*>(value);
-        expectedUploadHandle = texture->obj->handle();
-        expectedUploadLevel = fixed.subresource;
-        expectedUploadBytes = blob->bytes;
-        observedUpload = false;
-        ok = definition != plan_.definitions.end() && fixed.byteOffset == 0u &&
-             dxmt9::d3d9::renderTapeTextureSubresourceDescriptor(
-                 definition->descriptor, fixed.subresource, desc) &&
-             detail::cpuGeneralTextureUploadShape(desc, expectedUploadShape) &&
-             dxmt9c_texture_lock_rect(texture, fixed.subresource, &lock,
-                                      nullptr, 0u) == core::D3D_OK &&
-             lock.bits != nullptr;
-        const bool copied = ok && detail::cpuGeneralWriteTextureMutationRows(
-            definition->descriptor, *texture, fixed.subresource, fixed.byteOffset,
-            lock, blob->bytes);
-        const bool unlocked = ok &&
-            dxmt9c_texture_unlock_rect(texture, fixed.subresource) ==
-            core::D3D_OK;
-        ok = copied && unlocked && observedUpload && !fixture_.routing->textureUploadFailed;
-        expectedUploadBytes = {};
-        expectedUploadShape = {};
-      } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
-        const auto definition = std::find_if(
-            plan_.definitions.begin(), plan_.definitions.end(),
-            [&](const auto& candidate) {
-              return detail::cpuGeneralSameIdentity(candidate.fixed.identity,
-                                                     fixed.identity);
-            });
-        dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
-        auto* wrapped = static_cast<D9CSurface*>(value);
-        ok = definition != plan_.definitions.end() && fixed.subresource == 0u &&
-             fixed.byteOffset == 0u &&
-             dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(definition->descriptor, surface);
-        const auto disposition = ok
-            ? static_cast<dxmt9::d3d9::RenderTapeInitialContentDisposition>(
-                  surface.initialContentDisposition)
-            : dxmt9::d3d9::RenderTapeInitialContentDisposition::Unavailable;
-        if (ok && disposition ==
-                      dxmt9::d3d9::RenderTapeInitialContentDisposition::
-                          CompleteDepthStencilFloat32UInt8V1) {
-          dxmt9::d3d9::RenderTapeD24S8SnapshotLayout layout{};
-          // Both canonical planes belong to this exact logical surface. They
-          // are not packed D3D9 pixels or physical Metal backing bytes, and
-          // the CPU lane must not issue a lock, seed blit or GPU submission.
-          ok = wrapped && wrapped->obj &&
-               dxmt9::d3d9::renderTapeDeriveD24S8SnapshotLayout(
-                   surface.surface, layout) &&
-               blob->bytes.size() == layout.byteCount;
-        } else if (ok && disposition ==
-                      dxmt9::d3d9::RenderTapeInitialContentDisposition::
-                          CompleteDepthFloat32V1) {
-          const auto expected = static_cast<std::uint64_t>(surface.surface.width) *
-                                surface.surface.height * 4u;
-          // D24X8's tape bytes are canonical logical float depth, not the
-          // backend's packed/physical representation.  The CPU executor
-          // records this receipt for semantic observation; it deliberately
-          // does not invoke a GPU seed/blit or claim physical depth bytes.
-          ok = wrapped && wrapped->obj && blob->bytes.size() == expected;
-        } else if (ok && disposition ==
-                             dxmt9::d3d9::RenderTapeInitialContentDisposition::
-                                 CompleteSeed) {
-          D9CLockedRect lock{};
-          ok = wrapped &&
-               dxmt9c_surface_lock_rect(wrapped, &lock, nullptr, 0u) ==
-                   core::D3D_OK &&
-               lock.bits != nullptr;
-          const bool copied = ok &&
-              detail::cpuGeneralWriteRows(surface.surface, lock, blob->bytes);
-          const bool unlocked = ok && dxmt9c_surface_unlock_rect(wrapped) ==
-              core::D3D_OK;
-          ok = copied && unlocked;
-        } else {
-          ok = false;
-        }
-      }
-      if (!ok) return fail(event, "general-executor-mutation-failed");
-      detail::cpuGeneralRecordReceipt(receipts, fixed.identity,
-                                       fixed.subresource, fixed.digest);
-      ++result.observedMutations;
-      return true;
+      return replayCpuMutation(event, fixed, objects, receipts, result,
+          expectedUploadHandle, expectedUploadLevel, expectedUploadShape,
+          expectedUploadBytes, observedUpload, fail);
     };
 
     struct MutationBoundary {
@@ -1513,6 +2960,7 @@ class CpuGeneralTapeExecutor {
       const auto transcriptBegin = options_.measurement
           ? std::chrono::steady_clock::time_point{}
           : std::chrono::steady_clock::now();
+      if (!consumeProgress(event)) return false;
       row.replayResult = dxmt9c_query_get_data(wrapped,
           poll.hasOutput ? output.data() : nullptr,
           static_cast<std::uint32_t>(poll.dataSize), poll.flags);
@@ -1545,6 +2993,7 @@ class CpuGeneralTapeExecutor {
           ++row.oraclePolls;
           ++evidence.supplementalPolls;
           row.supplemental = true;
+          if (!consumeProgress(event)) return false;
           row.oracleResult = fixture_.cDevice->dev().pollQuerySnapshot(snapshot,
               poll.hasOutput ? output.data() : nullptr, poll.dataSize, poll.flags);
         }
@@ -1603,6 +3052,17 @@ class CpuGeneralTapeExecutor {
             kind == d3d9::RenderTapeEventType::ObjectDestroy ? CpuDiagnosticPhase::Cleanup :
             CpuDiagnosticPhase::Bookkeeping);
         const auto event = replayEvent.eventIndex;
+        v3PublicationEvent = event;
+        if (options_.captureSourcePlanV3) {
+          if (event == executionV3.snapshotPrefixEvents()) {
+            if (!replayBootstrap(event) ||
+                !executionV3.arm(fixture_.cDevice.get(),
+                    {.context = &v3SourceContext, .published = &V3SourceContext::consume}))
+              return fail(event, executionV3.failed() ? executionV3.failure()
+                  : "general-executor-v3-snapshot-setup");
+          }
+          if (!executionV3.beginEvent(event)) return fail(event, executionV3.failure());
+        }
         MutationBoundary boundary;
         const bool pendingMutation = replayEvent.type == d3d9::RenderTapeEventType::ResourceMutation &&
             result.submitted != result.completed;
@@ -1641,8 +3101,7 @@ class CpuGeneralTapeExecutor {
         const auto eventBegin = options_.measurement
             ? std::chrono::steady_clock::time_point{}
             : std::chrono::steady_clock::now();
-        switch (replayEvent.type) {
-        case dxmt9::d3d9::RenderTapeEventType::BootstrapState:
+        if (!detail::dispatchCpuGeneralTapeEvent(replayEvent.type, [&] {
           bootstrapPending = true;
           for (const auto& gamma : plan_.bootstrapGamma) {
             if (gamma.empty()) continue;
@@ -1655,8 +3114,8 @@ class CpuGeneralTapeExecutor {
                 fixture_.cDevice.get(),
                 reinterpret_cast<const std::uint16_t*>(gamma.data()));
           }
-          break;
-        case dxmt9::d3d9::RenderTapeEventType::ObjectDefine: {
+          return true;
+        }, [&] {
           snapshotProofs.invalidate();
           if (replayEvent.index >= plan_.definitions.size())
           {
@@ -1698,22 +3157,21 @@ class CpuGeneralTapeExecutor {
             }
           }
           ++result.resourcesCreated;
-          break;
-        }
-        case dxmt9::d3d9::RenderTapeEventType::ResourceMutation:
+          return true;
+        }, [&] {
           if (replayEvent.index >= plan_.mutations.size() ||
               !mutation(event, plan_.mutations[replayEvent.index]))
             return false;
           if (holdMutation && !verifyDeferredMutation(event, boundary)) return false;
-          break;
-        case dxmt9::d3d9::RenderTapeEventType::CommandChunk:
+          return true;
+        }, [&] {
           if (bootstrapPending && !replayBootstrap(event)) return false;
           if (replayEvent.index >= plan_.commandChunks.size() ||
               !replayChunk(event, plan_.commandChunks[replayEvent.index],
                            replayEvent.index))
             return false;
-          break;
-        case dxmt9::d3d9::RenderTapeEventType::ObjectDestroy: {
+          return true;
+        }, [&] {
           snapshotProofs.invalidate();
           result.destroysWithPending += result.submitted != result.completed;
           if (bootstrapPending && !replayBootstrap(event)) return false;
@@ -1795,14 +3253,14 @@ class CpuGeneralTapeExecutor {
             result.destroyWindows.push_back(std::move(window));
             if (!options_.measurement) result.observeNs += elapsed(retentionBegin);
           }
-          break;
-        }
-        case dxmt9::d3d9::RenderTapeEventType::OrderedControl:
-          if (!replayQueryPoll(event, replayEvent.index)) return false;
-          break;
-        case dxmt9::d3d9::RenderTapeEventType::PresentComplete:
-          break;
-        }
+          return true;
+        }, [&] {
+          return replayQueryPoll(event, replayEvent.index);
+        }, [] { return true; })) return false;
+        if (options_.captureSourcePlanV3 &&
+            replayEvent.type != d3d9::RenderTapeEventType::CommandChunk &&
+            !executionV3.replayedEvent(event)) return fail(event, executionV3.failure());
+        if (!checkPublications(event)) return false;
         if (replayEvent.type == d3d9::RenderTapeEventType::ObjectDefine ||
             replayEvent.type == d3d9::RenderTapeEventType::ResourceMutation) {
           if (!options_.measurement) result.setupNs += elapsed(eventBegin);
@@ -1886,6 +3344,7 @@ class CpuGeneralTapeExecutor {
         const auto& snapshot = owner.cycle.snapshot;
         const auto fence = snapshot.backendFence.snapshot();
         const auto after = fixture_.routing->queryProgress();
+        if (!checkPublications(0xffffffffu)) return false;
         evidence.checkpointSetupPublications += static_cast<std::uint32_t>(after.published - before.published);
         d3d9::RenderTapeQueryCheckpointReplayRow row{
             .identity = definition.fixed.identity,
@@ -1906,6 +3365,7 @@ class CpuGeneralTapeExecutor {
           return fail(0xffffffffu, "general-executor-checkpoint-local-authority");
         ++row.setupPolls;
         ++evidence.checkpointSetupPolls;
+        if (!consumeProgress(0xffffffffu)) return false;
         auto hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
         while (hr == core::S_FALSE && row.setupPolls <= options_.maxQueryOraclePolls) {
           // Both production dequeue and acknowledgment can wait. In this
@@ -1916,6 +3376,7 @@ class CpuGeneralTapeExecutor {
             evidence.progressLimit = d3d9::RenderTapeQueryProgressLimit::PollBudget;
             return fail(0xffffffffu, "general-executor-checkpoint-progress-unavailable");
           }
+          if (!consumeProgress(0xffffffffu)) return false;
           const auto source = Access::submitOneWithheld(fixture_.routing->queue_);
           if (!source.submitted || !Access::acknowledgeOne(fixture_.routing->queue_) ||
               !Access::finishQueue(fixture_.routing->queue_))
@@ -1923,6 +3384,7 @@ class CpuGeneralTapeExecutor {
           ++evidence.checkpointSetupWaits;
           ++row.setupPolls;
           ++evidence.checkpointSetupPolls;
+          if (!consumeProgress(0xffffffffu)) return false;
           hr = fixture_.cDevice->dev().pollQuerySnapshot(snapshot, nullptr, 0u, 0u);
         }
         const auto progress = fixture_.routing->queryProgress();
@@ -1938,6 +3400,8 @@ class CpuGeneralTapeExecutor {
       return true;
     };
     result.complete = restoreCheckpoints() && executeEvents();
+    if (result.complete && options_.captureSourcePlanV3 && !executionV3.finish())
+      result.complete = fail(plan_.events.back().eventIndex, executionV3.failure());
     } catch (...) {
       if (result.failure.empty()) {
         result.failure = "general-executor-exception";
@@ -1953,9 +3417,13 @@ class CpuGeneralTapeExecutor {
     // Failed execution is not an accepted sample, but it must still settle
     // every actually published no-GPU source before dropping retained owners.
     if (!result.complete) {
+      // Detach the cold observer before any recovery can release owners or
+      // deliver further completion edges into a rejected execution session.
+      executionV3.cancel();
+      recovering = true;
       (void)publishReady(result.failedEvent);
       for (std::size_t pending = 0u;
-           pending < kCpuGeneralMaxSources &&
+           pending < dxmt9::kMaxQueuedChunks &&
            Access::pendingCompletionCount(fixture_.routing->queue_) != 0u;
            ++pending) {
         if (!Access::acknowledgeOne(fixture_.routing->queue_) ||
@@ -1999,6 +3467,7 @@ class CpuGeneralTapeExecutor {
       dxmt9::d3d9::render_tape_runtime::releaseOwnedObject(*deferredResetObject);
       ++result.resourcesReleased;
     }
+    executionV3.cancel();
     fixture_.releaseCoreForInspection();
     Access::reclaimCompletedPool(fixture_.routing->queue_);
     bool resourcesGone = true;
@@ -2040,6 +3509,132 @@ class CpuGeneralTapeExecutor {
   }
 
  private:
+
+  // Both CPU execution lanes use the genuine provider lock/copy/unlock path.
+  // Publication/progress and immutable context normalization belong to their
+  // respective callers; this helper never submits or acknowledges a source.
+  template <class ExecutionResult, class Fail>
+  bool replayCpuMutation(std::uint32_t event,
+      const d3d9::RenderTapeResourceMutationHeader& fixed,
+      std::span<const d3d9::render_tape_runtime::OwnedObject> objects,
+      std::vector<detail::LogicalReceipt>& receipts, ExecutionResult& result,
+      core::Handle& expectedUploadHandle, std::uint32_t& expectedUploadLevel,
+      detail::CpuGeneralTextureUploadShape& expectedUploadShape,
+      std::span<const std::byte>& expectedUploadBytes, bool& observedUpload,
+      Fail&& fail, bool retainLogicalReceipts = true) {
+    const auto* blob = detail::cpuGeneralFindBlob(blobs_, fixed.digest);
+    void* value = dxmt9::d3d9::render_tape_runtime::findExactObject(
+        objects, fixed.identity);
+    if (!blob || !value || blob->bytes.size() != fixed.byteSize)
+      return fail(event, "general-executor-mutation-object-or-blob");
+    bool ok = false;
+    if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+      dxmt9::d3d9::RenderTapeBufferMutationReplayPlan replayPlan{};
+      void* bits = nullptr;
+      auto* buffer = static_cast<D9CBuffer*>(value);
+      ok = dxmt9::d3d9::renderTapeBufferMutationReplayPlan(fixed,
+                                                            replayPlan) &&
+           dxmt9c_buffer_lock(buffer, replayPlan.byteOffset,
+                              replayPlan.byteSize, &bits,
+                              replayPlan.lockFlags) == core::D3D_OK &&
+           bits != nullptr;
+      if (ok) {
+        std::memcpy(bits, blob->bytes.data(), blob->bytes.size());
+        ok = dxmt9c_buffer_unlock(buffer) == core::D3D_OK;
+      }
+    } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+      const auto definition = std::find_if(
+          plan_.definitions.begin(), plan_.definitions.end(),
+          [&](const auto& candidate) {
+            return detail::cpuGeneralSameIdentity(candidate.fixed.identity,
+                                                   fixed.identity);
+          });
+      D9CSurfaceDesc desc{};
+      D9CLockedRect lock{};
+      auto* texture = static_cast<D9CTexture*>(value);
+      expectedUploadHandle = texture->obj->handle();
+      expectedUploadLevel = fixed.subresource;
+      expectedUploadBytes = blob->bytes;
+      observedUpload = false;
+      ok = definition != plan_.definitions.end() && fixed.byteOffset == 0u &&
+           dxmt9::d3d9::renderTapeTextureSubresourceDescriptor(
+               definition->descriptor, fixed.subresource, desc) &&
+           detail::cpuGeneralTextureUploadShape(desc, expectedUploadShape) &&
+           dxmt9c_texture_lock_rect(texture, fixed.subresource, &lock,
+                                    nullptr, 0u) == core::D3D_OK &&
+           lock.bits != nullptr;
+      const bool copied = ok && detail::cpuGeneralWriteTextureMutationRows(
+          definition->descriptor, *texture, fixed.subresource, fixed.byteOffset,
+          lock, blob->bytes);
+      const bool unlocked = ok &&
+          dxmt9c_texture_unlock_rect(texture, fixed.subresource) ==
+          core::D3D_OK;
+      ok = copied && unlocked && observedUpload && !fixture_.routing->textureUploadFailed;
+      expectedUploadBytes = {};
+      expectedUploadShape = {};
+    } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+      const auto definition = std::find_if(
+          plan_.definitions.begin(), plan_.definitions.end(),
+          [&](const auto& candidate) {
+            return detail::cpuGeneralSameIdentity(candidate.fixed.identity,
+                                                   fixed.identity);
+          });
+      dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+      auto* wrapped = static_cast<D9CSurface*>(value);
+      ok = definition != plan_.definitions.end() && fixed.subresource == 0u &&
+           fixed.byteOffset == 0u &&
+           dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(definition->descriptor, surface);
+      const auto disposition = ok
+          ? static_cast<dxmt9::d3d9::RenderTapeInitialContentDisposition>(
+                surface.initialContentDisposition)
+          : dxmt9::d3d9::RenderTapeInitialContentDisposition::Unavailable;
+      if (ok && disposition ==
+                    dxmt9::d3d9::RenderTapeInitialContentDisposition::
+                        CompleteDepthStencilFloat32UInt8V1) {
+        dxmt9::d3d9::RenderTapeD24S8SnapshotLayout layout{};
+        // Both canonical planes belong to this exact logical surface. They
+        // are not packed D3D9 pixels or physical Metal backing bytes, and
+        // the CPU lane must not issue a lock, seed blit or GPU submission.
+        ok = wrapped && wrapped->obj &&
+             dxmt9::d3d9::renderTapeDeriveD24S8SnapshotLayout(
+                 surface.surface, layout) &&
+             blob->bytes.size() == layout.byteCount;
+      } else if (ok && disposition ==
+                    dxmt9::d3d9::RenderTapeInitialContentDisposition::
+                        CompleteDepthFloat32V1) {
+        const auto expected = static_cast<std::uint64_t>(surface.surface.width) *
+                              surface.surface.height * 4u;
+        // D24X8's tape bytes are canonical logical float depth, not the
+        // backend's packed/physical representation.  The CPU executor
+        // records this receipt for semantic observation; it deliberately
+        // does not invoke a GPU seed/blit or claim physical depth bytes.
+        ok = wrapped && wrapped->obj && blob->bytes.size() == expected;
+      } else if (ok && disposition ==
+                           dxmt9::d3d9::RenderTapeInitialContentDisposition::
+                               CompleteSeed) {
+        D9CLockedRect lock{};
+        ok = wrapped &&
+             dxmt9c_surface_lock_rect(wrapped, &lock, nullptr, 0u) ==
+                 core::D3D_OK &&
+             lock.bits != nullptr;
+        const bool copied = ok &&
+            detail::cpuGeneralWriteRows(surface.surface, lock, blob->bytes);
+        const bool unlocked = ok && dxmt9c_surface_unlock_rect(wrapped) ==
+            core::D3D_OK;
+        ok = copied && unlocked;
+      } else {
+        ok = false;
+      }
+    }
+    if (!ok) return fail(event, "general-executor-mutation-failed");
+    if (retainLogicalReceipts)
+      detail::cpuGeneralRecordReceipt(receipts, fixed.identity,
+                                       fixed.subresource, fixed.digest);
+    ++result.observedMutations;
+    return true;
+  }
+
+
   static std::uint64_t elapsed(std::chrono::steady_clock::time_point begin) {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<
         std::chrono::nanoseconds>(std::chrono::steady_clock::now() - begin)
@@ -2071,40 +3666,76 @@ class CpuGeneralTapeExecutor {
   }
 
   bool admit(Result& result) const {
-    if (plan_.events.size() > kCpuGeneralMaxEvents ||
-        plan_.definitions.size() > kCpuGeneralMaxObjects ||
-        plan_.events.size() > std::numeric_limits<std::uint32_t>::max()) {
-      result.failure = "general-executor-plan-bound";
+    result.inputAdmission = d3d9::render_tape_runtime::admitGeneralCpuPlan(
+        plan_, options_.inputCaps);
+    if (!result.inputAdmission.accepted()) {
+      result.failure = std::string("general-executor-input-") +
+          d3d9::render_tape_runtime::generalCpuAdmissionReasonName(
+              result.inputAdmission.reason);
+      result.failedEvent = result.inputAdmission.eventIndex;
       return false;
     }
-    std::size_t records = 0u;
-    std::size_t draws = 0u;
+    return true;
+  }
+
+  bool admitSourceCapacity(Result& result) const {
+    namespace runtime = d3d9::render_tape_runtime;
+    auto& demand = result.sourceDemand;
+    // Capture range replay already established its conservative publication
+    // bound. Ordinary/V3 replay uses the admitted raws, never the event count
+    // or equality with a captured source table to predict policy candidates.
+    if (!options_.captureSourcePlan) {
+      for (const auto& chunk : plan_.commandChunks) {
+        const auto bound = cpuTapeConservativeMaxPendingPerRaw(
+            chunk.envelope.recordCount, kCpuTapeMinDrawCommandLimit);
+        if (bound == 0u || !runtime::addGeneralCpuSourcePublications(bound, demand)) {
+          result.failure = "general-executor-source-demand-overflow";
+          return false;
+        }
+      }
+    }
+    // END can first cut existing work and then publish its own marker. These
+    // are real route triggers even when the enclosing raw is otherwise tiny.
     for (const auto& chunk : plan_.commandChunks) {
-      dxmt9::d3d9::ImportedChunkView imported;
-      if (!dxmt9::d3d9::importPrevalidatedCommandChunk(chunk.bytes,
-                                                        chunk.envelope,
-                                                        imported)) {
-        result.failure = "general-executor-plan-chunk-invalid";
+      d3d9::ImportedChunkView imported;
+      if (!d3d9::importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported)) {
+        result.failure = "general-executor-source-demand-import";
         return false;
       }
-      records += imported.records.size();
-      for (const auto& record : imported.records)
-        draws += (record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
-                  record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
-    }
-    for (const auto& chunk : plan_.bootstrapChunks) {
-      dxmt9::d3d9::ImportedChunkView imported;
-      if (!dxmt9::d3d9::importPrevalidatedCommandChunk(chunk.bytes,
-                                                        chunk.envelope,
-                                                        imported)) {
-        result.failure = "general-executor-bootstrap-invalid";
-        return false;
+      for (std::size_t index = 0u; index < imported.records.size(); ++index) {
+        const auto record = imported.record(index);
+        if (record.header.type != D9C_COMMAND_RECORD_QUERY_ISSUE) continue;
+        if (record.payload.size() < sizeof(D9CCommandChunkWireQueryIssue)) {
+          result.failure = "general-executor-source-demand-query";
+          return false;
+        }
+        D9CCommandChunkWireQueryIssue issue{};
+        std::memcpy(&issue, record.payload.data(), sizeof(issue));
+        if (issue.flags == 1u && !runtime::addGeneralCpuSourcePublications(2u, demand)) {
+          result.failure = "general-executor-source-demand-overflow";
+          return false;
+        }
       }
-      records += imported.records.size();
     }
-    if (records > kCpuGeneralMaxCommandRecords || draws > kCpuGeneralMaxDraws ||
-        plan_.events.size() > kCpuGeneralMaxSources) {
-      result.failure = "general-executor-plan-cap";
+    const auto& counts = result.inputAdmission.counts;
+    std::size_t checkpointPublications = 0u;
+    if (!runtime::detail::generalCpuMultiply(counts.queryCheckpoints, 3u,
+                                            checkpointPublications) ||
+        !runtime::addGeneralCpuSourcePublications(checkpointPublications, demand) ||
+        !runtime::addGeneralCpuSourcePublications(counts.queryPolls, demand) ||
+        !runtime::addGeneralCpuQueryProgressDemand(counts,
+            options_.maxQueryOraclePolls, demand)) {
+      result.failure = "general-executor-query-budget-overflow";
+      return false;
+    }
+    const auto admission = runtime::admitGeneralCpuSourceDemand(demand,
+                                                              options_.sourceCapacity);
+    if (admission != runtime::GeneralCpuSourceAdmission::Accepted) {
+      result.failure = admission == runtime::GeneralCpuSourceAdmission::InvalidCapacity
+          ? "general-executor-source-capacity-invalid"
+          : admission == runtime::GeneralCpuSourceAdmission::PublicationLimit
+              ? "general-executor-source-publication-limit"
+              : "general-executor-source-progress-limit";
       return false;
     }
     return true;
@@ -2195,8 +3826,8 @@ class CpuGeneralTapeExecutor {
           result.failedEvent = replayEvent.eventIndex;
           return false;
         }
-        if (publicationReserve >
-            std::numeric_limits<std::size_t>::max() - publicationBound) {
+        if (publicationBound > options_.sourceCapacity.maxPublications ||
+            publicationReserve > options_.sourceCapacity.maxPublications - publicationBound) {
           result.failure = "general-executor-capture-source-capacity";
           result.failedEvent = replayEvent.eventIndex;
           return false;
@@ -2225,12 +3856,14 @@ class CpuGeneralTapeExecutor {
     }
     result.captureSourceReplayPublications.clear();
     result.captureSourceReplayPublications.reserve(publicationReserve);
+    result.sourceDemand = {.publications = publicationReserve,
+                           .progressSteps = publicationReserve};
     result.captureSourceReplayStorageOverflow = false;
     return true;
   }
 
   bool admitEmission(Result& result) const {
-    if (options_.captureSourcePlan) return true;
+    if (options_.captureSourcePlan || options_.captureSourcePlanV3) return true;
     const auto pageSize = fixture_.routing->queue_.cpuReadyArenaPlanLimits().pageSize;
     if (pageSize == 0u) {
       result.failure = "general-executor-queue-page-size";
@@ -2286,13 +3919,18 @@ class CpuGeneralTapeExecutor {
                                  std::forward<decltype(draw)>(draw), failure);
   }
 
-  bool observeResource(
+ public:
+  // Producer-only qualification. The admitted value owns normalized receipts
+  // and alias/depth metadata; it carries no wrapper or physical backing view.
+  bool captureResourceObservation(
       const std::vector<d3d9::render_tape_runtime::OwnedObject>& objects,
       const std::vector<detail::LogicalReceipt>& receipts,
       std::span<const CpuGeneralTapeTombstone> tombstones, std::uint32_t kind,
-      core::Handle handle, std::uint64_t& hash) const {
+      core::Handle handle, CpuTapeResourceObservation& observation,
+      const D9CWireObjectIdentity* exactIdentity = nullptr) const {
     for (const auto& object : objects) {
-      if (!object.value || object.identity.kind != kind) continue;
+      if (!object.value || object.identity.kind != kind ||
+          (exactIdentity && !detail::cpuGeneralSameIdentity(object.identity, *exactIdentity))) continue;
       core::Handle actual{};
       D9CWireObjectIdentity contentIdentity = object.identity;
       std::optional<std::uint32_t> aliasLevel;
@@ -2350,9 +3988,9 @@ class CpuGeneralTapeExecutor {
         }
       }
       if (actual != handle) continue;
-      detail::cpuTapeDigestScalar(hash, object.identity.kind);
-      detail::cpuTapeDigestScalar(hash, object.identity.generation);
-      detail::cpuTapeDigestScalar(hash, object.identity.objectId);
+      CpuTapeResourceObservationInput input{.identity = object.identity,
+          .contentIdentity = contentIdentity, .aliasSubresource = aliasLevel,
+          .receipts = receipts};
       if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
         const auto definition = std::find_if(
             plan_.definitions.begin(), plan_.definitions.end(),
@@ -2370,33 +4008,34 @@ class CpuGeneralTapeExecutor {
           d3d9::RenderTapeD24S8SnapshotLayout layout{};
           if (!d3d9::renderTapeDeriveD24S8SnapshotLayout(surface.surface, layout))
             return false;
-          detail::cpuTapeDigestScalar(hash, surface.initialContentDisposition);
-          detail::cpuTapeDigestScalar(hash, surface.surface.format);
-          detail::cpuTapeDigestScalar(hash, surface.surface.width);
-          detail::cpuTapeDigestScalar(hash, surface.surface.height);
-          detail::cpuTapeDigestScalar(hash, layout.depthPitch);
-          detail::cpuTapeDigestScalar(hash, layout.stencilPitch);
-          detail::cpuTapeDigestScalar(hash, layout.stencilOffset);
-          detail::cpuTapeDigestScalar(hash, layout.byteCount);
+          input.depthStencil = CpuTapeDepthStencilObservation{
+              .disposition = surface.initialContentDisposition,
+              .format = surface.surface.format, .width = surface.surface.width,
+              .height = surface.surface.height, .depthPitch = layout.depthPitch,
+              .stencilPitch = layout.stencilPitch, .stencilOffset = layout.stencilOffset,
+              .byteCount = layout.byteCount};
         }
-      }
-      std::uint32_t count = 0u;
-      for (const auto& receipt : receipts) {
-        if (!detail::cpuGeneralSameIdentity(receipt.identity, contentIdentity) ||
-            (aliasLevel && receipt.subresource != *aliasLevel)) continue;
-        ++count;
-        detail::cpuTapeDigestScalar(hash, receipt.subresource);
-        detail::cpuGeneralHashDigest(hash, receipt.digest);
-        detail::cpuTapeDigestScalar(hash, receipt.revision);
       }
       // A resource produced by captured GPU commands has no CPU pixel bytes.
       // Its qualified identity, seed receipts (if any), and the complete
       // producer command stream form the logical oracle, not a fake readback.
-      detail::cpuTapeDigestScalar(hash, count);
-      return true;
+      return buildCpuTapeResourceObservation(input, observation,
+          {.maxInputReceipts = plan_.mutations.size()}) == CpuTapeResourceObservationStatus::Accepted;
     }
     return false;
   }
+
+ private:
+  bool observeResource(
+      const std::vector<d3d9::render_tape_runtime::OwnedObject>& objects,
+      const std::vector<detail::LogicalReceipt>& receipts,
+      std::span<const CpuGeneralTapeTombstone> tombstones, std::uint32_t kind,
+      core::Handle handle, std::uint64_t& hash) const {
+    CpuTapeResourceObservation observation;
+    return captureResourceObservation(objects, receipts, tombstones, kind, handle, observation) &&
+        appendCpuTapeResourceObservation(observation, hash);
+  }
+
   Fixture& fixture_;
   const Plan& plan_;
   std::span<const Blob> blobs_;

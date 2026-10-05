@@ -17,6 +17,18 @@ using namespace dxmt9::d3d9::devicec;
 
 namespace {
 
+template <typename Fn>
+void observeRuntimeIdentityV4(D9CDevice* device,
+    const std::shared_ptr<dxmt9::d3d9::RenderTapeRuntimeIdentityV4>& expected,
+    Fn&& fn) noexcept {
+  const auto upper = device->dev().upperDevice();
+  if (!upper) return;
+  const auto lease = upper->queue().acquireTapeRuntimeCapture();
+  lease.visit([&](dxmt9::render::TapeRuntimeCaptureAttachment& admitted) noexcept {
+    if (&admitted == expected.get()) fn(*expected);
+  });
+}
+
 std::optional<dxmt9::core::StateBlockType> stateBlockTypeFromD3D(uint32_t type) {
   switch (type) {
     case 1:
@@ -117,6 +129,7 @@ extern "C" int32_t dxmt9c_swapchain_teardown_wsi_surface(D9CSwapChain* s) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
   try {
+    dxmt9::d3d9::detachRenderTapeRuntimeIdentityV4(s->owner);
     return s->iface->coreSwapChain().teardownWsiSurface();
   } catch (...) {
     return dxmt9::core::D3DERR_NOTAVAILABLE;
@@ -280,6 +293,20 @@ extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
     auto snapshot = q->device->dev().captureQueryPollSnapshot(q->obj);
     snapshot.failed |= result < 0;
     std::lock_guard lock(q->pollState->mutex);
+    if (q->pollState->runtimeTapeTracking && result >= 0 &&
+        q->pollState->runtimeTapeMappingValid) {
+      switch (snapshot.type) {
+      case dxmt9::core::QueryType::Event: q->pollState->runtimeTapeCycle.type = 8u; break;
+      case dxmt9::core::QueryType::Occlusion: q->pollState->runtimeTapeCycle.type = 9u; break;
+      case dxmt9::core::QueryType::Timestamp: q->pollState->runtimeTapeCycle.type = 10u; break;
+      case dxmt9::core::QueryType::TimestampDisjoint: q->pollState->runtimeTapeCycle.type = 11u; break;
+      case dxmt9::core::QueryType::TimestampFreq: q->pollState->runtimeTapeCycle.type = 12u; break;
+      }
+      q->pollState->runtimeTapeMappingValid =
+          dxmt9::d3d9::renderTapeAdvanceQueryCycle(q->pollState->runtimeTapeCycle, flags, false) &&
+          q->pollState->runtimeTapeCycle.issueOrdinal == snapshot.issueOrdinal &&
+          q->pollState->runtimeTapeCycle.active == snapshot.active;
+    }
     if (q->pollState->checkpointTracking && result >= 0 &&
         q->pollState->checkpointMappingValid) {
       q->pollState->checkpointMappingValid =
@@ -289,6 +316,21 @@ extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
     }
     q->pollState->snapshot = std::move(snapshot);
     q->pollState->rawOrdinal = dxmt9::d3d9::queryReplayOrdinal();
+    if (auto* runtime = q->device->renderTapeRuntimeIdentityV3.get()) {
+      if (q->pollState->runtimeTapeTracking && !q->pollState->runtimeTapeMappingValid)
+        runtime->fail();
+      else runtime->queryIssue(q->wireIdentity, flags, q->pollState->snapshot,
+          result, q->pollState->runtimeTapeCycle.issueCycle);
+    }
+    if (const auto runtime = dxmt9::d3d9::acquireRenderTapeRuntimeIdentityV4(q->device)) {
+      observeRuntimeIdentityV4(q->device, runtime,
+          [&](dxmt9::d3d9::RenderTapeRuntimeIdentityV4& admitted) noexcept {
+            if (q->pollState->runtimeTapeTracking && !q->pollState->runtimeTapeMappingValid)
+              admitted.fail();
+            else admitted.queryIssue(q->wireIdentity, flags, q->pollState->snapshot,
+                result, q->pollState->runtimeTapeCycle.issueCycle);
+          });
+    }
   }
   return result;
 }
@@ -374,6 +416,13 @@ static std::optional<std::int32_t> pollQueryReceiptImpl(
         result == core::S_OK && output && resultBytes && size >= resultBytes
             ? std::optional<std::uint64_t>{staged} : std::nullopt);
   }
+  if (auto* runtime = q->device->renderTapeRuntimeIdentityV3.get())
+    runtime->queryPoll(q->wireIdentity, snapshot, result);
+  if (const auto runtime = dxmt9::d3d9::acquireRenderTapeRuntimeIdentityV4(q->device))
+    observeRuntimeIdentityV4(q->device, runtime,
+        [&](dxmt9::d3d9::RenderTapeRuntimeIdentityV4& admitted) noexcept {
+          admitted.queryPoll(q->wireIdentity, snapshot, result);
+        });
   return result;
 }
 
@@ -401,7 +450,18 @@ std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* q, void* data, uint32_t size, uint32_t flags) {
-  return q->device->iface->GetQueryData(q->obj, data, size, flags);
+  const auto result = q->device->iface->GetQueryData(q->obj, data, size, flags);
+  if (auto* runtime = q->device->renderTapeRuntimeIdentityV3.get())
+    runtime->queryPoll(q->wireIdentity,
+        q->device->dev().captureQueryPollSnapshot(q->obj), result);
+  if (const auto runtime = dxmt9::d3d9::acquireRenderTapeRuntimeIdentityV4(q->device)) {
+    const auto snapshot = q->device->dev().captureQueryPollSnapshot(q->obj);
+    observeRuntimeIdentityV4(q->device, runtime,
+        [&](dxmt9::d3d9::RenderTapeRuntimeIdentityV4& admitted) noexcept {
+          admitted.queryPoll(q->wireIdentity, snapshot, result);
+        });
+  }
+  return result;
 }
 
 extern "C" uint32_t dxmt9c_query_get_data_size(D9CQuery* q) {

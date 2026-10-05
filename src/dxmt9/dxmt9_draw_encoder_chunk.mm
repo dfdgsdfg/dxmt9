@@ -3,6 +3,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_render_tape_topology_scope.hpp"
 #include <stdexcept>
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_parallel_access_observer.hpp"
@@ -1722,6 +1723,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   auto& captureAlreadyStartedAtChunkBegin =
       call.captureAlreadyStartedAtChunkBegin;
   std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest;
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->observeSourceBindingContext) {
+    recorder->observeSourceBindingContext(recorder->userdata,
+                                         options.partitionSource, sourceSeqId);
+  }
   if (firstSourceFragment) {
     if (ctx.drawRecorder &&
         ctx.drawRecorder->beginSourceFragmentPreamble) {
@@ -1862,13 +1868,34 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
             .pixelConstantsHash = drawStatePixelCbufSourceHash(drawState),
         };
       };
+  auto makeDrawBindingHotStateIdentity =
+      [&payload, sourceSeqId](std::size_t commandIndex, u32 stateIndex)
+          -> std::optional<uniform::DrawBindingHotStateIdentity> {
+        std::size_t segmentIndex = 0;
+        std::size_t localCommandIndex = 0;
+        if (!payload.locateCommand(
+                commandIndex, segmentIndex, localCommandIndex) ||
+            segmentIndex > std::numeric_limits<u32>::max()) {
+          return std::nullopt;
+        }
+        return uniform::DrawBindingHotStateIdentity{
+            .sourceSequence = sourceSeqId,
+            .segmentIndex = static_cast<u32>(segmentIndex),
+            .stateIndex = stateIndex,
+        };
+      };
   auto makeDrawBindingPayloadIdentity =
-      [](core::FlatDrawStateView drawState) {
+      [](core::FlatDrawStateView drawState,
+         uniform::DrawBindingHotStateIdentity hotState) {
         const auto& payload = drawState.uniformPayload();
         return uniform::DrawBindingPayloadIdentity{
             .vertexConstants = drawStateVertexCbufSourceHash(drawState),
             .pixelConstants = drawStatePixelCbufSourceHash(drawState),
             .fixedFunction = payload.fixedPayloadHash,
+            // Use the canonical row, not a possibly reused overrideHot
+            // stack address. Binding overrides change only streams/index;
+            // alpha-only overrides are consumed by FsVolatile separately.
+            .hotState = hotState,
         };
       };
   auto makeDrawBindingPayloadCounts =
@@ -2867,6 +2894,13 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                          command);
       return;
     }
+    // Arena chains have segment-local hot-row tables. Resolve their stable
+    // locator once per command, before any per-draw override creates a view.
+    const auto hotStateIdentity = makeDrawBindingHotStateIdentity(
+        commandIndex, command.drawRunRecord->stateIndex);
+    if (!hotStateIdentity) {
+      abortEncodePartitionInvariant("serial draw hot-row locator invalid");
+    }
     traceEncodeCommand("drawrun.enter", commandIndex, Kind::DrawRun, command);
     // The compact uniform materializer overwrites every field before returning
     // this scratch pointer; avoid a full DrawUniformPayload zero-fill here.
@@ -3287,7 +3321,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
               ? uniform::DrawBindingAbi::Stage2DirectCbuf
               : uniform::DrawBindingAbi::Stage2ArgumentTable;
       const auto drawBindingPayloadIdentity =
-          makeDrawBindingPayloadIdentity(drawStateView);
+          makeDrawBindingPayloadIdentity(
+              drawStateView, *hotStateIdentity);
       const auto drawBindingTransition =
           uniform::planDrawBindingTransition(
               bindingState.lastDrawBindingPayloadIdentity.has_value(),
@@ -3632,6 +3667,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         drawItems.empty()) {
       return false;
     }
+    const auto hotStateIdentity = makeDrawBindingHotStateIdentity(
+        commandIndex, command.drawRunRecord->stateIndex);
+    if (!hotStateIdentity) {
+      return false;
+    }
 
     core::DrawUniformPayload commandUniformScratch;
     const auto* commandUniformPayload = core::drawRunUniformPayloadForHandle(
@@ -3720,7 +3760,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       drawStateView.uniforms = drawUniformPayload;
 
       const auto drawBindingPayloadIdentity =
-          makeDrawBindingPayloadIdentity(drawStateView);
+          makeDrawBindingPayloadIdentity(
+              drawStateView, *hotStateIdentity);
       const auto drawBindingPayloadCounts =
           makeDrawBindingPayloadCounts(*drawUniformPayload);
       if (!childBinding.lastDrawBindingPayloadIdentity.has_value() &&
@@ -4335,6 +4376,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                 dxmt9::pipeline::TileFfpDecision::Tile) {
           return false;
         }
+        const auto hotStateIdentity = makeDrawBindingHotStateIdentity(
+            childCommandIndex, childCommand.drawRunRecord->stateIndex);
+        if (!hotStateIdentity) {
+          return false;
+        }
         const auto rawReads =
             core::makeDrawEntryReadSet(childCommand.drawState);
         core::ExactResourceSet canonicalReads{};
@@ -4428,7 +4474,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                       .shaderLayout = childCommand.drawState.shaderLayout,
                       .uniforms = drawUniformPayload,
                       .debug = childCommand.drawState.debug,
-                  });
+                  },
+                  *hotStateIdentity);
           if (!child.binding.complete) {
             child.binding = ParallelPassBindingSnapshot{
                 .firstRenderPso = renderPso,
@@ -5087,6 +5134,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     DXMT_ASSERT(appended);
     if (!appended) {
       return std::nullopt;
+    }
+    if (render::activeTapeTopologyInvocation) {
+      const auto source = *options.sessionSource;
+      render::registerTapeTopologyCompletionSources(ctx.queue.acquireTapeRuntimeCapture(),
+          std::span(&source, 1u));
     }
   }
 

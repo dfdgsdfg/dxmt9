@@ -647,6 +647,8 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
   const HRESULT flushHr = flushChildRecorder(recorder);
   if (FAILED(flushHr))
     return flushHr;
+  if (recorder && recorder->IsRenderTapeCaptureActiveForChild())
+    recorder->BeginRenderTapeVolumeUnlockForChild(texture, level);
   return hr32(dxmt9c_texture_unlock_rect(texture, level));
 }
 
@@ -1265,6 +1267,17 @@ public:
                                        deviceIsExtended(device_))) {
           return D3DERR_INVALIDCALL;
         }
+        // Reject capture qualification before exposing writable NULL storage;
+        // the ordinary LockRect route and its HRESULT remain unchanged.
+        if (context_ &&
+            context_->IsRenderTapeCaptureTrackingEnabledForChild() &&
+            (flags & D3DLOCK_READONLY) == 0u &&
+            desc.format == dxmt9::d3d9::kRenderTapeNullRtD3DFormat) {
+          context_->RejectRenderTapeCaptureForChild(
+              dxmt9::d3d9::RenderTapeCaptureRejectionReason::UnsupportedLockFormat,
+              mutationObject_, mutationSubresource_,
+              renderTapeLayoutDiagnostic(desc, 0));
+        }
       }
     }
     // T4: if this surface aliases caller-owned memory (SYSTEMMEM
@@ -1280,6 +1293,8 @@ public:
         if (FAILED(flushHr))
           return flushHr;
       }
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+        context_->BeginRenderTapeOrderedControlForChild(mutationObject_.identity);
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
       locked_ = true;
@@ -1317,6 +1332,8 @@ public:
       dxmt9DeviceDebugLog(
           "surface_lock_rect (user-memory) surface=%p pitch=%d bits=%p", this,
           userMemoryPitch_, userMemory_);
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+        context_->EndRenderTapeExternalEffectForChild();
       return S_OK;
     }
     const HRESULT flushHr = flushChildRecorder(context_);
@@ -1328,6 +1345,8 @@ public:
     D9CRect cr{};
     if (pRect)
       cr = toR(*pRect);
+    if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+      context_->BeginRenderTapeOrderedControlForChild(mutationObject_.identity);
     HRESULT hr =
         hr32(dxmt9c_surface_lock_rect(s_, &lr, pRect ? &cr : nullptr, flags));
     if (SUCCEEDED(hr)) {
@@ -1368,6 +1387,8 @@ public:
     } else {
       dxmt9DeviceDebugLog("surface_lock_rect -> hr=0x%08x", (unsigned)hr);
     }
+    if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+      context_->EndRenderTapeExternalEffectForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockRect() noexcept override {
@@ -1387,9 +1408,11 @@ public:
               context_, linearLock_, lockFlags_);
           if (FAILED(flushHr))
             return flushHr;
+          context_->BeginRenderTapeResourceMutationForChild(mutationObject_.identity);
           context_->NotifyRenderTapeLinearMutationForChild(
               mutationObject_, mutationSubresource_, linearLockLayout_,
               mutationCopy);
+          context_->EndRenderTapeExternalEffectForChild();
         } else {
           context_->RejectRenderTapeCaptureForChild(
               dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed,
@@ -1548,6 +1571,8 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
+    if (context_ && mutationReady && !mutationCopy.empty())
+      context_->BeginRenderTapeResourceMutationForChild(mutationObject_.identity);
     HRESULT hr = hr32(dxmt9c_surface_unlock_rect(s_));
     // Wine d3d9 conformance: 2D-texture-derived surfaces accept a
     // redundant Unlock with S_OK (wined3d treats the per-level Unlock
@@ -1598,6 +1623,8 @@ public:
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
     }
+    if (context_ && !mutationCopy.empty())
+      context_->EndRenderTapeExternalEffectForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE GetDC(HDC *phdc) noexcept override {
@@ -2005,6 +2032,15 @@ public:
                                     deviceIsExtended(device_))) {
           return D3DERR_INVALIDCALL;
         }
+        // Descriptor-only NULL is never a source of CPU-writable color bytes.
+        if (context_ &&
+            context_->IsRenderTapeCaptureTrackingEnabledForChild() &&
+            (flags & D3DLOCK_READONLY) == 0u &&
+            desc.format == dxmt9::d3d9::kRenderTapeNullRtD3DFormat) {
+          context_->RejectRenderTapeCaptureForChild(
+              dxmt9::d3d9::RenderTapeCaptureRejectionReason::UnsupportedLockFormat,
+              wireObject_, level, renderTapeLayoutDiagnostic(desc, 0));
+        }
       }
     }
     // T4: user-memory aliasing path (SYSTEMMEM shared-handle). The
@@ -2018,6 +2054,8 @@ public:
         if (FAILED(flushHr))
           return flushHr;
       }
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+        context_->BeginRenderTapeOrderedControlForChild(wireObject_.identity);
       pLR->Pitch = userMemoryPitch_;
       pLR->pBits = userMemory_;
       lockBits_ = userMemory_;
@@ -2056,6 +2094,8 @@ public:
       dxmt9DeviceDebugLog(
           "texture_lock_rect (user-memory) texture=%p pitch=%d bits=%p", this,
           userMemoryPitch_, userMemory_);
+      if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+        context_->EndRenderTapeExternalEffectForChild();
       return S_OK;
     }
     const HRESULT flushHr = flushChildRecorder(context_);
@@ -2068,6 +2108,8 @@ public:
     D9CRect cr{};
     if (pRect)
       cr = toR(*pRect);
+    if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+      context_->BeginRenderTapeOrderedControlForChild(wireObject_.identity);
     HRESULT hr = hr32(
         dxmt9c_texture_lock_rect(t_, level, &lr, pRect ? &cr : nullptr, flags));
     if (SUCCEEDED(hr)) {
@@ -2109,6 +2151,8 @@ public:
     } else {
       dxmt9DeviceDebugLog("texture_lock_rect -> hr=0x%08x", (unsigned)hr);
     }
+    if (context_ && (flags & D3DLOCK_READONLY) != 0u)
+      context_->EndRenderTapeExternalEffectForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) noexcept override {
@@ -2198,8 +2242,10 @@ public:
                   context_, linearLock_, lockFlags_);
               if (FAILED(flushHr))
                 return flushHr;
+              context_->BeginRenderTapeResourceMutationForChild(wireObject_.identity);
               context_->NotifyRenderTapeLinearMutationForChild(
                   wireObject_, level, fullLayout, fullCopy);
+              context_->EndRenderTapeExternalEffectForChild();
             }
           } else if (snapshotRoute ==
                      dxmt9::d3d9::RenderTapeUserMemorySeedRoute::PartialOnly) {
@@ -2209,8 +2255,10 @@ public:
                 context_, linearLock_, lockFlags_);
             if (FAILED(flushHr))
               return flushHr;
+            context_->BeginRenderTapeResourceMutationForChild(wireObject_.identity);
             context_->NotifyRenderTapeLinearMutationForChild(
                 wireObject_, level, linearLockLayout_, mutationCopy);
+            context_->EndRenderTapeExternalEffectForChild();
           } else {
             rejectRenderTapeFullSnapshot(
                 context_,
@@ -2224,8 +2272,10 @@ public:
               context_, linearLock_, lockFlags_);
           if (FAILED(flushHr))
             return flushHr;
+          context_->BeginRenderTapeResourceMutationForChild(wireObject_.identity);
           context_->NotifyRenderTapeLinearMutationForChild(
               wireObject_, level, linearLockLayout_, mutationCopy);
+          context_->EndRenderTapeExternalEffectForChild();
         }
       }
       lockBits_ = nullptr;
@@ -2319,6 +2369,8 @@ public:
         }
       }
     }
+    if (context_ && mutationReady && !mutationCopy.empty())
+      context_->BeginRenderTapeResourceMutationForChild(wireObject_.identity);
     const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, level));
     if (FAILED(hr)) {
       dxmt9DeviceDebugLog("texture_unlock_rect -> hr=0x%08x", (unsigned)hr);
@@ -2360,6 +2412,8 @@ public:
       linearBitsOrigin_ =
           dxmt9::d3d9::RenderTapeLockBitsOrigin::Rectangle;
     }
+    if (context_ && !mutationCopy.empty())
+      context_->EndRenderTapeExternalEffectForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT *pRect) noexcept override {
@@ -2758,6 +2812,12 @@ public:
         }
       }
     }
+    if (capture.active && context_) {
+      if ((capture.flags & D3DLOCK_READONLY) != 0u)
+        context_->BeginRenderTapeOrderedControlForChild(wireObject_.identity);
+      else if (mutationReady)
+        context_->BeginRenderTapeResourceMutationForChild(wireObject_.identity);
+    }
     const HRESULT hr = hr32(dxmt9c_texture_unlock_rect(t_, idx));
     if (SUCCEEDED(hr) && level == 0u)
       autogenState_.markDirty();
@@ -2792,6 +2852,8 @@ public:
       }
       captureLocks_[idx] = {};
     }
+    if (capture.active && context_)
+      context_->EndRenderTapeExternalEffectForChild();
     return hr;
   }
   HRESULT STDMETHODCALLTYPE AddDirtyRect(D3DCUBEMAP_FACES,
@@ -2933,8 +2995,10 @@ public:
   }
   HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
     const HRESULT hr = unlockTextureBox(t_, level_, context_);
-    if (captureTrackingEnabled_)
+    if (captureTrackingEnabled_) {
       captureRenderTapeVolumeAfterUnlock(context_, t_, wireObject_, level_, hr);
+      context_->EndRenderTapeExternalEffectForChild();
+    }
     return hr;
   }
 };
@@ -3182,8 +3246,10 @@ public:
     const HRESULT hr = unlockTextureBox(t_, level, context_);
     if (SUCCEEDED(hr) && level == 0u)
       autogenState_.markDirty();
-    if (captureTrackingEnabled_)
+    if (captureTrackingEnabled_) {
       captureRenderTapeVolumeAfterUnlock(context_, t_, wireObject_, level, hr);
+      context_->EndRenderTapeExternalEffectForChild();
+    }
     return hr;
   }
   HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX *) noexcept override {

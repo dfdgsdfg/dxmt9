@@ -1,12 +1,17 @@
 #pragma once
 
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_action_witness.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_identity_v3.hpp"
+#include "device_c_render_tape_execution_topology_v1.hpp"
 #include "device_c_render_tape_payload.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace dxmt9::d3d9 {
@@ -14,6 +19,10 @@ namespace dxmt9::d3d9 {
 struct RenderTapeIdentitySource;
 struct RenderTapeIdentityRange;
 
+inline constexpr std::uint32_t kRenderTapeDefaultMaxEvents = 4096u;
+inline constexpr std::uint32_t kRenderTapeHardMaxEvents = 65536u;
+inline constexpr std::uint32_t kRenderTapeDefaultMaxBlobEntries = 4096u;
+inline constexpr std::uint32_t kRenderTapeHardMaxBlobEntries = 65536u;
 inline constexpr std::uint64_t kRenderTapeDefaultMaxBlobBytes =
     256u * 1024u * 1024u;
 inline constexpr std::uint64_t kRenderTapeHardMaxBlobBytes =
@@ -42,9 +51,9 @@ enum class RenderTapeCaptureStatus : std::uint8_t {
 };
 
 struct RenderTapeCaptureLimits {
-  std::uint32_t maxEvents = 4096u;
+  std::uint32_t maxEvents = kRenderTapeDefaultMaxEvents;
   std::uint64_t maxEventBytes = 64u * 1024u * 1024u;
-  std::uint32_t maxBlobEntries = 4096u;
+  std::uint32_t maxBlobEntries = kRenderTapeDefaultMaxBlobEntries;
   // Blob admission remains fail-closed at this capture-only limit.
   std::uint64_t maxBlobBytes = kRenderTapeDefaultMaxBlobBytes;
 };
@@ -126,12 +135,59 @@ struct RenderTapeCaptureMutationSeed {
 // A capture input blob. The digest is never trusted: armWithBlobs hashes the
 // original bytes and derives the catalogue entry from that result.
 struct RenderTapeCaptureBlob {
+  RenderTapeCaptureBlob() noexcept = default;
+  explicit RenderTapeCaptureBlob(
+      std::vector<std::byte>&& input,
+      const RenderTapeSnapshotBudgetLease& lease = {}) {
+    if (lease.valid() && !lease.boundPayloadMatches(input.data(), input.size()))
+      throw std::invalid_argument("render-tape retained snapshot lease mismatch");
+    retainedLease = lease;
+    bytes = std::move(input);
+  }
+  explicit RenderTapeCaptureBlob(const std::vector<std::byte>& input) : bytes(input) {}
+  explicit RenderTapeCaptureBlob(RenderTapeImmutablePayload input) noexcept
+      : immutable(std::move(input)) {}
+
+  RenderTapeCaptureBlob(const RenderTapeCaptureBlob& other) {
+    // An uncharged fixture may copy raw bytes. A retained reservation names
+    // exactly one allocation, so reject before any hidden deep-copy occurs.
+    if (other.retainedLease.valid())
+      throw std::invalid_argument("cannot copy a retained render-tape snapshot");
+    bytes = other.bytes;
+    immutable = other.immutable;
+  }
+  RenderTapeCaptureBlob(RenderTapeCaptureBlob&&) noexcept = default;
+  RenderTapeCaptureBlob& operator=(const RenderTapeCaptureBlob& other) {
+    if (this == &other) return *this;
+    RenderTapeCaptureBlob replacement(other);
+    swap(replacement);
+    return *this;
+  }
+  RenderTapeCaptureBlob& operator=(RenderTapeCaptureBlob&& other) noexcept {
+    if (this == &other) return *this;
+    // Swapping preserves both allocation/receipt pairs until retired's
+    // member destruction frees the old bytes before its old reservation.
+    RenderTapeCaptureBlob retired;
+    retired.swap(*this);
+    swap(other);
+    return *this;
+  }
+  void swap(RenderTapeCaptureBlob& other) noexcept {
+    std::swap(retainedLease, other.retainedLease);
+    bytes.swap(other.bytes);
+    std::swap(immutable, other.immutable);
+  }
+
+  // A GPU-B reservation belongs to the original raw allocation, never its
+  // content digest. Keep it alive until after the vector's destruction.
+  RenderTapeSnapshotBudgetLease retainedLease{};
   std::vector<std::byte> bytes{};
   // Optional already-frozen CPU shadow version. Both representations at once
   // are invalid; raw arm snapshot vectors retain the consuming path above.
   RenderTapeImmutablePayload immutable{};
-  std::span<const std::byte> readBytes() const noexcept {
-    return immutable.hasBacking() ? immutable.readBytes() : std::span<const std::byte>(bytes);
+  RenderTapeByteView readBytes() const noexcept {
+    return immutable.hasBacking() ? immutable.readBytes()
+        : RenderTapeByteView(std::span<const std::byte>(bytes));
   }
 };
 
@@ -143,9 +199,16 @@ struct RenderTapePublishedBlob {
 struct RenderTapePublicationBundle {
   std::vector<std::byte> events{};
   std::vector<RenderTapePublishedBlob> blobs{};
-  // Optional authoritative scheduling/pass identity. Capture currently leaves
-  // this empty until the bounded production metadata join is available.
+  // Optional versioned capture identity. V4 carries neutral provenance, not
+  // execution placement; only an explicit validated metadata join fills it.
   std::vector<std::byte> identity{};
+  // Mandatory owned companion for identity.v4, empty for earlier identities.
+  // It binds the complete identity bytes and events, not provider execution
+  // or independent GPU/query-result qualification.
+  std::vector<std::byte> executionTopology{};
+  // Queue-owned action-policy observation joined atomically with the V4 pair.
+  // Canonical absence keeps old captures unknown, never exact-policy qualified.
+  RenderTapeActionWitnessV1 actionWitness{};
   RenderTapeIdentityEventSettlement identitySettlement{};
   std::vector<D9CRenderTapeIdentitySettlementEntry> identitySettlements{};
   // Captured presentation output is an authoritative comparison sidecar, not
@@ -228,13 +291,19 @@ public:
 
   RenderTapeCaptureStatus registerBlobBytes(std::span<const std::byte> bytes,
                                             RenderTapeDigest* digest = nullptr);
+  RenderTapeCaptureStatus registerBlobBytes(RenderTapeByteView bytes,
+                                            RenderTapeDigest* digest = nullptr);
 
   // Consumes at entry on success or failure. Admission independently hashes
   // the original bytes and uses the borrowed API's exact dedup/budgets. Any
   // rejection aborts an enabled owner: consumed bytes cannot be retried in
   // the same interval as if the snapshot were still complete.
+  // A supplied receipt must already bind these exact bytes. The caller may
+  // reset its receipt after return: the vector is then consumed/freed, and
+  // any adopted immutable backing retains the once-charged reservation.
   RenderTapeCaptureStatus registerOwnedBlobBytes(
-      std::vector<std::byte>&& bytes, RenderTapeDigest* digest = nullptr);
+      std::vector<std::byte>&& bytes, RenderTapeDigest* digest = nullptr,
+      const RenderTapeSnapshotBudgetLease& retainedLease = {});
 
   RenderTapeCaptureStatus registerSharedBlobBytes(
       const RenderTapeImmutablePayload& bytes, RenderTapeDigest* digest = nullptr);
@@ -255,7 +324,8 @@ public:
       std::uint32_t subresource, std::uint64_t byteOffset,
       std::vector<std::byte>&& bytes,
       RenderTapeBufferMutationDisposition bufferDisposition =
-          RenderTapeBufferMutationDisposition::Plain);
+          RenderTapeBufferMutationDisposition::Plain,
+      const RenderTapeSnapshotBudgetLease& retainedLease = {});
 
   RenderTapeCaptureStatus resourceMutationShadowBytes(
       const D9CWireObjectIdentity& identity, RenderTapeMutationKind kind,
@@ -306,6 +376,46 @@ public:
     return identityValidationResult_;
   }
 
+  // The key comes from the capture's trusted start receipt, never from the
+  // candidate sidecar. Complete v3 bytes retain their own source/coordinator/
+  // settlement grammar; the v2 settlement mirrors are not populated.
+  RenderTapeCaptureStatus attachCaptureIdentityV3(
+      RenderTapeIdentityV3CaptureKey expectedCapture,
+      std::uint64_t presentOrdinal,
+      std::span<const std::byte> completeSidecar);
+  // A Unix value snapshot has no tape digest until this final capture join.
+  // Serialization uses this owner's tape/catalogue before the byte admission.
+  RenderTapeCaptureStatus attachCaptureIdentityV3(
+      RenderTapeIdentityV3CaptureKey expectedCapture,
+      std::uint64_t presentOrdinal,
+      const RenderTapeIdentityV3View& snapshot);
+  RenderTapeIdentityV3Status identityV3ValidationStatus() const noexcept {
+    return identityV3ValidationStatus_;
+  }
+
+  // V4 provenance and its required accepted-topology companion are attached
+  // together against this owner's exact sealed Tape and verified catalogue.
+  // The capture start key and queue are trusted independently of both inputs.
+  // No half pair is publishable; rejection aborts the complete capture owner.
+  RenderTapeCaptureStatus attachCaptureIdentityV4(
+      RenderTapeIdentityV4CaptureKey expectedCapture,
+      std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
+      std::span<const std::byte> completeIdentity,
+      std::span<const std::byte> completeTopology,
+      const RenderTapeActionWitnessV1& actionWitness = {});
+  RenderTapeCaptureStatus attachCaptureIdentityV4(
+      RenderTapeIdentityV4CaptureKey expectedCapture,
+      std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
+      const RenderTapeIdentityV4View& identitySnapshot,
+      const RenderTapeExecutionTopologyV1View& topologySnapshot,
+      const RenderTapeActionWitnessV1& actionWitness = {});
+  RenderTapeIdentityV4Status identityV4ValidationStatus() const noexcept {
+    return identityV4ValidationStatus_;
+  }
+  RenderTapeExecutionTopologyV1Status topologyV1ValidationStatus() const noexcept {
+    return topologyV1ValidationStatus_;
+  }
+
   void abort() noexcept;
 
   RenderTapeCaptureState state() const noexcept { return state_; }
@@ -324,6 +434,7 @@ public:
     return publishedBlobs_;
   }
   const RenderTapeCaptureLimits& limits() const noexcept { return limits_; }
+  const std::shared_ptr<RenderTapeScratchArena>& payloadArena() const noexcept { return payloadArena_; }
   const RenderTapeCaptureArmFailure& armFailure() const noexcept {
     return armFailure_;
   }
@@ -356,12 +467,14 @@ public:
   }
 
   static RenderTapeDigest sha256(std::span<const std::byte> bytes);
+  static RenderTapeDigest sha256(RenderTapeByteView bytes);
 
 private:
   RenderTapeCaptureStatus registerBlobStorage(
-      std::span<const std::byte> bytes, RenderTapeDigest* digest,
+      RenderTapeByteView bytes, RenderTapeDigest* digest,
       std::vector<std::byte>* transferredBytes,
-      const RenderTapeImmutablePayload* sharedBytes = nullptr);
+      const RenderTapeImmutablePayload* sharedBytes = nullptr,
+      const RenderTapeSnapshotBudgetLease& retainedLease = {});
   RenderTapeCaptureStatus armWithBlobStorage(
       std::span<const std::byte> bootstrapOverlay,
       std::span<const RenderTapeCaptureBlob> blobs,
@@ -394,6 +507,7 @@ private:
 
   bool enabled_ = false;
   RenderTapeCaptureLimits limits_{};
+  std::shared_ptr<RenderTapeScratchArena> payloadArena_{};
   RenderTapeCaptureArmFailure armFailure_{};
   RenderTapeCaptureMutationFailure mutationFailure_{};
   RenderTapeCaptureAbortAccounting lastAbortAccounting_{};
@@ -408,6 +522,12 @@ private:
   RenderTapeValidationResult validationResult_{
       .status = RenderTapeValidationStatus::Valid};
   RenderTapeIdentityValidationResult identityValidationResult_{};
+  RenderTapeIdentityV3Status identityV3ValidationStatus_ =
+      RenderTapeIdentityV3Status::InvalidHeader;
+  RenderTapeIdentityV4Status identityV4ValidationStatus_ =
+      RenderTapeIdentityV4Status::InvalidHeader;
+  RenderTapeExecutionTopologyV1Status topologyV1ValidationStatus_ =
+      RenderTapeExecutionTopologyV1Status::InvalidHeader;
   RenderTapeBlobCatalogue catalogue_{};
   std::vector<RenderTapePublishedBlob> publishedBlobs_{};
   std::vector<ObjectSlot> objects_{};

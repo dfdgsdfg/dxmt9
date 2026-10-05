@@ -205,6 +205,43 @@ match Metal's preferred argument alignment.
 
 The encoder context owns a `u16 dirtyMask` and per-stage range counters.
 
+### Immutable hot-row refinement
+
+For direct bindings, `fixedPayloadHash` alone is not an FFP identity: it
+covers fixed payload storage but excludes hot render states, texture-stage
+states and viewport inputs read by `buildFfpVsConsts`/`buildFfpPsConsts`.
+The shared serial/child `planDrawBindingTransition` must also compare the
+canonical immutable hot row, qualified by source sequence, arena segment,
+and state index. Segment qualification is necessary because a source chain
+may contain several segment-local row zeroes. Single-arena and legacy
+sources use segment zero. A stack override view's address is not identity.
+
+A changed fixed payload or hot-row identity conservatively marks both
+FFP category sets dirty, without invalidating unchanged VS/PS constants.
+Category bits remain separate; this is conservative input invalidation,
+not replacement of the category mask with one global dirty bit. Existing
+binding overrides change stream/index/layout inputs, not canonical
+RS/TSS/viewport values; adding an override of these values requires extending
+the identity contract. Per-draw alpha overrides retain their volatile owner.
+
+Each encoder starts all-dirty and owns an independent successful-draw
+identity. Only successful encoding advances that identity. The source and
+its immutable rows remain retained while any consumer uses them. Neither
+row identity nor its reuse authorizes resource retirement.
+The bounded failed-draw case is rejection before binding consumption; it
+does not prove recovery after a partial upload clears dirty bits and then
+encoding fails. Such recovery needs a separately validated reset/fail-stop
+contract, not an assumption that an uncommitted identity undoes Metal effects.
+
+Verification under R-BACK-12.9–12.12 and R-VERIF-1.5–1.8 uses the production
+planner/application in a bounded native state checker, including hot-only
+A→B→A, source/segment collisions, independent child shadows and an omitted-
+hot-edge negative control. The existing `ParallelDrawBinding` generation
+model supplies the ordering abstraction; it does not establish completeness
+of the concrete input identity. Metal slot-3 readback and unchanged original
+capture qualification are separate required evidence layers. No queue or
+completion protocol change is implied.
+
 ```c
 enum class DirtyBit : u16 {
   VS_F = 1u << 0,  VS_I = 1u << 1,  VS_B = 1u << 2,
@@ -376,9 +413,11 @@ call sites until the encoder begins emitting the new command.
 | `R-BACK-12.20` per-draw API call bound | Same probe — assert `setBuffer*` calls/draw approach 0 on the sticky-bind common case. |
 | `R-BACK-12.21` counter coverage | `scripts/check/assert_perf_counters.py` extension — fail if expected `uniform_*` keys missing. |
 
-TLA+ is not required for this spec; the queue/lifetime invariants are
-unchanged from the existing transient-slab model and continue to be
-covered by `dxmt9-verify-tla`.
+Pure layout transforms use native layout/property tests. Stateful binding
+reuse additionally requires the bounded refinement and GPU evidence described
+in section 4 under R-VERIF-1.5–1.8. Queue/lifetime invariants are unchanged
+from the existing transient-slab model and remain covered by
+`dxmt9-verify-tla`.
 
 ---
 

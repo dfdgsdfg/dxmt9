@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -450,6 +451,331 @@ void testProducedByCapturedPassProof() {
         "draw-first rejection names unknown write coverage");
 }
 
+struct ProducedTrace {
+  std::vector<D9CCommandChunkWireRecordHeader> records{};
+  std::vector<D9CCommandChunkWireHandleEntry> handles{};
+  std::vector<std::byte> payload{};
+
+  ImportedChunkView view() const noexcept {
+    return {.records = records, .handles = handles, .payloadArena = payload};
+  }
+};
+
+ProducedTrace producedTrace(std::initializer_list<Fixture> fixtures,
+                           std::initializer_list<D9CWireObjectIdentity> identities) {
+  ProducedTrace result;
+  for (const auto& value : identities)
+    result.handles.push_back({value.kind, value.generation, value.objectId});
+  for (const auto& fixture : fixtures) {
+    auto record = fixture.record;
+    record.payloadOffset = static_cast<std::uint32_t>(result.payload.size());
+    record.firstHandle = 0u;
+    if (record.handleCount) {
+      check(fixture.handles.size() == 1u, "produced trace fixtures carry one exact direct handle");
+      const auto& direct = fixture.handles[0];
+      std::size_t first = 0u;
+      while (first < result.handles.size()) {
+        const auto& candidate = result.handles[first];
+        if (candidate.kind == direct.kind && candidate.generation == direct.generation &&
+            candidate.objectId == direct.objectId) break;
+        ++first;
+      }
+      check(first < result.handles.size(), "produced trace directly referenced identity is declared");
+      record.firstHandle = static_cast<std::uint32_t>(first);
+    }
+    result.records.push_back(record);
+    result.payload.insert(result.payload.end(), fixture.payload.begin(), fixture.payload.end());
+  }
+  return result;
+}
+
+std::vector<std::byte> producedTextureDescriptor(
+    D9CSurfaceDesc base,
+    std::uint32_t dimension = static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D),
+    std::uint32_t mipCount = 1u, std::uint32_t subresourceCount = 1u) {
+  const RenderTapeTextureDescriptorV2 header{
+      .dimension = dimension, .mipLevelCount = mipCount,
+      .subresourceCount = subresourceCount,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::ProducedByCapturedPass)};
+  std::vector<std::byte> bytes(sizeof(header) + subresourceCount * sizeof(base));
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  for (std::uint32_t index = 0u; index < subresourceCount; ++index) {
+    auto current = base;
+    const auto mip = mipCount ? index % mipCount : 0u;
+    const auto extent = [mip](std::uint32_t value) {
+      const auto shifted = value >> mip;
+      return shifted ? shifted : 1u;
+    };
+    // Preserve invalid level-zero extents for descriptor-negative cases.
+    if (mip) {
+      current.width = extent(base.width);
+      current.height = extent(base.height);
+      if (dimension == static_cast<std::uint32_t>(RenderTapeTextureDimension::Volume))
+        current.depth = extent(base.depth);
+    }
+    std::memcpy(bytes.data() + sizeof(header) + index * sizeof(current), &current, sizeof(current));
+  }
+  return bytes;
+}
+
+D9CSurfaceDesc producedDf24Surface() {
+  return {.format = 875710020u, .resourceType = 3u, .usage = 2u, .pool = 0u,
+      .multiSampleType = 0u, .multiSampleQuality = 0u,
+      .width = 8u, .height = 9u, .depth = 1u};
+}
+
+RenderTapeSurfaceDescriptorV2 producedAlias(const D9CWireObjectIdentity& parent,
+                                           D9CSurfaceDesc surface) {
+  surface.resourceType = 1u;
+  return {.storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::Unavailable),
+      .parentTexture = parent, .surface = surface};
+}
+
+Fixture producedClear(std::uint32_t flags, std::uint32_t rectCount = 0u) {
+  const D9CCommandChunkWireClear clear{
+      .flags = flags, .colorARGB = 0u, .z = 0.25f, .stencil = 0u, .rectCount = rectCount,
+      .rectOffset = sizeof(D9CCommandChunkWireClear)};
+  const std::array rects{D9CRect{0, 0, 8, 9}};
+  return clearWithRects(clear, rectCount ? std::span<const D9CRect>(rects)
+                                       : std::span<const D9CRect>{});
+}
+
+void testProducedDf24DescriptorPolicy() {
+  using Policy = RenderTapeProducedTextureContentPolicy;
+  check(kRenderTapeDf24D3DFormat == 875710020u,
+        "DF24 policy names the exact FOURCC rather than another depth format");
+  std::size_t accepted = 0u;
+  for (const auto resource : {1u, 3u, 4u, 5u})
+    for (const auto usage : {0u, 1u, 2u, 3u})
+      for (const auto pool : {0u, 1u})
+        for (const auto width : {0u, 1u, 8u})
+          for (const auto height : {0u, 1u, 9u})
+            for (const auto depth : {0u, 1u, 2u})
+              for (const auto samples : {0u, 1u, 2u})
+                for (const auto quality : {0u, 1u}) {
+                  auto surface = producedDf24Surface();
+                  surface.resourceType = resource; surface.usage = usage; surface.pool = pool;
+                  surface.width = width; surface.height = height; surface.depth = depth;
+                  surface.multiSampleType = samples; surface.multiSampleQuality = quality;
+                  const bool expected = resource == 3u && usage == 2u && pool == 0u &&
+                      width && height && depth == 1u && samples == 0u && quality == 0u;
+                  const auto policy = renderTapeProducedTexturePolicy(producedTextureDescriptor(surface));
+                  check(policy == (expected ? Policy::Df24DepthOnly : Policy::Unsupported),
+                        "finite DF24 physical descriptor product admits only exact depth-only DEFAULT shape");
+                  accepted += expected;
+                }
+  check(accepted == 4u, "DF24 descriptor product exercises every positive extent pair nonvacuously");
+  for (const auto format : {0u, 75u, 77u, 80u, 875710021u}) {
+    auto surface = producedDf24Surface(); surface.format = format;
+    check(renderTapeProducedTexturePolicy(producedTextureDescriptor(surface)) == Policy::Unsupported,
+          "stencil-bearing, other depth and unknown formats never acquire the DF24 depth-only policy");
+  }
+  for (const auto dimension : {0u, 1u, 2u, 3u, 4u})
+    for (const auto levels : {0u, 1u, 2u})
+      for (const auto subresources : {0u, 1u, 2u, 6u, 12u}) {
+        auto surface = producedDf24Surface();
+        if (dimension == 2u) surface.resourceType = 5u;
+        if (dimension == 3u) { surface.resourceType = 4u; surface.depth = 2u; }
+        const bool expected = dimension == 1u && levels == 1u && subresources == 1u;
+        check(renderTapeProducedTexturePolicy(producedTextureDescriptor(
+                  surface, dimension, levels, subresources)) ==
+                  (expected ? Policy::Df24DepthOnly : Policy::Unsupported),
+              "DF24 topology product rejects cube, volume, multimip and inconsistent subresources");
+      }
+  for (const auto count : {0u, 1u, 2u, 6u, 4096u}) {
+    check(renderTapeProducedTextureAliasClosureSupported(Policy::Df24DepthOnly, count) == (count == 1u) &&
+              renderTapeProducedTextureAliasClosureSupported(Policy::ColorRenderTarget, count) &&
+              !renderTapeProducedTextureAliasClosureSupported(Policy::Unsupported, count),
+          "alias closure is one exact DF24 alias without narrowing legacy color policy");
+  }
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 7u, 70u);
+  const auto parent = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 9u, 90u);
+  const std::array<SectionSpec, 1> rt{{{D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, rt, origin);
+  const auto trace = producedTrace({apply, producedClear(1u)}, {origin});
+  for (const auto dimension : {1u, 2u}) {
+    auto color = producedDf24Surface();
+    color.format = 21u; color.usage = 1u; color.resourceType = dimension == 2u ? 5u : 3u;
+    if (dimension == 2u) color.height = color.width;
+    const auto descriptor = producedTextureDescriptor(color, dimension, 1u, dimension == 2u ? 6u : 1u);
+    check(renderTapeProducedTexturePolicy(descriptor) == Policy::ColorRenderTarget &&
+              renderTapeClassifyProducedTextureByCapturedPass(
+                  trace.view(), origin, parent, descriptor, producedAlias(parent, color)).accepted(),
+          "matched one-mip 2D and cube color controls retain the legacy unrestricted RT clear proof");
+  }
+  for (const auto usage : {1u, 3u}) {
+    auto mixed = producedDf24Surface(); mixed.usage = usage;
+    const auto descriptor = producedTextureDescriptor(mixed);
+    check(renderTapeClassifyProducedTextureByCapturedPass(trace.view(), origin, parent,
+              descriptor, producedAlias(parent, mixed)).status ==
+              RenderTapeProducedProofStatus::UnsupportedTextureDescriptor,
+          "DF24 never falls through to color authority for RT or mixed RT/DS usage");
+  }
+}
+
+void testProducedDf24ClearTruthTable() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 7u, 70u);
+  const auto parent = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 9u, 90u);
+  const auto surface = producedDf24Surface();
+  const auto descriptor = producedTextureDescriptor(surface);
+  const auto alias = producedAlias(parent, surface);
+  for (const auto role : {D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+                          D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+                          D9C_COMMAND_CHUNK_SECTION_TEXTURE})
+    for (const auto flags : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 10u, UINT32_MAX})
+      for (const auto rectCount : {0u, 1u}) {
+        const std::array<SectionSpec, 1> binding{{{static_cast<std::uint16_t>(role), 0u, 0u}}};
+        const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, origin);
+        const auto trace = producedTrace({apply, producedClear(flags, rectCount)}, {origin});
+        const bool expected = role == D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL &&
+            flags == 2u && rectCount == 0u;
+        check(renderTapeProducedDf24ClearSupported(role, flags, rectCount) == expected &&
+                  renderTapeClassifyProducedTextureByCapturedPass(
+                      trace.view(), origin, parent, descriptor, alias).accepted() == expected,
+              "DF24 typed proof and shared predicate agree for every role/flag/rectangle combination");
+      }
+  const std::array<SectionSpec, 1> binding{{{D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, origin);
+  for (const auto mutation : {0u, 1u, 2u}) {
+    auto clear = producedClear(2u);
+    D9CCommandChunkWireClear header{};
+    std::memcpy(&header, clear.payload.data(), sizeof(header));
+    if (mutation == 0u) header.rectOffset = 0u;
+    if (mutation == 1u) header.rectCount = 1u;
+    if (mutation == 2u) clear.payload.resize(clear.payload.size() + sizeof(D9CRect));
+    std::memcpy(clear.payload.data(), &header, sizeof(header));
+    clear.record.payloadSize = static_cast<std::uint32_t>(clear.payload.size());
+    const auto trace = producedTrace({apply, clear}, {origin});
+    check(renderTapeClassifyProducedTextureByCapturedPass(trace.view(), origin, parent,
+              descriptor, alias).status == RenderTapeProducedProofStatus::Malformed,
+          "empty rectangle authority requires an exact valid tail rather than missing or excess bytes");
+  }
+}
+
+void testProducedDf24FirstTerminalOrdering() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 7u, 70u);
+  const auto parent = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 9u, 90u);
+  const auto surface = producedDf24Surface();
+  const auto descriptor = producedTextureDescriptor(surface);
+  const auto alias = producedAlias(parent, surface);
+  const std::array<SectionSpec, 1> depth{{{D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 0u, 0u}}};
+  const std::array<SectionSpec, 1> sampled{{{D9C_COMMAND_CHUNK_SECTION_TEXTURE, 1u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, depth, origin);
+  const auto sampleBinding = sparse(D9C_COMMAND_RECORD_APPLY_STATE, sampled, parent);
+  const auto read = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, sampled, parent);
+  const auto z = producedClear(2u);
+  const auto good = producedTrace({apply, sampleBinding, z, read}, {origin, parent});
+  const auto result = renderTapeClassifyProducedTextureByCapturedPass(
+      good.view(), origin, parent, descriptor, alias);
+  check(result.accepted() && result.observation.recordIndex == 2u &&
+            result.observation.sectionKind == D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL &&
+            result.observation.classification == RenderTapeFirstAccessClass::FullClearWrite,
+        "binding-only prefix then exact Z producer admits later texture reads without changing the first terminal");
+  const auto readFirst = producedTrace({read, apply, z}, {origin, parent});
+  const auto readResult = renderTapeClassifyProducedTextureByCapturedPass(
+      readFirst.view(), origin, parent, descriptor, alias);
+  check(!readResult.accepted() && readResult.observation.recordIndex == 0u &&
+            readResult.observation.classification == RenderTapeFirstAccessClass::ShaderReadCandidate,
+        "later Z clear cannot repair the earliest parent texture read");
+  const D9CCommandChunkWireGenerateMipmaps copy{.textureHandleIndex = 1u};
+  const D9CCommandChunkWirePresent present{};
+  auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, {}, origin);
+  draw.record.handleCount = 0u; // Only the carried DS binding is used by this draw.
+  const std::array firstTerminals{
+      producedClear(2u, 1u), producedClear(4u), producedClear(3u), producedClear(6u),
+      draw,
+      fixed(D9C_COMMAND_RECORD_GENERATE_MIPMAPS, &copy, sizeof(copy), parent),
+      fixed(D9C_COMMAND_RECORD_PRESENT, &present, sizeof(present), origin)};
+  for (const auto& first : firstTerminals) {
+    const auto trace = producedTrace({apply, first, z}, {origin, parent});
+    const auto rejected = renderTapeClassifyProducedTextureByCapturedPass(
+        trace.view(), origin, parent, descriptor, alias);
+    check(!rejected.accepted() && rejected.observation.recordIndex == 1u,
+          "partial, stencil, mixed, draw, copy and Present terminals remain rejected before a later full Z clear");
+  }
+}
+
+void testProducedDf24ExactAliasAndIdentity() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 7u, 70u);
+  const auto parent = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 9u, 90u);
+  const auto surface = producedDf24Surface();
+  const auto descriptor = producedTextureDescriptor(surface);
+  const auto alias = producedAlias(parent, surface);
+  const std::array<SectionSpec, 1> depth{{{D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, depth, origin);
+  const auto trace = producedTrace({apply, producedClear(2u)}, {origin});
+  check(renderTapeClassifyProducedTextureByCapturedPass(
+            trace.view(), origin, parent, descriptor, alias).accepted(),
+        "exact generation-qualified DF24 parent and subresource-zero alias are nonvacuously admitted");
+  const std::array<std::string_view, 19> fields{
+      "schemaVersion", "storage", "initialContentDisposition", "subresource",
+      "parentTexture.kind", "parentTexture.generation", "parentTexture.objectId",
+      "surface.format", "surface.resourceType", "surface.usage.rt", "surface.usage.mixed",
+      "surface.pool", "surface.multiSampleType", "surface.multiSampleQuality",
+      "surface.width.zero", "surface.width.mismatch", "surface.height.zero",
+      "surface.height.mismatch", "surface.depth"};
+  for (std::uint32_t mutation = 0u; mutation < 19u; ++mutation) {
+    auto changed = alias;
+    if (mutation == 0u) changed.schemaVersion = 1u;
+    if (mutation == 1u) changed.storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone);
+    if (mutation == 2u) changed.initialContentDisposition = static_cast<std::uint32_t>(RenderTapeInitialContentDisposition::CompleteSeed);
+    if (mutation == 3u) changed.subresource = 1u;
+    if (mutation == 4u) changed.parentTexture.kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+    if (mutation == 5u) ++changed.parentTexture.generation;
+    if (mutation == 6u) ++changed.parentTexture.objectId;
+    if (mutation == 7u) changed.surface.format = 75u;
+    if (mutation == 8u) changed.surface.resourceType = 3u;
+    if (mutation == 9u) changed.surface.usage = 1u;
+    if (mutation == 10u) changed.surface.usage = 3u;
+    if (mutation == 11u) changed.surface.pool = 1u;
+    if (mutation == 12u) changed.surface.multiSampleType = 1u;
+    if (mutation == 13u) changed.surface.multiSampleQuality = 1u;
+    if (mutation == 14u) changed.surface.width = 0u;
+    if (mutation == 15u) ++changed.surface.width;
+    if (mutation == 16u) changed.surface.height = 0u;
+    if (mutation == 17u) ++changed.surface.height;
+    if (mutation == 18u) changed.surface.depth = 2u;
+    const auto result = renderTapeClassifyProducedTextureByCapturedPass(
+        trace.view(), origin, parent, descriptor, changed);
+    check(result.status == RenderTapeProducedProofStatus::TextureAliasDescriptorMismatch,
+          "every alias physical field, topology and parent identity must match exact DF24 storage: mutation=" +
+              std::to_string(mutation) + " field=" + std::string(fields[mutation]) +
+              " status=" + renderTapeProducedProofStatusName(result.status));
+  }
+  for (const auto mutation : {0u, 1u}) {
+    auto stale = origin;
+    if (mutation == 0u) ++stale.generation;
+    else ++stale.objectId;
+    const auto staleApply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, depth, stale);
+    const auto staleTrace = producedTrace({staleApply, producedClear(2u)}, {stale});
+    check(renderTapeClassifyProducedTextureByCapturedPass(staleTrace.view(), origin, parent,
+              descriptor, alias).status == RenderTapeProducedProofStatus::NoTerminalAccess,
+          "stale generation or different alias object never proves the exact obligation");
+  }
+  const auto parentApply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, depth, parent);
+  const auto parentBinding = producedTrace({parentApply, producedClear(2u)}, {parent});
+  check(renderTapeClassifyProducedTextureByCapturedPass(parentBinding.view(), origin, parent,
+            descriptor, alias).status == RenderTapeProducedProofStatus::ObservedIdentityMismatch,
+        "direct parent texture binding cannot impersonate the exact Surface alias");
+  for (const auto mutation : {0u, 1u, 2u, 3u}) {
+    auto invalidOrigin = origin;
+    auto invalidParent = parent;
+    if (mutation == 0u) invalidOrigin.generation = 0u;
+    if (mutation == 1u) invalidOrigin.objectId = 0u;
+    if (mutation == 2u) invalidParent.generation = 0u;
+    if (mutation == 3u) invalidParent.objectId = 0u;
+    const auto invalidApply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, depth, invalidOrigin);
+    const auto invalidTrace = producedTrace({invalidApply, producedClear(2u)}, {invalidOrigin});
+    check(renderTapeClassifyProducedTextureByCapturedPass(invalidTrace.view(), invalidOrigin,
+              invalidParent, descriptor, producedAlias(invalidParent, surface)).status ==
+              RenderTapeProducedProofStatus::InvalidTextureIdentity,
+          "zero generation or object id cannot create produced texture authority");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -459,6 +785,10 @@ int main() {
     testMismatchMalformedAndPresentHandle();
     testStandaloneDepthFullClearObservation();
     testProducedByCapturedPassProof();
+    testProducedDf24DescriptorPolicy();
+    testProducedDf24ClearTruthTable();
+    testProducedDf24FirstTerminalOrdering();
+    testProducedDf24ExactAliasAndIdentity();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

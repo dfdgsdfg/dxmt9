@@ -10,6 +10,7 @@
 #include "util/config/config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <optional>
@@ -1152,6 +1153,265 @@ CapturedBufferSnapshotStatus Pool::validateCapturedBufferSnapshot(
 core::DrawBufferBindingSnapshot
 Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
   return captureChunkBufferBinding(handle).snapshot;
+}
+
+BufferVersionObservation Pool::observeBufferVersion(core::Handle handle) const noexcept {
+  using Status = BufferVersionObservationStatus;
+  BufferVersionObservation observation;
+  if (!handle) return observation;
+  try {
+    observation.status = Status::MissingBuffer;
+    bufferArena_.inspect(handle.value, [&](const BufferRecord& record) {
+      if (!record.desc.size ||
+          record.desc.size > std::numeric_limits<std::size_t>::max() ||
+          !record.contentRevision) {
+        observation.status = Status::InvalidBacking;
+        return;
+      }
+      if (!record.buffer || !record.contents) {
+        observation.status = Status::BackingUnavailable;
+        return;
+      }
+      const bool versioned = record.hasVersionedBacking();
+      if (versioned) {
+        if (record.renameActiveIndex >= record.renameRing.size()) {
+          observation.status = Status::InvalidBacking;
+          return;
+        }
+        const auto& active = record.renameRing[record.renameActiveIndex];
+        if (!active.buffer || active.buffer.handle != record.buffer.handle ||
+            !active.contents || active.contents != record.contents) {
+          observation.status = Status::InvalidBacking;
+          return;
+        }
+      }
+      // Assign facts only after complete qualification; rejection exposes no
+      // partial logical identity/revision that could be mistaken for evidence.
+      observation = {.status = Status::Valid,
+                     .buffer = handle,
+                     .byteSize = record.desc.size,
+                     .contentRevision = record.contentRevision,
+                     .hasVersionedBacking = versioned,
+                     .currentBacking = {.metalHandle = record.buffer.handle,
+                                        .byteSize = record.desc.size}};
+    });
+  } catch (...) {
+    observation = {.status = Status::InspectionFailed};
+  }
+  return observation;
+}
+
+namespace {
+
+BufferReadProofResult bufferReadRequestShape(const BufferReadProofRequest& request) noexcept {
+  if (!request.buffer || !request.sourceSequence ||
+      request.completedSequence >= request.sourceSequence ||
+      !request.limits.maxRanges ||
+      request.limits.maxRanges > std::numeric_limits<std::uint32_t>::max() ||
+      !request.limits.maxReadBytes ||
+      request.limits.maxReadBytes > std::numeric_limits<std::size_t>::max() ||
+      request.ranges.empty()) return {};
+  if (request.ranges.size() > request.limits.maxRanges)
+    return {.status = BufferReadProofStatus::CapacityExceeded};
+  return {.status = BufferReadProofStatus::Valid};
+}
+
+// These descriptors are synchronous lock-local borrows only. Neither a record
+// nor a contents pointer appears in any public proof result.
+struct ValidatedBufferRead {
+  BufferReadProofStatus status = BufferReadProofStatus::InvalidRequest;
+  std::uint32_t failedRange = std::numeric_limits<std::uint32_t>::max();
+  const std::uint8_t* actual = nullptr;
+  std::uint64_t bytes = 0u;
+};
+
+ValidatedBufferRead validateLockedBufferRead(
+    const BufferReadProofRequest& request, const BufferRecord& record) noexcept {
+  using Status = BufferReadProofStatus;
+  const auto reject = [](Status status, std::uint32_t range =
+      std::numeric_limits<std::uint32_t>::max()) -> ValidatedBufferRead {
+    return {.status = status, .failedRange = range};
+  };
+  if (record.hasVersionedBacking() != request.snapshot.has_value())
+    return reject(Status::BackingRouteMismatch);
+  if (!record.desc.size ||
+      record.desc.size > std::numeric_limits<std::size_t>::max() ||
+      request.expectedBytes.size() != record.desc.size)
+    return reject(Status::InvalidExpectedExtent);
+  if (record.lastUsedSeqId < request.sourceSequence)
+    return reject(Status::UnretainedBacking);
+  const std::uint8_t* actual = nullptr;
+  if (request.snapshot) {
+    const auto& snapshot = *request.snapshot;
+    if (!snapshot.valid() || snapshot.byteSize != record.desc.size ||
+        !snapshot.contentsAddress) return reject(Status::InvalidSnapshot);
+    for (const auto& entry : record.renameRing) {
+      if (!entry.buffer || entry.buffer.handle != snapshot.metalHandle) continue;
+      if (!entry.contents ||
+          snapshot.contentsAddress != static_cast<std::uint64_t>(
+              reinterpret_cast<std::uintptr_t>(entry.contents)))
+        return reject(Status::InvalidSnapshot);
+      if (entry.lastUsedSeqId < request.sourceSequence)
+        return reject(Status::UnretainedBacking);
+      actual = static_cast<const std::uint8_t*>(entry.contents);
+      break;
+    }
+    if (!actual) return reject(Status::InvalidSnapshot);
+    // NOOVERWRITE can change this backing outside the old footprint.
+    // A current logical revision is not an old ring-entry content epoch.
+  } else {
+    if (!record.buffer || !record.contents)
+      return reject(Status::BackingUnavailable);
+    actual = static_cast<const std::uint8_t*>(record.contents);
+  }
+  const auto actualAddress = reinterpret_cast<std::uintptr_t>(actual);
+  const auto expectedAddress = reinterpret_cast<std::uintptr_t>(request.expectedBytes.data());
+  if (!expectedAddress) return reject(Status::InvalidRequest);
+  if (record.desc.size - 1u >
+          std::numeric_limits<std::uintptr_t>::max() - actualAddress ||
+      record.desc.size - 1u >
+          std::numeric_limits<std::uintptr_t>::max() - expectedAddress)
+    return reject(Status::ArithmeticOverflow);
+  std::uint64_t total = 0u;
+  for (std::size_t index = 0u; index < request.ranges.size(); ++index) {
+    const auto range = request.ranges[index];
+    const auto failedRange = static_cast<std::uint32_t>(index);
+    if (!range.byteSize) return reject(Status::InvalidRequest, failedRange);
+    if (range.byteOffset > std::numeric_limits<std::uint64_t>::max() - range.byteSize ||
+        total > std::numeric_limits<std::uint64_t>::max() - range.byteSize)
+      return reject(Status::ArithmeticOverflow, failedRange);
+    if (range.byteOffset > record.desc.size ||
+        range.byteSize > record.desc.size - range.byteOffset)
+      return reject(Status::InvalidRange, failedRange);
+    total += range.byteSize;
+    if (total > request.limits.maxReadBytes)
+      return reject(Status::CapacityExceeded, failedRange);
+  }
+  return {.status = Status::Valid, .actual = actual, .bytes = total};
+}
+
+BufferReadProofResult compareLockedBufferRead(
+    const BufferReadProofRequest& request, const ValidatedBufferRead& validated) noexcept {
+  if (validated.status != BufferReadProofStatus::Valid)
+    return {.status = validated.status, .failedRange = validated.failedRange};
+  for (std::size_t index = 0u; index < request.ranges.size(); ++index) {
+    const auto range = request.ranges[index];
+    const auto offset = static_cast<std::size_t>(range.byteOffset);
+    const auto bytes = static_cast<std::size_t>(range.byteSize);
+    if (std::memcmp(validated.actual + offset,
+                    request.expectedBytes.data() + offset, bytes) != 0)
+      return {.status = BufferReadProofStatus::ByteMismatch,
+              .failedRange = static_cast<std::uint32_t>(index)};
+  }
+  return {.status = BufferReadProofStatus::Valid,
+          .provedRanges = static_cast<std::uint32_t>(request.ranges.size()),
+          .provedBytes = validated.bytes};
+}
+
+}  // namespace
+
+BufferReadProofResult Pool::proveBufferReadFootprint(
+    const BufferReadProofRequest& request) const noexcept {
+  auto result = bufferReadRequestShape(request);
+  if (!result.proved()) return result;
+  try {
+    result = {.status = BufferReadProofStatus::MissingBuffer};
+    bufferArena_.inspect(request.buffer.value, [&](const BufferRecord& record) {
+      const auto validated = validateLockedBufferRead(request, record);
+      result = compareLockedBufferRead(request, validated);
+    });
+  } catch (...) {
+    result = {.status = BufferReadProofStatus::InspectionFailed};
+  }
+  return result;
+}
+
+BufferReadProofBatchResult Pool::proveBufferReadFootprints(
+    std::span<const BufferReadProofRequest> requests,
+    BufferReadProofBatchLimits limits) const noexcept {
+  using Status = BufferReadProofStatus;
+  const auto reject = [](Status status, std::uint32_t request =
+      std::numeric_limits<std::uint32_t>::max(), std::uint32_t range =
+      std::numeric_limits<std::uint32_t>::max()) -> BufferReadProofBatchResult {
+    return {.status = status, .failedRequest = request, .failedRange = range};
+  };
+  if (requests.empty() || !limits.maxRequests ||
+      limits.maxRequests > kBufferReadProofBatchMaxRequests || !limits.maxRanges ||
+      limits.maxRanges > kBufferReadProofBatchMaxRanges || !limits.maxReadBytes ||
+      limits.maxReadBytes > std::numeric_limits<std::size_t>::max()) return {};
+  if (requests.size() > limits.maxRequests)
+    return reject(Status::CapacityExceeded, static_cast<std::uint32_t>(limits.maxRequests));
+
+  std::size_t totalRanges = 0u;
+  std::uint64_t totalBytes = 0u;
+  // Bound every aggregate dimension and arithmetic BEFORE any backing read or
+  // comparison. Physical extents/routes are then qualified as one transaction.
+  for (std::size_t index = 0u; index < requests.size(); ++index) {
+    const auto& request = requests[index];
+    const auto failedRequest = static_cast<std::uint32_t>(index);
+    const auto shape = bufferReadRequestShape(request);
+    if (!shape.proved()) return reject(shape.status, failedRequest, shape.failedRange);
+    if (request.sourceSequence != requests[0].sourceSequence ||
+        request.completedSequence != requests[0].completedSequence)
+      return reject(Status::InvalidRequest, failedRequest);
+    if (totalRanges > std::numeric_limits<std::size_t>::max() - request.ranges.size())
+      return reject(Status::ArithmeticOverflow, failedRequest);
+    const auto previousRanges = totalRanges;
+    totalRanges += request.ranges.size();
+    if (totalRanges > limits.maxRanges)
+      return reject(Status::CapacityExceeded, failedRequest,
+                    static_cast<std::uint32_t>(limits.maxRanges - previousRanges));
+    for (std::size_t rangeIndex = 0u; rangeIndex < request.ranges.size(); ++rangeIndex) {
+      const auto range = request.ranges[rangeIndex];
+      const auto failedRange = static_cast<std::uint32_t>(rangeIndex);
+      if (!range.byteSize) return reject(Status::InvalidRequest, failedRequest, failedRange);
+      if (range.byteOffset > std::numeric_limits<std::uint64_t>::max() - range.byteSize ||
+          totalBytes > std::numeric_limits<std::uint64_t>::max() - range.byteSize)
+        return reject(Status::ArithmeticOverflow, failedRequest, failedRange);
+      totalBytes += range.byteSize;
+      if (totalBytes > limits.maxReadBytes)
+        return reject(Status::CapacityExceeded, failedRequest, failedRange);
+    }
+  }
+
+  BufferReadProofBatchResult result;
+  try {
+    std::array<ValidatedBufferRead, kBufferReadProofBatchMaxRequests> validated{};
+    bufferArena_.inspectMany(
+        requests, [](const BufferReadProofRequest& request) { return request.buffer.value; },
+        [&](const BufferRecord* record, const BufferReadProofRequest& request, std::size_t index) {
+          const auto failedRequest = static_cast<std::uint32_t>(index);
+          if (!record) {
+            result = reject(Status::MissingBuffer, failedRequest);
+            return false;
+          }
+          validated[index] = validateLockedBufferRead(request, *record);
+          if (validated[index].status != Status::Valid) {
+            result = reject(validated[index].status, failedRequest, validated[index].failedRange);
+            return false;
+          }
+          return true;
+        },
+        [&]() {
+          // Every complete record/snapshot/range has passed before this phase.
+          // The SAME arena lock still excludes upload, rotation and reclaim.
+          for (std::size_t index = 0u; index < requests.size(); ++index) {
+            const auto compared = compareLockedBufferRead(requests[index], validated[index]);
+            if (!compared.proved()) {
+              result = reject(compared.status, static_cast<std::uint32_t>(index), compared.failedRange);
+              return false;
+            }
+          }
+          result = {.status = Status::Valid,
+                    .provedRequests = static_cast<std::uint32_t>(requests.size()),
+                    .provedRanges = static_cast<std::uint32_t>(totalRanges),
+                    .provedBytes = totalBytes};
+          return true;
+        });
+  } catch (...) {
+    result = reject(Status::InspectionFailed);
+  }
+  return result;
 }
 
 void Pool::markTextureUse(core::Handle handle, u64 seqId) {

@@ -757,7 +757,8 @@ struct QueueFixture {
 
   explicit QueueFixture(
       CpuReadyTapeConfig tapeConfig = CpuReadyTapeConfig::compatibility(4),
-      bool lifecycleSink = true, bool watchdogEnabled = false)
+      bool lifecycleSink = true, bool watchdogEnabled = false,
+      dxmt9::render::TapeRuntimeObserverEndpoint* tapeRuntimeObserver = nullptr)
       : cpuReadyTape(tapeConfig) {
     if (watchdogEnabled) {
       pipelineWatchdog.emplace(/*enabled=*/true, /*thresholdMs=*/1000,
@@ -789,6 +790,7 @@ struct QueueFixture {
             ? pipelineObserver.productionSink()
             : dxmt9::queue::PipelineLifecycleObserverSink{},
         .pipelineControlObserver = pipelineObserver.productionControlSink(),
+        .tapeRuntimeObserver = tapeRuntimeObserver,
     });
   }
 
@@ -2735,6 +2737,80 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
         "tail source is reclaimed after tail finish");
 }
 
+void controlledNullCommandBufferObservesSubmitBeforeComplete() {
+  struct Observations {
+    struct Row {
+      dxmt9::render::TapeRuntimeEdge edge{};
+      CpuReadyTape::SourceRef source{};
+      std::uint64_t sequence = 0;
+    };
+    std::array<Row, 4> rows{};
+    std::size_t count = 0;
+    bool overflow = false;
+    static void observe(void* context,
+                        const dxmt9::render::TapeRuntimeObservation& value) noexcept {
+      auto& owner = *static_cast<Observations*>(context);
+      if (value.edge != dxmt9::render::TapeRuntimeEdge::Submit &&
+          value.edge != dxmt9::render::TapeRuntimeEdge::Complete) {
+        return;
+      }
+      if (owner.count == owner.rows.size()) {
+        owner.overflow = true;
+        return;
+      }
+      owner.rows[owner.count++] = {value.edge, value.source, value.sequence};
+    }
+  } observations;
+  dxmt9::render::TapeRuntimeObserverEndpoint endpoint;
+  const dxmt9::render::TapeRuntimeObserverSink sink{
+      &observations, Observations::observe};
+  check(endpoint.attach(sink), "controlled-submit runtime observer attaches");
+  QueueFixture fixture{CpuReadyTapeConfig::compatibility(4), true, false, &endpoint};
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  std::array<ReadySlotSnapshot, 2> sources{};
+  QueueSubmissionRecord record;
+  record.testOnlyAllowNullCommandBuffer = true;
+  {
+    std::unique_lock lock(fixture.mutex);
+    checkEq(fixture.controller.dequeueReadySlotBatch(lock, sources), 2u,
+            "controlled-submit fixture dequeues actual sources");
+    record.slotIndex = sources.back().slotIndex;
+    record.seqId = sources.back().seqId;
+    const std::array completionSources{
+        completionSourceForReadySlot(sources[0]),
+        completionSourceForReadySlot(sources[1]),
+    };
+    check(record.assignFixedCompletionSources(completionSources) &&
+              fixture.controller.submitEncodedSubmission(lock, record),
+          "controlled null-CB submission is actually admitted");
+    check(observations.count == 2u && !observations.overflow &&
+              fixture.completedSeqQueue.empty(),
+          "accepted controlled submission emits only Submit before returning");
+  }
+  QueueLifecycleController::PendingCompletion pending;
+  pending.slotIndex = record.slotIndex;
+  pending.seqId = record.seqId;
+  check(pending.assignFixedCompletionSources(record.explicitCompletionSourceSpan()),
+        "controlled completion retains admitted source identities");
+  fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
+  check(fixture.controller.processOnePendingCompletion(),
+        "controlled completion settles through the production completion path");
+  check(observations.count == 4u && !observations.overflow,
+        "controlled lifecycle emits exactly two Submit and two Complete edges");
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    const auto expected = completionSourceForReadySlot(sources[index]);
+    check(observations.rows[index].edge == dxmt9::render::TapeRuntimeEdge::Submit &&
+              observations.rows[index + 2u].edge == dxmt9::render::TapeRuntimeEdge::Complete &&
+              observations.rows[index].source == expected.source &&
+              observations.rows[index + 2u].source == expected.source &&
+              observations.rows[index].sequence == expected.seqId &&
+              observations.rows[index + 2u].sequence == expected.seqId,
+          "actual submitted identities precede their actual completion edges");
+  }
+  endpoint.revoke(sink);
+}
+
 void mixedReceiptAndResidentGroupTailsPublishInSourceOrder() {
   QueueFixture fixture{makeSeparatedPayloadConfig()};
   const auto segment = makeMinimalArenaLayout();
@@ -4142,6 +4218,7 @@ int main() {
     retainEncodedSourcesAcceptsSelectedPrefixMetadata();
     retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
+    controlledNullCommandBufferObservesSubmitBeforeComplete();
     mixedReceiptAndResidentGroupTailsPublishInSourceOrder();
     multiSourceSubmitRejectsStaleTailAtomically();
     submitRejectsWrongRangeAndPresentMetadataAtomically();

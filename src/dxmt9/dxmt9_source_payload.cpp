@@ -1,4 +1,5 @@
 #include "dxmt9_source_payload.hpp"
+#include "dxmt9_render_tape_emission_observer.hpp"
 
 #include "dxmt9/copy_materialization_ledger.hpp"
 
@@ -1076,6 +1077,8 @@ bool ArenaSourcePayloadBuilder::appendCommandRecord(
     good_ = false;
     return false;
   }
+  if (auto* observer = render::activeTapeEmissionObserver)
+    observer->appendLocal(block_->commandHeaders_.size() - 1u, kind);
   return true;
 }
 
@@ -1115,6 +1118,8 @@ bool ArenaSourcePayloadBuilder::tryAppendClearCommand(
     good_ = false;
     return false;
   }
+  if (auto* observer = render::activeTapeEmissionObserver)
+    observer->appendLocal(block_->commandHeaders_.size() - 1u, MetalCommandKind::Clear);
   return true;
 }
 
@@ -1173,6 +1178,8 @@ bool ArenaSourcePayloadBuilder::tryAppendPresentCommand(
     good_ = false;
     return false;
   }
+  if (auto* observer = render::activeTapeEmissionObserver)
+    observer->appendLocal(block_->commandHeaders_.size() - 1u, MetalCommandKind::Present);
   return true;
 }
 
@@ -1750,6 +1757,9 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
         ++run.paramCount;
         run.payloadSize = static_cast<std::uint32_t>(
             slot.drawPayloadArena.size() - runPayloadOffset);
+        if (auto* observer = render::activeTapeEmissionObserver)
+          observer->appendLocal(slot.commandHeaders.size() - 1u,
+              MetalCommandKind::DrawRun, run.paramCount - 1u, 1u);
         return true;
       }
 
@@ -1783,6 +1793,9 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
       directRunOpen_ = true;
       ++commandCount_;
       ++directRunCommandCount_;
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(slot.commandHeaders.size() - 1u,
+            MetalCommandKind::DrawRun, 0u, 1u);
       return true;
     } catch (...) {
       return fail();
@@ -1873,6 +1886,9 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
     ++run->paramCount;
     run->payloadSize = static_cast<std::uint32_t>(
         drawPayloadBytes_ - runPayloadOffset);
+    if (auto* observer = render::activeTapeEmissionObserver)
+      observer->appendLocal(builder_->commandCount() - 1u,
+          MetalCommandKind::DrawRun, run->paramCount - 1u, 1u);
     return true;
   }
 
@@ -1901,6 +1917,8 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
   directRunOpen_ = true;
   ++drawRunCount_;
   ++commandCount_;
+  if (auto* observer = render::activeTapeEmissionObserver)
+    observer->appendLocal(builder_->commandCount() - 1u, MetalCommandKind::DrawRun, 0u, 1u);
   return true;
 }
 
@@ -1949,6 +1967,8 @@ bool TransactionalChunkSlotAssembler::tryAppendClear(
     }
     try {
       directSlot_->appendClear(std::move(value));
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::Clear);
       directClearRectCount_ += rectCount;
       ++commandCount_;
       return true;
@@ -1978,6 +1998,8 @@ bool TransactionalChunkSlotAssembler::tryAppendSurfaceCopy(
     }
     try {
       directSlot_->appendSurfaceCopy(value);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::SurfaceCopy);
       ++commandCount_;
       return true;
     } catch (...) {
@@ -2006,6 +2028,8 @@ bool TransactionalChunkSlotAssembler::tryAppendStretchRect(
     }
     try {
       directSlot_->appendStretchRect(value);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::StretchRect);
       ++commandCount_;
       return true;
     } catch (...) {
@@ -2045,6 +2069,8 @@ bool TransactionalChunkSlotAssembler::tryAppendColorFill(
     }
     try {
       directSlot_->appendColorFill(value);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::ColorFill);
       ++commandCount_;
       return true;
     } catch (...) {
@@ -2073,6 +2099,8 @@ bool TransactionalChunkSlotAssembler::tryAppendDepthResolve(
     }
     try {
       directSlot_->appendDepthResolve(value);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::DepthResolve);
       ++commandCount_;
       return true;
     } catch (...) {
@@ -2102,6 +2130,8 @@ bool TransactionalChunkSlotAssembler::tryAppendGenerateMipmaps(
     }
     try {
       directSlot_->appendGenerateMipmaps(value);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::GenerateMipmaps);
       ++commandCount_;
       return true;
     } catch (...) {
@@ -2130,6 +2160,8 @@ bool TransactionalChunkSlotAssembler::tryAppendPresent(
     }
     try {
       directSlot_->appendPresent(value.present, value.presentSource);
+      if (auto* observer = render::activeTapeEmissionObserver)
+        observer->appendLocal(directSlot_->commandHeaders.size() - 1u, MetalCommandKind::Present);
       ++commandCount_;
       return true;
     } catch (...) {

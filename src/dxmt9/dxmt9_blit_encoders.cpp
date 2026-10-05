@@ -137,7 +137,8 @@ bool readbackRawColorTexture(CommandQueue& queue, resources::Pool& pool,
                           core::Rect sourceRect, std::uint32_t sourceLevel,
                           core::ReadbackPixels& pixels) {
   if ((expectedFormat != WMTPixelFormatBGRA8Unorm &&
-       expectedFormat != WMTPixelFormatRGBA16Float) ||
+       expectedFormat != WMTPixelFormatRGBA16Float &&
+       expectedFormat != WMTPixelFormatR32Float) ||
       !sourceTexture || sourceTexture.pixelFormat() != expectedFormat ||
       sourceRect.left < 0 || sourceRect.top < 0 ||
       sourceRect.right <= sourceRect.left || sourceRect.bottom <= sourceRect.top)
@@ -162,7 +163,8 @@ bool readbackRawColorTexture(CommandQueue& queue, resources::Pool& pool,
   if (!blit) return false;
   blit.setLabel(labels::makeLabelStringFmt(
       "Blit[ReadbackSurface %s raw src=0x%llx]",
-      expectedFormat == WMTPixelFormatRGBA16Float ? "RGBA16Float" : "BGRA8Unorm",
+      expectedFormat == WMTPixelFormatRGBA16Float ? "RGBA16Float"
+          : expectedFormat == WMTPixelFormatR32Float ? "R32Float" : "BGRA8Unorm",
       static_cast<unsigned long long>(source.value)));
   UsedHeapSet set;
   considerSurface(pool, source, set);
@@ -889,7 +891,8 @@ bool captureRenderTapeColorTexture(CommandQueue& queue, resources::Pool& pool,
   const auto* record = pool.findSurface(source.value);
   if (!record || !record->texture || record->resolveTexture ||
       (record->desc.format != core::Format::A8R8G8B8 &&
-       record->desc.format != core::Format::A16B16G16R16F) ||
+       record->desc.format != core::Format::A16B16G16R16F &&
+       record->desc.format != core::Format::R32F) ||
       record->desc.pool != core::Pool::Default || !record->desc.renderTarget ||
       record->desc.depthStencil ||
       record->desc.multiSampleType != core::MultiSampleType::None ||
@@ -897,9 +900,11 @@ bool captureRenderTapeColorTexture(CommandQueue& queue, resources::Pool& pool,
       record->desc.height > std::numeric_limits<std::int32_t>::max())
     return false;
   const bool rgba16Float = record->desc.format == core::Format::A16B16G16R16F;
+  const bool r32Float = record->desc.format == core::Format::R32F;
   const std::uint32_t bytesPerPixel = rgba16Float ? 8u : 4u;
   const auto physicalFormat =
-      rgba16Float ? WMTPixelFormatRGBA16Float : WMTPixelFormatBGRA8Unorm;
+      rgba16Float ? WMTPixelFormatRGBA16Float
+          : r32Float ? WMTPixelFormatR32Float : WMTPixelFormatBGRA8Unorm;
   if (record->desc.width >
       std::numeric_limits<std::int32_t>::max() / bytesPerPixel) return false;
   WMT::Reference<WMT::Texture> texture = record->texture;

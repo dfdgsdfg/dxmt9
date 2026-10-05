@@ -7,12 +7,18 @@
 #include "device_c_render_tape_publication.hpp"
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_action_profile_component.hpp"
 #include "device_c_render_tape_provider.hpp"
+#include "device_c_render_tape_controlled_cpu_v4.hpp"
+#include "device_c_render_tape_execution_v4.hpp"
+#include "device_c_render_tape_runtime_binding_v4.hpp"
+#include "device_c_render_tape_runtime_identity_v4.hpp"
 #include "render_tape_completion_fixture.hpp"
 #include "render_tape_cpu_grammar.hpp"
 #include "render_tape_cpu_general_grammar.hpp"
 #include "render_tape_cpu_general_executor.hpp"
 #include "render_tape_cpu_policy.hpp"
+#include "render_tape_v4_capacity_policy.hpp"
 #include "render_tape_cpu_source_admission.hpp"
 #include "render_tape_cpu_destroy_fixture.hpp"
 #include "render_tape_cpu_alias_fixture.hpp"
@@ -22,6 +28,9 @@
 #include "render_tape_cpu_d24s8_fixture.hpp"
 #include "render_tape_cpu_volume_fixture.hpp"
 #include "render_tape_cpu_bootstrap_pages_fixture.hpp"
+#include "render_tape_cpu_v4_consumer.hpp"
+#include "render_tape_cpu_v4_admission.hpp"
+#include "render_tape_cpu_resource_context.hpp"
 #include "render_tape_test_metal_device.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
@@ -44,6 +53,7 @@
 #include <cstdint>
 #include <ctime>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <filesystem>
 #include <functional>
@@ -69,6 +79,9 @@ namespace {
 
 using dxmt9::test::CpuSourceOracleRow;
 using dxmt9::test::decodeCpuSourceOracle;
+
+struct RuntimeFixture;
+void controlledCpuV4ConsumerUsesRealQueue();
 
 // Keep the bounded no-worker policy proof tied to the actual grammar and
 // queue ring, rather than silently proving a stale test-only capacity.
@@ -373,6 +386,463 @@ std::uint64_t effectivePayloadDigest(
 namespace dxmt9 {
 
 struct CommandQueueArenaLeaseTestAccess {
+  // The borrowed wrapper/probe context is valid only while RuntimeFixture's
+  // separate weak token is live. Retaining this state or the backend is not
+  // wrapper/reset authority. Replay probes never recursively take mutex_.
+  struct ControlledCpuFixtureAuthority {
+    D9CDevice* owner = nullptr;
+    Device* backend = nullptr;
+    CommandQueue* queue = nullptr;
+    bool workersDisabledAtIssue = false;
+    std::atomic<bool> isolated{true};
+    std::atomic<bool> producerClosed{false};
+    std::atomic<bool> consumerJoined{true};
+  };
+
+  enum class ControlledCpuActualPhase {
+    Empty, Represented, Submitted, Completed, Retired, Unknown,
+  };
+  enum class ControlledCpuFault {
+    None, ObservationAllocation, AfterSubmit, AfterAcknowledge,
+  };
+  struct ControlledCpuBackendEvidence {
+    test::CpuV4ConsumerIdentity identity{};
+    ControlledCpuActualPhase phase = ControlledCpuActualPhase::Empty;
+    bool borrowReleased = true;
+    bool observedOutsideQueueMutex = false;
+    bool queueQuarantined = false;
+    std::size_t observed = 0u, submitted = 0u, acknowledged = 0u, retired = 0u;
+  };
+  struct ControlledCpuBackendState {
+    mutable std::mutex evidenceMutex{};
+    ControlledCpuBackendEvidence evidence{};
+    std::atomic<bool> localStop{false}, poisoned{false};
+
+    ControlledCpuBackendEvidence snapshot() const {
+      std::lock_guard lock(evidenceMutex);
+      return evidence;
+    }
+  };
+
+  // Installed at construction, before the worker starts. The cold session
+  // owns semantic results separately from this backend's metadata lifecycle.
+  // Payload projections must not escape the synchronous pinned callback.
+  using ControlledCpuPayloadObserver = std::function<void(CommandQueue&,
+      const core::metalqueue::ReplaySourcePublicationReceipt&,
+      const core::metalqueue::SynchronousSourcePayloadBorrow&)>;
+
+  class ControlledCpuBackend {
+  public:
+    using Clock = std::chrono::steady_clock;
+    using Identity = test::CpuV4ConsumerIdentity;
+    using Failure = test::CpuV4ConsumerFailure;
+    using Phase = ControlledCpuActualPhase;
+    ControlledCpuBackend(ControlledCpuBackend&&) noexcept = default;
+    ControlledCpuBackend& operator=(ControlledCpuBackend&&) noexcept = default;
+    ControlledCpuBackend(const ControlledCpuBackend&) = delete;
+    ControlledCpuBackend& operator=(const ControlledCpuBackend&) = delete;
+
+    std::shared_ptr<ControlledCpuBackendState> state() const noexcept { return state_; }
+
+    test::CpuV4ConsumerBinding binding() {
+      const bool valid = visitQueue([](CommandQueue&) noexcept {});
+      return valid ? binding_ : test::CpuV4ConsumerBinding{};
+    }
+
+    bool producerClosedAndWriterEmpty() {
+      bool empty = false;
+      return visitQueue([&](CommandQueue& queue) {
+        std::lock_guard lock(queue.mutex_);
+        empty = authority_->producerClosed.load(std::memory_order_acquire) &&
+            controlledCpuWriterEmptyLocked(queue);
+      }) && empty;
+    }
+
+    test::CpuV4ConsumerWait waitReady(Clock::time_point deadline) {
+      auto result = test::CpuV4ConsumerWait::Failed;
+      if (!visitQueue([&](CommandQueue& queue) {
+            std::unique_lock lock(queue.mutex_);
+            const bool awake = queue.encodeCv_.wait_until(lock, deadline, [&] {
+              return state_->localStop.load(std::memory_order_acquire) ||
+                  queue.stop_ || !queue.cpuReadyTape_.readyEmpty();
+            });
+            if (!awake) result = test::CpuV4ConsumerWait::Deadline;
+            else if (queue.stop_ || state_->poisoned.load(std::memory_order_acquire))
+              result = test::CpuV4ConsumerWait::Failed;
+            else if (!queue.cpuReadyTape_.readyEmpty())
+              result = test::CpuV4ConsumerWait::Ready;
+            else if (authority_->producerClosed.load(std::memory_order_acquire) &&
+                     controlledCpuWriterEmptyLocked(queue))
+              result = test::CpuV4ConsumerWait::Stopped;
+          })) return test::CpuV4ConsumerWait::LeaseRevoked;
+      return result;
+    }
+
+    Failure observeReady(std::size_t remainingCommands,
+                         test::CpuV4ConsumerObservation& out) {
+      Failure result = Failure::Observation;
+      const bool visited = visitQueue([&](CommandQueue& queue) {
+        std::unique_lock lock(queue.mutex_);
+        if (claimed_) { result = Failure::InvalidLifecycle; return; }
+        std::array<core::CpuReadyTape::ReadyEntry, 1u> ready{};
+        if (queue.stop_ || queue.cpuReadyTape_.readyEmpty() ||
+            queue.cpuReadyTape_.copyReadyPrefix(ready) != 1u) return;
+        if (!ready[0].semantic.commandCount ||
+            ready[0].semantic.commandCount > remainingCommands) {
+          result = Failure::Capacity;
+          return;
+        }
+        core::metalqueue::ReadySlotSnapshot source{};
+        // The sole consumer checked Ready under this same lock, so the
+        // production dequeue's blocking predicate is already satisfied.
+        if (!queue.queueLifecycle_.dequeueReadySlot(lock, source)) return;
+        held_ = core::metalqueue::completionSourceForReadySlot(source);
+        claimed_ = true; // Record the actual effect before any allocation.
+        identity_ = {binding_.queue, binding_.captureToken, binding_.captureEpoch,
+            source.seqId, source.sourceId.index, source.sourceId.generation,
+            source.storage.firstPage, source.storage.pageCount, source.storage.generation};
+        updateEvidence([&](auto& value) {
+          value.identity = identity_;
+          value.phase = Phase::Represented;
+          value.borrowReleased = false;
+        });
+        const auto resolved = queue.queueLifecycle_.resolveRepresentedSource(source);
+        if (!resolved.valid()) {
+          updateEvidence([](auto& value) { value.borrowReleased = true; });
+          return;
+        }
+        test::CpuV4ConsumerObservation observed;
+        observed.identity = identity_;
+        const bool borrowed = queue.queueLifecycle_.visitRepresentedSourceBorrows(
+            lock, std::span<const core::metalqueue::ResolvedPublishedSource>(&resolved, 1u),
+            [&](const core::metalqueue::SynchronousSourceBorrowBatch& batch) noexcept {
+              return batch.visitAt(0u,
+                  [&](const core::metalqueue::GenerationQualifiedSourceBorrow& borrow) noexcept {
+                    struct Unlock {
+                      std::unique_lock<std::mutex>& lock;
+                      explicit Unlock(std::unique_lock<std::mutex>& value) : lock(value) { lock.unlock(); }
+                      ~Unlock() { lock.lock(); }
+                    } unlocked(lock);
+                    return borrow.visitPayload(
+                        [&](const core::metalqueue::SynchronousSourcePayloadBorrow& payload) noexcept {
+                          try {
+                            const bool outsideQueueMutex = !lock.owns_lock();
+                            updateEvidence([&](auto& value) {
+                              value.observedOutsideQueueMutex = outsideQueueMutex;
+                            });
+                            if (!outsideQueueMutex) return false;
+                            if (fault_ == ControlledCpuFault::ObservationAllocation)
+                              throw std::bad_alloc();
+                            observed.rawOrdinal = borrow.metadata().rawOrdinal;
+                            observed.sourceOrdinal = borrow.metadata().sourceOrdinal;
+                            observed.commands.reserve(payload.commandCount());
+                            for (std::size_t index = 0u; index < payload.commandCount(); ++index) {
+                              const auto command = payload.commandAt(index);
+                              if (command.command.drawParams.size() > UINT32_MAX) return false;
+                              observed.commands.push_back({static_cast<std::uint32_t>(command.kind()),
+                                  static_cast<std::uint32_t>(command.command.drawParams.size())});
+                            }
+                            if (payloadObserver_) {
+                              const core::metalqueue::ReplaySourcePublicationReceipt publication{
+                                  borrow.source(), borrow.metadata(), borrow.slotIndex(), borrow.hasPresent()};
+                              payloadObserver_(queue, publication, payload);
+                            }
+                            return true;
+                          } catch (const std::bad_alloc&) { result = Failure::Allocation; }
+                          catch (...) { result = Failure::Backend; }
+                          return false;
+                        });
+                  });
+            });
+        updateEvidence([](auto& value) { value.borrowReleased = true; });
+        if (!borrowed || observed.commands.size() != source.commandCount) return;
+        out = std::move(observed);
+        updateEvidence([](auto& value) { ++value.observed; });
+        result = Failure::None;
+      });
+      return visited ? result : Failure::LeaseRevoked;
+    }
+
+    bool submit(const Identity& identity) {
+      bool applied = false;
+      return visitQueue([&](CommandQueue& queue) {
+        std::unique_lock lock(queue.mutex_);
+        if (!exact(identity) || actualPhaseLocked(queue) != Phase::Represented || queue.stop_) return;
+        core::metalqueue::QueueSubmissionRecord record{};
+        record.testOnlyAllowNullCommandBuffer = true;
+        record.slotIndex = held_.slotIndex;
+        record.seqId = held_.seqId;
+        core::metalqueue::QueueLifecycleController::PendingCompletion pending{};
+        pending.slotIndex = held_.slotIndex;
+        pending.seqId = held_.seqId;
+        const std::array sources{held_};
+        if (!record.assignFixedCompletionSources(sources) ||
+            !pending.assignFixedCompletionSources(sources)) return;
+        const bool submitted = queue.queueLifecycle_.submitEncodedSubmission(lock, record);
+        const auto actual = actualPhaseLocked(queue);
+        if (actual == Phase::Submitted) updateEvidence([](auto& value) { ++value.submitted; });
+        if (!submitted || actual != Phase::Submitted || fault_ == ControlledCpuFault::AfterSubmit) return;
+        // Null-CB submit does not enqueue completion itself. Only the owned,
+        // exact locator receipt enters the real pending FIFO, once.
+        queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
+        pendingEnqueued_ = true;
+        applied = true;
+      }) && applied;
+    }
+
+    bool acknowledge(const Identity& identity) {
+      bool applied = false;
+      return visitQueue([&](CommandQueue& queue) {
+        {
+          std::lock_guard lock(queue.mutex_);
+          if (!exact(identity) || !pendingEnqueued_ || acknowledgementRequested_ ||
+              actualPhaseLocked(queue) != Phase::Submitted || queue.stop_ ||
+              queue.queueLifecycle_.pendingCompletionCountForTest() != 1u) return;
+          acknowledgementRequested_ = true;
+        }
+        const bool processed = queue.queueLifecycle_.processOnePendingCompletion();
+        std::lock_guard lock(queue.mutex_);
+        const auto actual = actualPhaseLocked(queue);
+        if (actual == Phase::Completed) updateEvidence([](auto& value) { ++value.acknowledged; });
+        applied = processed && actual == Phase::Completed &&
+            fault_ != ControlledCpuFault::AfterAcknowledge;
+      }) && applied;
+    }
+
+    bool retire(const Identity& identity) {
+      bool applied = false;
+      return visitQueue([&](CommandQueue& queue) {
+        std::unique_lock lock(queue.mutex_);
+        if (!exact(identity) || !acknowledgementRequested_ || queue.stop_ ||
+            actualPhaseLocked(queue) != Phase::Completed ||
+            queue.completedSeqQueue_.empty() || queue.completedSeqQueue_.front() != held_.seqId) return;
+        const bool finished = queue.queueLifecycle_.runFinishIteration(lock);
+        const auto actual = actualPhaseLocked(queue);
+        if (actual == Phase::Retired) updateEvidence([](auto& value) { ++value.retired; });
+        applied = finished && actual == Phase::Retired;
+      }) && applied;
+    }
+
+    void requestStop() noexcept {
+      if (!backend_) return;
+      auto& queue = backend_->queue();
+      {
+        std::lock_guard lock(queue.mutex_);
+        state_->localStop.store(true, std::memory_order_release);
+      }
+      queue.encodeCv_.notify_all(); // Never sets the real queue's stop latch.
+    }
+
+    void poison(Failure) noexcept {
+      state_->poisoned.store(true, std::memory_order_release);
+      if (backend_) backend_->queue().queueLifecycle_.poisonTapeFailure();
+    }
+
+    bool cleanup(Clock::time_point) noexcept {
+      // Independent pin supports safety inspection after weak lease expiry;
+      // cleanup never submits, acknowledges, finishes, aborts or republishes.
+      if (!backend_) return !claimed_;
+      auto& queue = backend_->queue();
+      std::lock_guard lock(queue.mutex_);
+      if (!claimed_) return true;
+      const auto actual = actualPhaseLocked(queue);
+      if (actual == Phase::Retired) {
+        claimed_ = false;
+        held_ = {};
+        identity_ = {};
+        pendingEnqueued_ = acknowledgementRequested_ = false;
+        return true;
+      }
+      queue.queueLifecycle_.poisonTapeFailureLocked();
+      updateEvidence([](auto& value) { value.queueQuarantined = true; });
+      // Retained Represented/Submitted/Completed ownership is safe fail-stop,
+      // not cleanup completion. Fixture teardown owns its eventual reset.
+      return false;
+    }
+
+  private:
+    friend struct CommandQueueArenaLeaseTestAccess;
+    ControlledCpuBackend(d3d9::RenderTapeControlledCpuV4Lease lease,
+        std::shared_ptr<Device> backend, std::shared_ptr<ControlledCpuFixtureAuthority> authority,
+        test::CpuV4ConsumerBinding binding, ControlledCpuFault fault,
+        ControlledCpuPayloadObserver payloadObserver = {})
+        : lease_(std::move(lease)), backend_(std::move(backend)), authority_(std::move(authority)),
+          binding_(binding), state_(std::make_shared<ControlledCpuBackendState>()), fault_(fault),
+          payloadObserver_(std::move(payloadObserver)) {}
+
+    template <typename Fn> bool visitQueue(Fn&& fn) {
+      using Callable = std::remove_reference_t<Fn>;
+      struct Visit { ControlledCpuBackend* self; Callable* fn; } visit{this, &fn};
+      return lease_.visitBackend(d3d9::RenderTapeControlledCpuV4Boundary::Replay, &visit,
+          [](void* context, D9CDevice*, Device& backend) noexcept {
+            auto& value = *static_cast<Visit*>(context);
+            if (&backend != value.self->backend_.get() ||
+                &backend.queue() != value.self->authority_->queue) return false;
+            try { std::invoke(*value.fn, backend.queue()); return true; }
+            catch (...) { return false; }
+          });
+    }
+    template <typename Fn> void updateEvidence(Fn&& fn) {
+      // Only queue -> evidence ordering is permitted. Readers copy evidence
+      // without taking the queue mutex; stop/poison never touch held locators.
+      std::lock_guard lock(state_->evidenceMutex);
+      std::invoke(fn, state_->evidence);
+    }
+    bool exact(const Identity& identity) const noexcept {
+      return claimed_ && identity.valid() && identity == identity_;
+    }
+    Phase actualPhaseLocked(CommandQueue& queue) {
+      Phase phase = Phase::Unknown;
+      const auto oldest = queue.cpuReadyTape_.oldestResident();
+      if (oldest && oldest->source == held_.source && oldest->seqId == held_.seqId) {
+        switch (oldest->state) {
+        case core::CpuReadyTape::State::Represented: phase = Phase::Represented; break;
+        case core::CpuReadyTape::State::Submitted: phase = Phase::Submitted; break;
+        case core::CpuReadyTape::State::Completed: phase = Phase::Completed; break;
+        default: break;
+        }
+      } else if (queue.completedSeqIdLocked() >= held_.seqId &&
+                 queue.cpuReadyTape_.sourceGenerationAt(held_.source.id.index) != held_.source.id.generation)
+        phase = Phase::Retired;
+      updateEvidence([&](auto& value) { value.phase = phase; });
+      return phase;
+    }
+
+    d3d9::RenderTapeControlledCpuV4Lease lease_{};
+    std::shared_ptr<Device> backend_{};
+    std::shared_ptr<ControlledCpuFixtureAuthority> authority_{};
+    test::CpuV4ConsumerBinding binding_{};
+    std::shared_ptr<ControlledCpuBackendState> state_{};
+    ControlledCpuFault fault_ = ControlledCpuFault::None;
+    ControlledCpuPayloadObserver payloadObserver_{};
+    // Worker-only claim state; control-thread stop/poison use atomics above.
+    core::metalqueue::QueueCompletionSource held_{};
+    Identity identity_{};
+    bool claimed_ = false, pendingEnqueued_ = false, acknowledgementRequested_ = false;
+  };
+
+  static d3d9::RenderTapeControlledCpuV4Capability mintControlledCpu(
+      D9CDevice* owner, std::shared_ptr<Device> backend, std::weak_ptr<void> lifetime,
+      ControlledCpuFixtureAuthority& authority) noexcept {
+    return d3d9::RenderTapeControlledCpuV4Capability::mint(owner, std::move(backend),
+        std::move(lifetime), &authority, controlledCpuIsolationProbe);
+  }
+
+  static std::optional<ControlledCpuBackend> makeControlledCpuBackend(
+      const d3d9::RenderTapeControlledCpuV4Capability& capability,
+      std::shared_ptr<Device> backend, std::shared_ptr<ControlledCpuFixtureAuthority> authority,
+      const D9CRenderTapeIdentityCaptureV4ArmResult& arm,
+      ControlledCpuPayloadObserver payloadObserver = {}) {
+    if (!backend || !authority || backend.get() != authority->backend ||
+        arm.status != D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE ||
+        arm.version != 4u || !arm.captureToken || !arm.captureEpoch || !arm.queue)
+      return std::nullopt;
+    test::CpuV4ConsumerBinding binding{};
+    struct Context {
+      ControlledCpuFixtureAuthority* authority;
+      const D9CRenderTapeIdentityCaptureV4ArmResult* arm;
+      test::CpuV4ConsumerBinding* binding;
+    } context{authority.get(), &arm, &binding};
+    const bool valid = capability.lease().visitBackend(
+        d3d9::RenderTapeControlledCpuV4Boundary::Replay, &context,
+        [](void* input, D9CDevice* owner, Device& backend) noexcept {
+          auto& value = *static_cast<Context*>(input);
+          std::lock_guard bindingLock(owner->renderTapeRuntimeIdentityV4Mutex);
+          const auto* runtime = owner->renderTapeRuntimeBindingV4.get();
+          if (!runtime || runtime->domain != d3d9::RenderTapeRuntimeBindingV4Domain::ControlledCpu ||
+              runtime->captureToken != value.arm->captureToken ||
+              runtime->captureEpoch != value.arm->captureEpoch || runtime->queue != value.arm->queue ||
+              value.authority->backend != &backend || value.authority->queue != &backend.queue()) return false;
+          auto& queue = backend.queue();
+          std::lock_guard queueLock(queue.mutex_);
+          if (queue.queryQueueIdentity_ != value.arm->queue || !controlledCpuQuiescentLocked(queue)) return false;
+          *value.binding = {value.arm->queue, value.arm->captureToken, value.arm->captureEpoch,
+              queue.completedSeqIdLocked()};
+          return true;
+        });
+    if (!valid) return std::nullopt;
+    return ControlledCpuBackend(capability.lease(), std::move(backend), std::move(authority),
+        binding, ControlledCpuFault::None, std::move(payloadObserver));
+  }
+
+  static bool closeControlledCpuProducer(ControlledCpuFixtureAuthority& authority) {
+    if (!authority.queue || !authority.isolated.load(std::memory_order_acquire) ||
+        authority.producerClosed.load(std::memory_order_acquire)) return false;
+    std::lock_guard lock(authority.queue->mutex_);
+    if (!controlledCpuWriterEmptyLocked(*authority.queue)) return false;
+    authority.producerClosed.store(true, std::memory_order_release);
+    return true;
+  }
+
+  static bool controlledCpuQueueStopped(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.stop_;
+  }
+
+private:
+  friend struct ::RuntimeFixture;
+  static bool controlledCpuWriterEmptyLocked(CommandQueue& queue) noexcept {
+    return !queue.arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+        !queue.activeArenaBuild_.load(std::memory_order_relaxed) &&
+        !queue.activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) &&
+        !queue.arenaBuildContext_ && !queue.directChunkSlotBuildContext_ &&
+        (!queue.writingSlot_ || (*queue.writingSlot_ < queue.slots_.size() &&
+         queue.slots_[*queue.writingSlot_].payload &&
+         queue.slots_[*queue.writingSlot_].payload->commandsEmpty()));
+  }
+  static bool controlledCpuQuiescentLocked(CommandQueue& queue) noexcept {
+    return !queue.stop_ && !queue.encodeThread_.joinable() && !queue.finishThread_.joinable() &&
+        !queue.completionThread_.joinable() && !queue.initializer_ &&
+        queue.renderPartitionConfig_.sourceIdentity.resolved != dxmt9::render::SourceIdentityMode::SegmentSerial &&
+        !queue.arenaBuildPoisoned_.load(std::memory_order_relaxed) &&
+        !queue.queryPendingTerminal_.load(std::memory_order_relaxed) &&
+        !queue.queueLifecycle_.queryCompletionFailed() && controlledCpuWriterEmptyLocked(queue) &&
+        queue.cpuReadyTape_.residentCount() == 0u && queue.cpuReadyTape_.readyEmpty() &&
+        !queue.inflightCount_ && queue.completedSeqQueue_.empty() &&
+        queue.completedSeqIdLocked() == queue.lastCommittedSeqId_ &&
+        queue.queueLifecycle_.pendingCompletionCountForTest() == 0u;
+  }
+  static bool controlledCpuIsolationProbe(void* context, D9CDevice* owner,
+      const Device& backend, d3d9::RenderTapeControlledCpuV4Boundary boundary) noexcept {
+    const auto* authority = static_cast<ControlledCpuFixtureAuthority*>(context);
+    if (!authority || !owner || owner != authority->owner || &backend != authority->backend ||
+        !authority->queue || !authority->workersDisabledAtIssue ||
+        !authority->isolated.load(std::memory_order_acquire)) return false;
+    if (boundary == d3d9::RenderTapeControlledCpuV4Boundary::Replay) return true;
+    try {
+      std::lock_guard lock(authority->queue->mutex_);
+      return authority->consumerJoined.load(std::memory_order_acquire) &&
+          controlledCpuQuiescentLocked(*authority->queue) &&
+          (boundary != d3d9::RenderTapeControlledCpuV4Boundary::Finish ||
+           authority->producerClosed.load(std::memory_order_acquire));
+    } catch (...) { return false; }
+  }
+  // Private queue-only seam: local labels deliberately do not install a V4
+  // root, arm a capture, qualify provenance or authorize finalization.
+  static std::optional<ControlledCpuBackend> makeQueueOnlyControlledCpuBackendForTest(
+      const d3d9::RenderTapeControlledCpuV4Capability& capability,
+      std::shared_ptr<Device> backend, std::shared_ptr<ControlledCpuFixtureAuthority> authority,
+      ControlledCpuFault fault) {
+    if (!backend || !authority || backend.get() != authority->backend) return std::nullopt;
+    test::CpuV4ConsumerBinding binding{};
+    struct Context { test::CpuV4ConsumerBinding* binding; } context{&binding};
+    const bool valid = capability.lease().visitBackend(
+        d3d9::RenderTapeControlledCpuV4Boundary::Mint, &context,
+        [](void* input, D9CDevice*, Device& backend) noexcept {
+          auto& queue = backend.queue();
+          std::lock_guard lock(queue.mutex_);
+          static std::atomic<std::uint64_t> token{1u};
+          const auto local = token.fetch_add(1u, std::memory_order_relaxed);
+          if (!local || !controlledCpuQuiescentLocked(queue)) return false;
+          *static_cast<Context*>(input)->binding = {queue.queryQueueIdentity_, local, 1u,
+              queue.completedSeqIdLocked()};
+          return true;
+        });
+    if (!valid) return std::nullopt;
+    return ControlledCpuBackend(capability.lease(), std::move(backend), std::move(authority), binding, fault);
+  }
+
+public:
   struct CompletionResult {
     bool dequeued = false;
     bool arena = false;
@@ -466,6 +936,24 @@ struct CommandQueueArenaLeaseTestAccess {
   static std::size_t residentCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.residentCount();
+  }
+
+  struct ControlledCpuParkSnapshot {
+    bool acquired = false, writerPressure = false, writing = false;
+    std::size_t ready = 0u, resident = 0u, inflight = 0u;
+  };
+
+  // Read-only, bounded diagnostic. Full storage alone is not evidence that
+  // the producer actually entered its ordinary publication wait.
+  static ControlledCpuParkSnapshot controlledCpuParkSnapshot(CommandQueue& queue) {
+    const bool pressure = queue.queueLifecycle_.producerWriterPressureActive();
+    std::unique_lock lock(queue.mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return {};
+    return {.acquired = true, .writerPressure = pressure,
+            .writing = queue.writingSlot_.has_value(),
+            .ready = queue.cpuReadyTape_.readyCount(),
+            .resident = queue.cpuReadyTape_.residentCount(),
+            .inflight = queue.inflightCount_};
   }
 
   static std::optional<core::CpuReadyTape::State> oldestSourceState(
@@ -573,6 +1061,23 @@ struct CommandQueueArenaLeaseTestAccess {
       return 0;
     }
     return queue.slots_[*queue.writingSlot_].payload->commandCount();
+  }
+
+  static std::optional<d3d9::RenderTapeExecutionV3::WritingContinuation>
+  writingContinuation(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.writingSlot_ || *queue.writingSlot_ >= queue.slots_.size())
+      return std::nullopt;
+    const auto& slot = queue.slots_[*queue.writingSlot_];
+    const auto state = queue.cpuReadyTape_.state(slot.sourceId, slot.storage);
+    if (!slot.payload || slot.payload->commandsEmpty() ||
+        state != core::CpuReadyTape::State::Writing)
+      return std::nullopt;
+    return d3d9::RenderTapeExecutionV3::WritingContinuation{
+        .writer = {queue.queryQueueIdentity_, slot.sourceId.index,
+                   slot.sourceId.generation, slot.storage.generation},
+        .source = {.id = slot.sourceId, .storage = slot.storage},
+        .commandCount = slot.payload->commandCount()};
   }
 
   static void reserveDirectContinuationHeadroom(CommandQueue& queue) {
@@ -879,6 +1384,37 @@ struct CommandQueueArenaLeaseTestAccess {
     }
     result.completedSeq = queue.completedSeqIdLocked();
     return result;
+  }
+
+  // Diagnostic value projection only. A queue mutex does not serialize the
+  // Pool's in-place/rename mutation paths. Callers must independently exclude
+  // later in-place mutation and hold the represented source pin until their
+  // outside-lock byte proof returns; this is not general concurrent safety.
+  static bool copyControlledCpuBufferProofView(CommandQueue& queue,
+      core::Handle handle, std::uint64_t sourceSequence,
+      const core::DrawBufferBindingSnapshot* captured,
+      test::CpuTapeLiveBufferView& out, bool& destroyPending) {
+    std::lock_guard lock(queue.mutex_);
+    const auto* record = queue.pool_.findBuffer(handle.value);
+    if (!record || record->lastUsedSeqId < sourceSequence ||
+        queue.completedSeqIdLocked() >= sourceSequence) return false;
+    const bool validBacking = captured ? captured->valid() : bool(record->buffer) && record->contents;
+    const auto route = test::cpuTapeBufferObservationRoute(
+        record->hasVersionedBacking(), captured != nullptr, validBacking);
+    if (captured) {
+      if (route != test::CpuTapeBufferObservationRoute::Captured ||
+          queue.pool_.validateCapturedBufferSnapshot(handle, *captured) !=
+              resources::CapturedBufferSnapshotStatus::Valid) return false;
+      out = {captured->metalHandle, captured->contentsAddress,
+          captured->byteSize, captured->contentRevision};
+    } else {
+      if (route != test::CpuTapeBufferObservationRoute::Live) return false;
+      out = {record->buffer.handle,
+          static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(record->contents)),
+          record->desc.size, record->contentRevision};
+    }
+    destroyPending = record->destroyPending;
+    return true;
   }
 
   static void markBufferUseForTest(CommandQueue& queue, core::Handle handle,
@@ -1624,7 +2160,8 @@ struct RoutingDevice final : dxmt9::Device {
                          bool segmentSerial = false,
                          bool directChunkSlot = false,
                          bool cpuReadyArena = true,
-                         WMT::Device resourceDevice = {})
+                         WMT::Device resourceDevice = {},
+                         bool exactRenderTapeActionProfile = false)
       : limits_([&] {
           BackendLimits limits{};
           if (resourceDevice)
@@ -1641,10 +2178,12 @@ struct RoutingDevice final : dxmt9::Device {
                                   SourceIdentityModeRequest::Segment,
                               .resolved = dxmt9::render::
                                   SourceIdentityMode::SegmentSerial}}
-                : dxmt9::render::RenderPartitionConfig{}),
+                : dxmt9::render::RenderPartitionConfig{},
+            exactRenderTapeActionProfile),
         rejectAfterClear_(rejectAfterClear),
         directChunkSlot_(directChunkSlot),
         cpuReadyArena_(cpuReadyArena),
+        controlledResourcePool_(exactRenderTapeActionProfile && static_cast<bool>(resourceDevice)),
         resourceDevice_(resourceDevice) {
     if (static_cast<bool>(resourceDevice_)) {
       dxmt9::CommandQueueArenaLeaseTestAccess::bindDevice(queue_,
@@ -1654,6 +2193,12 @@ struct RoutingDevice final : dxmt9::Device {
 
   WMT::Device wmtDevice() override { return resourceDevice_; }
   dxmt9::CommandQueue& queue() override { return queue_; }
+  dxmt9::resources::Pool* pool() override {
+    // Only the genuine resource-backed Exact fixture exposes its existing
+    // queue pool to shared production preparation. This grants no readback
+    // or GPU execution support and leaves ordinary legacy fixtures inert.
+    return controlledResourcePool_ ? &queue_.pool() : nullptr;
+  }
   const BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<BackendDevice> backend() override { return {}; }
   void flush() override {
@@ -1978,6 +2523,7 @@ struct RoutingDevice final : dxmt9::Device {
   bool rejectAfterFinalClear_ = false;
   bool directChunkSlot_ = false;
   bool cpuReadyArena_ = true;
+  bool controlledResourcePool_ = false;
   WMT::Device resourceDevice_{};
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
@@ -2012,6 +2558,40 @@ struct RoutingDevice final : dxmt9::Device {
 };
 
 struct RuntimeFixture {
+  using ControlledAccess = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using ControlledConsumer = dxmt9::test::CpuV4ControlledConsumer<ControlledAccess::ControlledCpuBackend>;
+  struct ControlledConsumerHandle {
+    std::shared_ptr<ControlledConsumer> consumer{};
+    std::shared_ptr<ControlledAccess::ControlledCpuBackendState> backendState{};
+
+    ~ControlledConsumerHandle() { cancelAndJoin(); }
+    bool start() { return !joined_ && consumer && consumer->start(); }
+    // Finish admission observes this post-join acknowledgement, not merely a
+    // workerExited snapshot or an independently retained backend object.
+    void join() {
+      if (joined_ || !consumer) return;
+      if (consumer->snapshot().state.phase == dxmt9::test::CpuV4ConsumerPhase::Idle)
+        consumer->failAndJoin(dxmt9::test::CpuV4ConsumerFailure::Cancelled);
+      else consumer->join();
+      joined_ = true;
+      authority_->consumerJoined.store(true, std::memory_order_release);
+    }
+    void cancelAndJoin() {
+      if (joined_ || !consumer) return;
+      const auto phase = consumer->snapshot().state.phase;
+      if (phase == dxmt9::test::CpuV4ConsumerPhase::Stopped ||
+          phase == dxmt9::test::CpuV4ConsumerPhase::Failed) consumer->join();
+      else consumer->failAndJoin(dxmt9::test::CpuV4ConsumerFailure::Cancelled);
+      joined_ = true;
+      authority_->consumerJoined.store(true, std::memory_order_release);
+    }
+
+  private:
+    friend struct RuntimeFixture;
+    std::shared_ptr<ControlledAccess::ControlledCpuFixtureAuthority> authority_{};
+    bool joined_ = false;
+  };
+
   explicit RuntimeFixture(bool rejectAfterClear = false,
                           bool segmentSerial = false,
                           bool directChunkSlot = false,
@@ -2019,13 +2599,15 @@ struct RuntimeFixture {
                           WMT::Device resourceDevice = {},
                           dxmt9::d3d9::ReplayQueueAllocationFailure*
                               allocationFailure = nullptr,
-                          const PresentParameters* outputParameters = nullptr) {
+                          const PresentParameters* outputParameters = nullptr,
+                          bool exactRenderTapeActionProfile = false) {
     allocationFailure_ = allocationFailure;
     auto upper = std::make_unique<RoutingDevice>(rejectAfterClear,
                                                   segmentSerial,
                                                   directChunkSlot,
                                                   cpuReadyArena,
-                                                  resourceDevice);
+                                                  resourceDevice,
+                                                  exactRenderTapeActionProfile);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -2055,10 +2637,55 @@ struct RuntimeFixture {
     releaseCoreForInspection();
   }
 
+  dxmt9::d3d9::RenderTapeControlledCpuV4Capability issueControlledCpuCapability() {
+    if (!cDevice || capabilityIssued_) return {};
+    const auto backend = cDevice->dev().upperDevice();
+    if (!backend || backend.get() != routing || cDevice->replayOffload) return {};
+    controlledLifetime_ = std::make_shared<std::uint8_t>(0u);
+    controlledAuthority_ = std::make_shared<ControlledAccess::ControlledCpuFixtureAuthority>();
+    controlledAuthority_->owner = cDevice.get();
+    controlledAuthority_->backend = backend.get();
+    controlledAuthority_->queue = &routing->queue_;
+    controlledAuthority_->workersDisabledAtIssue = ControlledAccess::cpuTapeWorkersDisabled(routing->queue_);
+    auto capability = ControlledAccess::mintControlledCpu(cDevice.get(), backend,
+        controlledLifetime_, *controlledAuthority_);
+    if (!capability.lease().visitBackend(dxmt9::d3d9::RenderTapeControlledCpuV4Boundary::Mint,
+            nullptr, [](void*, D9CDevice*, dxmt9::Device&) noexcept { return true; })) {
+      controlledLifetime_.reset();
+      controlledAuthority_.reset();
+      return {};
+    }
+    capabilityIssued_ = true;
+    return capability;
+  }
+
+  std::shared_ptr<ControlledConsumerHandle> makeControlledCpuConsumer(
+      const dxmt9::d3d9::RenderTapeControlledCpuV4Capability& capability,
+      const D9CRenderTapeIdentityCaptureV4ArmResult& arm,
+      dxmt9::test::CpuV4ConsumerLimits limits,
+      std::chrono::steady_clock::time_point deadline,
+      ControlledAccess::ControlledCpuPayloadObserver payloadObserver = {}) {
+    if (!cDevice || consumerRegistered_ || !controlledAuthority_) return {};
+    auto backend = ControlledAccess::makeControlledCpuBackend(capability,
+        cDevice->dev().upperDevice(), controlledAuthority_, arm, std::move(payloadObserver));
+    return backend ? registerControlledCpuConsumer(std::move(*backend), limits, deadline) : nullptr;
+  }
+
+  bool closeControlledCpuProducer() {
+    return controlledAuthority_ && ControlledAccess::closeControlledCpuProducer(*controlledAuthority_);
+  }
+
   // Cold CPU iterations are fresh-device, not warm resets. Keep the real
   // backend alive while destroying every core/cache owner, so Pool and queue
   // reclamation can be checked afterwards without a dangling routing pointer.
   void releaseCoreForInspection() {
+    // Join every surviving handle before token expiry, root/reset operations,
+    // or wrapper destruction. The handle itself also joins on stack unwind.
+    for (auto& weak : controlledConsumers_)
+      if (const auto handle = weak.lock()) handle->cancelAndJoin();
+    if (controlledAuthority_)
+      controlledAuthority_->isolated.store(false, std::memory_order_release);
+    controlledLifetime_.reset();
     if (cDevice && !inspectionBackend_)
       inspectionBackend_ = cDevice->dev().backend();
     cDevice.reset();
@@ -2078,7 +2705,2840 @@ struct RuntimeFixture {
   dxmt9::com::IDirect3DDevice9Ex* device = nullptr;
   std::unique_ptr<D9CDevice> cDevice;
   std::shared_ptr<dxmt9::Device> inspectionBackend_;
+
+private:
+  friend void controlledCpuV4ConsumerUsesRealQueue();
+  std::shared_ptr<ControlledConsumerHandle> makeQueueOnlyControlledCpuConsumerForTest(
+      const dxmt9::d3d9::RenderTapeControlledCpuV4Capability& capability,
+      ControlledAccess::ControlledCpuFault fault,
+      std::chrono::steady_clock::time_point deadline,
+      dxmt9::test::CpuV4ConsumerLimits limits = {}) {
+    if (!cDevice || consumerRegistered_ || !controlledAuthority_) return {};
+    auto backend = ControlledAccess::makeQueueOnlyControlledCpuBackendForTest(capability,
+        cDevice->dev().upperDevice(), controlledAuthority_, fault);
+    return backend ? registerControlledCpuConsumer(std::move(*backend), limits, deadline) : nullptr;
+  }
+  std::shared_ptr<ControlledConsumerHandle> registerControlledCpuConsumer(
+      ControlledAccess::ControlledCpuBackend backend, dxmt9::test::CpuV4ConsumerLimits limits,
+      std::chrono::steady_clock::time_point deadline) {
+    auto handle = std::make_shared<ControlledConsumerHandle>();
+    handle->backendState = backend.state();
+    handle->consumer = std::make_shared<ControlledConsumer>(std::move(backend), limits, deadline);
+    handle->authority_ = controlledAuthority_;
+    controlledConsumers_.push_back(handle);
+    consumerRegistered_ = true;
+    controlledAuthority_->consumerJoined.store(false, std::memory_order_release);
+    return handle;
+  }
+  std::shared_ptr<void> controlledLifetime_{};
+  std::shared_ptr<ControlledAccess::ControlledCpuFixtureAuthority> controlledAuthority_{};
+  std::vector<std::weak_ptr<ControlledConsumerHandle>> controlledConsumers_{};
+  bool capabilityIssued_ = false, consumerRegistered_ = false;
 };
+
+void controlledCpuV4ConsumerUsesRealQueue() {
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Boundary = dxmt9::d3d9::RenderTapeControlledCpuV4Boundary;
+  using Failure = dxmt9::test::CpuV4ConsumerFailure;
+  using Actual = Access::ControlledCpuActualPhase;
+  using Fault = Access::ControlledCpuFault;
+  using Clock = std::chrono::steady_clock;
+  const auto accepts = [](const auto& capability, Boundary boundary = Boundary::Mint) {
+    return capability.lease().visitBackend(boundary, nullptr,
+        [](void*, D9CDevice*, dxmt9::Device&) noexcept { return true; });
+  };
+
+  {
+    RuntimeFixture normal;
+    const auto profile = normal.routing->queue_.renderTapeActionProfileSnapshot();
+    check(profile.valid && profile.constructionProfile == dxmt9::kRenderTapeActionProfileNormal &&
+              profile.currentProfile == dxmt9::kRenderTapeActionProfileNormal && !profile.revision,
+          "ordinary inert fixture constructs Normal action history at revision zero");
+    auto capability = normal.issueControlledCpuCapability();
+    check(accepts(capability) && !accepts(normal.issueControlledCpuCapability()),
+          "one cold exact-owner fixture grants one move-only CPU capability");
+    const D9CRenderTapeIdentityCaptureV4ArmResult fabricated{
+        D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE, 4u, 1u, 1u, 1u};
+    check(!normal.makeControlledCpuConsumer(capability, fabricated, {}, Clock::now() + std::chrono::seconds(5)),
+          "production adapter rejects fabricated localArm labels without a live Bound root");
+    auto token = std::make_shared<std::uint8_t>(0u);
+    RuntimeFixture different;
+    Access::ControlledCpuFixtureAuthority wrongOwner;
+    wrongOwner.owner = different.cDevice.get();
+    wrongOwner.backend = normal.routing;
+    wrongOwner.queue = &normal.routing->queue_;
+    wrongOwner.workersDisabledAtIssue = true;
+    check(!accepts(Access::mintControlledCpu(normal.cDevice.get(), normal.cDevice->dev().upperDevice(),
+              token, wrongOwner)), "mint cannot substitute a different borrowed wrapper identity");
+    Access::ControlledCpuFixtureAuthority wrongBackend;
+    wrongBackend.owner = normal.cDevice.get();
+    wrongBackend.backend = different.routing;
+    wrongBackend.queue = &different.routing->queue_;
+    wrongBackend.workersDisabledAtIssue = true;
+    check(!accepts(Access::mintControlledCpu(normal.cDevice.get(), normal.cDevice->dev().upperDevice(),
+              token, wrongBackend)), "mint cannot substitute another inert backend or queue identity");
+  }
+  {
+    RuntimeFixture exact(false, false, false, true, {}, nullptr, nullptr, true);
+    const auto arm = exact.routing->queue_.renderTapeActionProfileSnapshot();
+    auto capability = exact.issueControlledCpuCapability();
+    check(accepts(capability) && arm.valid && !arm.revision &&
+              arm.constructionProfile == dxmt9::kRenderTapeActionProfileExact &&
+              dxmt9::renderTapeActionProfileStableExact(arm, arm),
+          "opted exact fixture constructs genuine Exact action history at revision zero");
+    exact.routing->queue_.setRenderTapeExactAttachmentPreservation(false);
+    exact.routing->queue_.setRenderTapeExactAttachmentPreservation(true);
+    const auto freeze = exact.routing->queue_.renderTapeActionProfileSnapshot();
+    check(freeze.revision == 2u && !dxmt9::renderTapeActionProfileStableExact(arm, freeze),
+          "setter ABA never manufactures a stable construction Exact witness");
+  }
+  {
+    RuntimeFixture populated;
+    populated.routing->submitClear(ClearDesc{});
+    check(!accepts(populated.issueControlledCpuCapability()),
+          "mint rejects a populated writer before publication or CPU effects");
+    dxmt9::d3d9::ReplayQueueAllocationFailure fault{};
+    RuntimeFixture offloaded(false, false, false, true, {}, &fault);
+    check(!accepts(offloaded.issueControlledCpuCapability()), "mint rejects replay-offload authority");
+    RuntimeFixture segmented(false, true);
+    check(!accepts(segmented.issueControlledCpuCapability()),
+          "one-source consumer rejects group-held SegmentSerial retirement contracts");
+  }
+  {
+    // Queue-only local labels below are NOT V4 arm/finalization evidence.
+    RuntimeFixture empty;
+    auto capability = empty.issueControlledCpuCapability();
+    auto handle = empty.makeQueueOnlyControlledCpuConsumerForTest(capability, Fault::None,
+        Clock::now() + std::chrono::seconds(5));
+    check(handle && handle->start(), "controlled consumer starts one owned real-CV worker");
+    check(empty.closeControlledCpuProducer() && handle->consumer->closeProducer() &&
+              handle->consumer->stopAndJoin(), "producer close wakes empty encode CV and joins normally");
+    handle->join();
+    const auto snapshot = handle->consumer->snapshot();
+    check(snapshot.workerExited && snapshot.cleanupComplete && !snapshot.cleanupFailed &&
+              !snapshot.state.observed && !Access::controlledCpuQueueStopped(empty.routing->queue_),
+          "empty controlled stop never poisons or sets production queue stop");
+  }
+  {
+    RuntimeFixture burst;
+    auto capability = burst.issueControlledCpuCapability();
+    auto handle = burst.makeQueueOnlyControlledCpuConsumerForTest(capability, Fault::None,
+        Clock::now() + std::chrono::seconds(10));
+    check(handle && handle->start(), "burst consumer starts before one compatibility raw");
+    constexpr std::size_t kSources = dxmt9::kMaxQueuedChunks + 33u;
+    const std::vector<RecordSpec> records(kSources, presentRecord());
+    const auto wire = makeWireFixture(records);
+    check(dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(burst.cDevice.get(),
+              wire.bytes, wire.envelope, {}, dxmt9::d3d9::ProviderReplayPolicy::Compatibility) == D3D_OK,
+          "one unchanged raw publishes more than the ring capacity while consumer drains concurrently");
+    check(burst.closeControlledCpuProducer() && handle->consumer->closeProducer() &&
+              handle->consumer->stopAndJoin(), "natural Present cuts drain without per-raw synthetic publication");
+    handle->join();
+    const auto receipts = handle->consumer->takeReceipts();
+    const auto snapshot = handle->consumer->snapshot();
+    check(receipts.size() == kSources && snapshot.state.observed == kSources &&
+              snapshot.state.submitted == kSources && snapshot.state.acknowledged == kSources &&
+              snapshot.state.retired == kSources && snapshot.state.commands == kSources &&
+              snapshot.state.lifecycleActions == 4u * kSources && snapshot.cleanupComplete &&
+              !snapshot.payloadDigestPresent && !snapshot.fullSemanticOracleComplete &&
+              !snapshot.actualMetal && !snapshot.gpuResultOracle && !snapshot.timingEligible &&
+              Access::residentCount(burst.routing->queue_) == 0u,
+          "actual FIFO receipts prove only controlled queue retirement and owned metadata");
+    for (std::size_t index = 0u; index < receipts.size(); ++index) {
+      const auto& row = receipts[index];
+      check(row.observation && row.observation->identity.sequence == index + 1u &&
+                row.observation->commands.size() == 1u &&
+                row.observation->commands[0].kind == static_cast<std::uint32_t>(MetalCommandKind::Present) &&
+                !row.observation->commands[0].drawCount && row.submitted && row.acknowledged &&
+                row.retired && row.cleanupComplete,
+            "consumer preserves every natural source cut and command in producer order");
+    }
+    const auto target = receipts.back().observation->identity;
+    check(handle->consumer->waitThrough(target, Clock::now() + std::chrono::seconds(1)),
+          "waitThrough accepts only an exact actual retired receipt");
+    for (unsigned dimension = 0u; dimension < 9u; ++dimension) {
+      auto stale = target;
+      switch (dimension) {
+      case 0u: ++stale.queue; break;
+      case 1u: ++stale.captureToken; break;
+      case 2u: ++stale.captureEpoch; break;
+      case 3u: ++stale.sequence; break;
+      case 4u: ++stale.sourceIndex; break;
+      case 5u: ++stale.sourceGeneration; break;
+      case 6u: ++stale.storageFirstPage; break;
+      case 7u: ++stale.storagePageCount; break;
+      case 8u: ++stale.storageGeneration; break;
+      }
+      check(!handle->consumer->waitThrough(stale, Clock::now() + std::chrono::seconds(1)),
+          "a watermark or partial source identity cannot satisfy an exact target");
+    }
+    const auto actual = handle->backendState->snapshot();
+    check(actual.phase == Actual::Retired && actual.borrowReleased &&
+              actual.observedOutsideQueueMutex && !actual.queueQuarantined,
+          "successful cleanup follows actual retirement and releases every synchronous borrow");
+  }
+  for (const auto fault : {Fault::ObservationAllocation, Fault::AfterSubmit, Fault::AfterAcknowledge}) {
+    RuntimeFixture fixture;
+    auto capability = fixture.issueControlledCpuCapability();
+    auto handle = fixture.makeQueueOnlyControlledCpuConsumerForTest(capability, fault,
+        Clock::now() + std::chrono::seconds(5));
+    check(handle && handle->start(), "failure consumer starts from a clean fixture");
+    fixture.routing->present(SwapDesc{});
+    handle->join();
+    const auto snapshot = handle->consumer->snapshot();
+    const auto actual = handle->backendState->snapshot();
+    const auto expectedPhase = fault == Fault::ObservationAllocation ? Actual::Represented
+        : fault == Fault::AfterSubmit ? Actual::Submitted : Actual::Completed;
+    const auto expectedFailure = fault == Fault::ObservationAllocation ? Failure::Allocation
+        : fault == Fault::AfterSubmit ? Failure::Submit : Failure::Acknowledge;
+    check(snapshot.workerExited && snapshot.failure == expectedFailure && snapshot.cleanupFailed &&
+              !snapshot.cleanupComplete && !snapshot.receipts && actual.identity.valid() &&
+              actual.phase == expectedPhase && actual.borrowReleased && actual.queueQuarantined &&
+              !actual.retired && Access::residentCount(fixture.routing->queue_) == 1u &&
+              Access::completedSeqId(fixture.routing->queue_) == 0u,
+          "failure after an actual queue effect quarantines exact ownership without inventing completion");
+  }
+  {
+    RuntimeFixture capacity;
+    auto capability = capacity.issueControlledCpuCapability();
+    dxmt9::test::CpuV4ConsumerLimits limits{};
+    limits.maxCommands = 1u;
+    auto handle = capacity.makeQueueOnlyControlledCpuConsumerForTest(capability, Fault::None,
+        Clock::now() + std::chrono::seconds(5), limits);
+    check(handle && handle->start(), "bounded consumer starts before a two-command natural source");
+    capacity.routing->submitClear(ClearDesc{});
+    capacity.routing->present(SwapDesc{});
+    handle->join();
+    const auto snapshot = handle->consumer->snapshot();
+    const auto actual = handle->backendState->snapshot();
+    check(snapshot.failure == Failure::Capacity && snapshot.cleanupComplete &&
+              !snapshot.cleanupFailed && !snapshot.state.observed && !actual.identity.valid() &&
+              !actual.queueQuarantined && Access::readyCount(capacity.routing->queue_) == 1u,
+          "command bound rejects before dequeue; Ready backlog remains queue-owned without a claimed borrow");
+  }
+  {
+    RuntimeFixture revoked;
+    auto capability = revoked.issueControlledCpuCapability();
+    auto handle = revoked.makeQueueOnlyControlledCpuConsumerForTest(capability, Fault::None,
+        Clock::now() + std::chrono::seconds(5));
+    check(handle && revoked.closeControlledCpuProducer(), "revocation fixture has no live worker or claimed source");
+    capability.revoke();
+    check(!accepts(capability, Boundary::Replay) && !handle->consumer->closeProducer(),
+          "adapter rechecks weak authority at the next synchronous boundary");
+    handle->consumer->failAndJoin(Failure::Cancelled);
+    handle->join();
+    check(handle->consumer->snapshot().cleanupComplete,
+          "independent backend pin proves empty cleanup after lease revocation without replay effects");
+  }
+  {
+    dxmt9::d3d9::RenderTapeControlledCpuV4Capability capability;
+    RuntimeFixture expired;
+    capability = expired.issueControlledCpuCapability();
+    const auto lease = capability.lease();
+    check(accepts(capability), "weak-lifetime fixture initially grants live authority");
+    expired.releaseCoreForInspection();
+    check(!lease.visitBackend(Boundary::Replay, nullptr,
+              [](void*, D9CDevice*, dxmt9::Device&) noexcept { return true; }),
+          "backend pin alone cannot keep destroyed wrapper/probe authority live");
+  }
+}
+
+// Authored reference provenance is authenticated before effects. Candidate
+// provenance below comes only from the production root and replay callbacks.
+dxmt9::d3d9::CaptureSourceReplayPlanV4 controlledCpuV4ReferencePlan(
+    std::span<const std::byte> tape,
+    const dxmt9::d3d9::render_tape_runtime::GeneralPreflightPlan& general,
+    bool groupingQuery = false) {
+  using namespace dxmt9::d3d9;
+  RenderTapeIdentityV4View identity;
+  identity.header.coordinatorDomain =
+      static_cast<std::uint32_t>(TapeCoordinatorAuthority::OrdinarySerial);
+  identity.header.frameId = 9u;
+  identity.header.captureToken = 100u;
+  identity.header.captureEpoch = 101u;
+  identity.header.presentOrdinal = general.presentOrdinal;
+  identity.header.queue = 102u;
+  identity.header.initializerEpoch = 103u;
+  identity.header.baselineCompletionEdge = 1u;
+  identity.header.baselineKind =
+      static_cast<std::uint32_t>(RenderTapeIdentityV3PrefixKind::EmptyBaseline);
+  RenderTapeExecutionTopologyV1View topology;
+  topology.header.captureToken = identity.header.captureToken;
+  topology.header.captureEpoch = identity.header.captureEpoch;
+  topology.header.queue = identity.header.queue;
+  std::uint64_t edge = 2u, generation = 1u;
+  std::size_t expectedCommands = 0u;
+  for (const auto& event : general.events) {
+    if (event.type != RenderTapeEventType::CommandChunk) continue;
+    const auto ordinal = general.tape.event(event.eventIndex).header.ordinal;
+    const auto raw = 500u + ordinal;
+    const auto& admitted = general.commandChunks[event.index];
+    ImportedChunkView chunk;
+    check(importPrevalidatedCommandChunk(admitted.bytes, admitted.envelope, chunk) &&
+              !chunk.records.empty() && chunk.records.size() <= (groupingQuery ? 5u : 2u) &&
+              std::all_of(chunk.records.begin(), chunk.records.end(), [groupingQuery](const auto& record) {
+                return record.type == D9C_COMMAND_RECORD_CLEAR ||
+                    record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
+                    record.type == D9C_COMMAND_RECORD_PRESENT ||
+                    (groupingQuery && record.type == D9C_COMMAND_RECORD_QUERY_ISSUE);
+              }),
+          "small General reference admits original GPU/coordinator records without selecting candidate cuts");
+    const auto commandCount = static_cast<std::uint32_t>(std::count_if(
+        chunk.records.begin(), chunk.records.end(), [](const auto& record) {
+          return record.type != D9C_COMMAND_RECORD_QUERY_ISSUE;
+        }));
+    expectedCommands += commandCount;
+    const auto begin = edge++, effect = edge++;
+    const auto source = static_cast<std::uint32_t>(identity.sources.size());
+    const auto command = static_cast<std::uint32_t>(identity.commands.size());
+    const auto publication = edge++, acceptance = edge++, submission = edge++, completion = edge++;
+    const auto buildGeneration = generation++;
+    identity.sources.push_back({.lifecycle = {.sourceOrdinal = source + 1u, .seqId = source + 1u,
+        .writerCaptureId = source + 1u, .writerGeneration = 2u, .storageGeneration = 3u,
+        .publicationEdge = publication, .submissionEdge = submission, .completionEdge = completion,
+        .completedSequence = source + 1u, .cutEventOrdinal = ordinal, .commandCount = commandCount,
+        .cutKind = static_cast<std::uint32_t>(RenderTapeIdentityV3CutKind::AfterEvent)},
+        .rawOrdinal = raw, .publicationBuildGeneration = buildGeneration,
+        .publicationControlIndex = source});
+    std::uint32_t physicalCommand = 0u;
+    for (std::uint32_t record = 0u; record < chunk.records.size(); ++record) {
+      const auto type = chunk.records[record].type;
+      if (type == D9C_COMMAND_RECORD_QUERY_ISSUE) {
+        D9CCommandChunkWireQueryIssue issue{};
+        const auto view = chunk.record(record);
+        check(groupingQuery && source == 0u && record == 4u && commandCount == 4u &&
+                  chunk.records.size() == 5u && view.payload.size() == sizeof(issue),
+              "grouping reference retains one final END after four pre-END commands");
+        std::memcpy(&issue, view.payload.data(), sizeof(issue));
+        check(issue.flags == 1u && issue.queryHandleIndex < chunk.handles.size() &&
+                  chunk.handles[issue.queryHandleIndex].kind == D9C_CHUNK_HANDLE_KIND_QUERY,
+              "grouping reference resolves the authenticated EVENT END handle");
+        const auto& handle = chunk.handles[issue.queryHandleIndex];
+        const auto admission = edge++, dispatch = edge++;
+        const auto coordinator = static_cast<std::uint32_t>(identity.coordinators.size());
+        identity.coordinators.push_back({.provenance = {.eventOrdinal = ordinal,
+            .rawOrdinal = raw, .buildGeneration = buildGeneration, .dispatchEdge = dispatch,
+            .queryIdentity = {handle.kind, handle.generation, handle.objectId},
+            .issueCycle = 1u, .issueOrdinal = 1u, .deviceEpoch = 77u,
+            .writerCaptureId = source + 1u, .writerGeneration = 2u, .storageGeneration = 3u,
+            .prefixSequence = source + 1u, .recordIndex = record,
+            .recordType = type, .flags = issue.flags, .queryType = 8u,
+            .prefixKind = static_cast<std::uint32_t>(RenderTapeIdentityV3PrefixKind::RealSource),
+            .sourceIndex = source, .commandEnd = commandCount}, .admissionEdge = admission,
+            .authority = static_cast<std::uint32_t>(TapeCoordinatorAuthority::OrdinarySerial)});
+        identity.dispositions.push_back({.eventOrdinal = ordinal, .firstRecord = record,
+            .recordCount = 1u,
+            .kind = static_cast<std::uint32_t>(RenderTapeIdentityV3DispositionKind::Coordinator),
+            .coordinatorIndex = coordinator});
+        continue;
+      }
+      const bool draw = type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+      identity.commands.push_back({.sourceIndex = source, .physicalCommandIndex = physicalCommand,
+          .kind = static_cast<std::uint32_t>(renderTapeIdentityV3RecordCommandKind(type)), .drawCount = draw ? 1u : 0u});
+      identity.dispositions.push_back({.eventOrdinal = ordinal, .firstRecord = record, .recordCount = 1u,
+          .kind = static_cast<std::uint32_t>(RenderTapeIdentityV3DispositionKind::GpuCommand),
+          .commandIndex = command + physicalCommand, .subdrawCount = draw ? 1u : 0u});
+      topology.placements.push_back({.planIndex = source, .commandIndex = command + physicalCommand,
+          .outcome = static_cast<std::uint32_t>(RenderTapeExecutionTopologyV1Outcome::ExecutedWithoutDag),
+          .executionOrdinal = physicalCommand});
+      ++physicalCommand;
+    }
+    topology.plans.push_back({.planId = source + 11u, .acceptanceEdge = acceptance,
+        .route = static_cast<std::uint32_t>(RenderTapeExecutionTopologyV1Route::NaturalOrder),
+        .firstPlacement = command, .placementCount = commandCount, .executedCount = commandCount});
+    const RenderTapeIdentityV4ReplaySourceIdentity projection{
+        identity.header.frameId, 600u + ordinal, 600u + ordinal, raw};
+    identity.attempts.push_back({.eventOrdinal = ordinal, .rawOrdinal = raw,
+        .attemptGeneration = buildGeneration, .beginEdge = begin, .terminalEdge = edge++,
+        .effectEdge = effect, .identity = projection,
+        .receipt = {.identity = projection, .queueSequence = raw,
+            .kind = static_cast<std::uint32_t>(RenderTapeIdentityV4ReceiptKind::Compatibility),
+            .commandCount = commandCount}, .recordCount = admitted.envelope.recordCount,
+        .outcome = static_cast<std::uint32_t>(RenderTapeIdentityV4AttemptOutcome::Committed),
+        .stagedCommandCount = commandCount});
+    identity.settlements.push_back({ordinal, raw, edge++, admitted.envelope.recordCount});
+  }
+  check(identity.sources.size() == (groupingQuery ? 3u : 2u) &&
+            identity.commands.size() == expectedCommands && identity.initializers.empty() &&
+            identity.coordinators.size() == (groupingQuery ? 1u : 0u),
+        "reference authenticates its original source obligations and optional exact END coordinator");
+  RenderTapeIdentityV4Status identityStatus{};
+  const auto identityBytes = buildRenderTapeIdentityV4(tape, general.catalogue, identity, &identityStatus);
+  check(identityStatus == RenderTapeIdentityV4Status::Valid, "reference identity authenticates original raws");
+  RenderTapeExecutionTopologyV1Status topologyStatus{};
+  const auto topologyBytes = buildRenderTapeExecutionTopologyV1(
+      tape, general.catalogue, identityBytes, topology, &topologyStatus);
+  CaptureSourceReplayPlanV4 source;
+  check(topologyStatus == RenderTapeExecutionTopologyV1Status::Valid &&
+            buildCaptureSourceReplayPlanV4(tape, general.catalogue, identityBytes,
+                topologyBytes, source) == CaptureSourceReplayPlanV4Status::Valid,
+        "cold V4 reference pair authenticates before resource/replay/queue effects");
+  return source;
+}
+
+struct MetalDeviceLease {
+  obj_handle_t handle = NULL_OBJECT_HANDLE;
+  MetalDeviceLease() = default;
+
+  ~MetalDeviceLease() {
+    if (handle != NULL_OBJECT_HANDLE) {
+      dxmt9_test_release_metal_device(handle);
+    }
+  }
+
+  MetalDeviceLease(const MetalDeviceLease&) = delete;
+  MetalDeviceLease& operator=(const MetalDeviceLease&) = delete;
+};
+
+// This small unchanged fixture has no mutation after its seeded prefix. The
+// proof deliberately does not generalize to concurrent in-place buffer writes.
+// All producer-side wrappers/tables are absent from the consumer session.
+struct ControlledCpuV4FixtureOracle {
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Version = dxmt9::test::CpuTapeResourceVersion;
+  using Context = dxmt9::test::CpuTapeResourceContext;
+  using Root = dxmt9::d3d9::RenderTapeRuntimeIdentityV4;
+
+  std::shared_ptr<Root> root;
+  dxmt9::render::TapeTopologyCaptureIdentity capture{};
+  std::shared_ptr<const Context> authenticContext;
+  dxmt9::test::CpuTapeRecordContextStore records{};
+  const bool laterInPlaceMutationExcluded = true;
+  const char* failure = nullptr;
+  std::uint64_t digest = 1469598103934665603ull;
+  std::size_t sources = 0u, successfulSources = 0u, locations = 0u, draws = 0u;
+  std::size_t snapshots = 0u, liveBindings = 0u, bufferProofs = 0u, destroyPendingBufferProofs = 0u;
+  std::size_t mipmaps = 0u;
+  std::vector<dxmt9::render::TapeEmissionRecordLocator> selectedRecords{};
+
+  bool fail(const char* reason) noexcept {
+    if (!failure) failure = reason;
+    return false;
+  }
+
+  void observe(dxmt9::CommandQueue& queue,
+      const dxmt9::core::metalqueue::ReplaySourcePublicationReceipt& publication,
+      const dxmt9::core::metalqueue::SynchronousSourcePayloadBorrow& payload) noexcept {
+    using namespace dxmt9;
+    ++sources;
+    if (failure) return;
+    try {
+      d3d9::RenderTapeRuntimePublishedSourceOriginsV4 origins;
+      if (!root || !authenticContext || !authenticContext->hasSemanticUniqueNativeAuthority() ||
+          !laterInPlaceMutationExcluded ||
+          !root->copyPublishedSourceOrigins(capture, publication, origins) ||
+          origins.commands.size() != payload.commandCount()) {
+        fail("fixture-source-origins-unavailable");
+        return;
+      }
+      for (std::size_t index = 0u; index < payload.commandCount(); ++index) {
+        const auto command = payload.commandAt(index);
+        if (origins.commands[index].physicalCommandIndex != index ||
+            origins.commands[index].kind != render::tapeTopologyCommandKind(command.kind()) ||
+            origins.commands[index].drawCount != command.command.drawParams.size()) {
+          fail("fixture-source-origin-extent-mismatch");
+          return;
+        }
+      }
+      std::vector<bool> selected(origins.origins.size(), false);
+      std::shared_ptr<const Context> context;
+      auto candidateDigest = digest;
+      const auto select = [&](std::size_t command, core::MetalCommandKind kind, std::size_t subdraw) {
+        const auto canonicalKind = render::tapeTopologyCommandKind(kind);
+        const bool draw = kind == core::MetalCommandKind::DrawRun;
+        const d3d9::RenderTapeRuntimePublishedSourceOriginV4* found = nullptr;
+        std::size_t foundIndex = 0u;
+        for (std::size_t index = 0u; index < origins.origins.size(); ++index) {
+          const auto& origin = origins.origins[index];
+          if (origin.physicalCommandIndex != command || origin.kind != canonicalKind ||
+              (draw ? origin.firstSubdraw != subdraw || origin.subdrawCount != 1u
+                    : origin.firstSubdraw || origin.subdrawCount || subdraw != test::kCpuTapeNoSubdraw))
+            continue;
+          if (found) return fail("fixture-ambiguous-source-origin");
+          found = &origin;
+          foundIndex = index;
+        }
+        if (!found || selected[foundIndex]) return fail("fixture-missing-or-reused-source-origin");
+        const auto next = records.lookup(found->record);
+        if (!next) return fail("fixture-missing-record-context");
+        if (!next->hasSemanticUniqueNativeAuthority())
+          return fail("fixture-inventory-context-has-no-semantic-authority");
+        context = next;
+        selected[foundIndex] = true;
+        selectedRecords.push_back(found->record);
+        ++locations;
+        return true;
+      };
+      const auto qualifiedVersion = [&](std::uint32_t kind, core::Handle handle)
+          -> std::shared_ptr<const Version> {
+        const auto version = context ? context->find(kind, handle) : nullptr;
+        const auto authentic = authenticContext->find(kind, handle);
+        if (!version || !authentic || version->nativeKind() != kind ||
+            version->nativeHandle() != handle ||
+            !d3d9::renderTapeIdentityV3SameIdentity(version->identity(), authentic->identity()) ||
+            version->contentEpoch() != authentic->contentEpoch()) {
+          fail("fixture-stale-resource-version-mapping");
+          return {};
+        }
+        return version;
+      };
+      const auto resource = [&](std::uint32_t kind, core::Handle handle, std::uint64_t& hash) {
+        const auto version = qualifiedVersion(kind, handle);
+        return version && test::appendCpuTapeResourceObservation(version->observation(), hash);
+      };
+      const auto observeBuffer = [&](core::Handle handle,
+          const core::DrawBufferBindingSnapshot* snapshot,
+          std::uint64_t& hash, std::uint64_t& revision) {
+        const auto version = qualifiedVersion(D9C_CHUNK_HANDLE_KIND_BUFFER, handle);
+        test::CpuTapeLiveBufferView view{};
+        bool destroyPending = false;
+        if (!version || !Access::copyControlledCpuBufferProofView(queue, handle,
+                publication.metadata.seqId, snapshot, view, destroyPending))
+          return fail("fixture-buffer-physical-view-unavailable");
+        // The genuine borrow pins this source until the fresh arena-locked
+        // comparison returns. A whole-buffer range is valid only because this
+        // fixture excludes later in-place writes; it is not a draw footprint.
+        const auto expected = version->expectedBufferBytes();
+        const std::array ranges{resources::BufferReadProofRange{
+            .byteSize = static_cast<std::uint64_t>(expected.size())}};
+        const auto proof = queue.pool().proveBufferReadFootprint({
+            .buffer = handle,
+            .sourceSequence = publication.metadata.seqId,
+            .completedSequence = queue.queryProgress().completed,
+            .snapshot = snapshot ? std::optional<core::DrawBufferBindingSnapshot>{*snapshot}
+                                 : std::nullopt,
+            .expectedBytes = expected,
+            .ranges = ranges});
+        if (!proof.proved()) return fail("fixture-buffer-physical-bytes-mismatch");
+        // Preserve the serial oracle's FNV byte stream using owned immutable
+        // bytes, never a copied physical address after the arena lock ends.
+        std::uint64_t content = test::detail::kCpuTapeFnvOffset;
+        test::detail::cpuTapeDigestBytes(content, expected.data(), expected.size());
+        test::detail::cpuTapeDigestScalar(hash, view.byteSize);
+        test::detail::cpuTapeDigestScalar(hash, content);
+        revision = view.contentRevision;
+        ++bufferProofs;
+        destroyPendingBufferProofs += destroyPending;
+        return true;
+      };
+      const auto snapshot = [&](core::Handle handle,
+          const core::DrawBufferBindingSnapshot& value, std::uint64_t& hash) {
+        std::uint64_t revision = 0u;
+        return observeBuffer(handle, &value, hash, revision);
+      };
+      const auto live = [&](core::Handle handle, std::uint64_t& hash, std::uint64_t& revision) {
+        return observeBuffer(handle, nullptr, hash, revision);
+      };
+      const auto draw = [&](std::uint64_t) { ++draws; return true; };
+      std::string semanticFailure;
+      if (!test::observeCpuTapePayload(payload, candidateDigest, resource, draw,
+              semanticFailure, &snapshots, snapshot, &liveBindings, live, &mipmaps, select)) {
+        fail("fixture-payload-semantics-incomplete");
+        return;
+      }
+      if (std::any_of(selected.begin(), selected.end(), [](bool value) { return !value; })) {
+        fail("fixture-unvisited-source-origin");
+        return;
+      }
+      digest = candidateDigest;
+      ++successfulSources;
+    } catch (...) {
+      fail("fixture-semantic-observation-allocation");
+    }
+  }
+
+  bool qualified(const dxmt9::test::CpuGeneralTapeExecutionResult& reference) const noexcept {
+    return !failure && sources == 1u && successfulSources == 1u && locations == 2u &&
+        draws == 1u && bufferProofs == 2u && !mipmaps &&
+        snapshots == reference.observedSnapshots && liveBindings == reference.observedLiveBindings &&
+        digest == reference.digest;
+  }
+};
+
+void controlledCpuV4IntegrationUsesObservedReplay() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using ResourceContext = dxmt9::test::CpuTapeResourceContext;
+  using ResourceVersion = dxmt9::test::CpuTapeResourceVersion;
+  using ContextStatus = dxmt9::test::CpuTapeResourceContextStatus;
+  using Clock = std::chrono::steady_clock;
+  enum class Scenario {
+    Complete, MissingRawAckObservation, UnfinishedConsumer, UnacknowledgedJoin,
+    WrongExpectedByte, MissingRecordContext, StaleNativeMapping, StaleIdentityMapping,
+    StaleVersionMapping,
+  };
+  const auto oracleNegative = [](Scenario scenario) {
+    return scenario == Scenario::WrongExpectedByte || scenario == Scenario::MissingRecordContext ||
+        scenario == Scenario::StaleNativeMapping || scenario == Scenario::StaleIdentityMapping ||
+        scenario == Scenario::StaleVersionMapping;
+  };
+  const auto emptyCpuOutput = [](const RenderTapeControlledCpuV4Evidence& output) {
+    check(output.domain == RenderTapeControlledCpuV4Evidence::Domain::None &&
+              !output.controlledCpuComplete && !output.canonicalTraversalComplete &&
+              !output.rawAckCoverageComplete && !output.semanticMappingComplete &&
+              !output.semanticMapping && output.actualIdentity.sources.empty() &&
+              output.actualIdentity.commands.empty() && output.actualIdentity.attempts.empty() &&
+              output.actionWitness == RenderTapeActionWitnessV1{},
+          "rejected controlled finish exposes no partial CPU evidence or witness");
+  };
+  RenderTapeControlledCpuV4Evidence owned;
+  std::shared_ptr<const ResourceContext> ownedContext;
+  std::uint64_t ownedExpectedBytesDigest = 1469598103934665603ull;
+  const auto expectedBytesDigest = [](const ResourceContext& context) {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const auto& version : context.entries())
+      dxmt9::test::detail::cpuGeneralHashBytes(hash, version->expectedBufferBytes());
+    return hash;
+  };
+  {
+    const auto captured = test::makeGeneralCpuDestroyFixture(false, false);
+    std::vector<RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : captured.blobs)
+      blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan general;
+    check(runtime::buildGeneralReplayPlan(captured.tape, blobs, general).complete(),
+          "unchanged seeded destroy fixture passes the production General grammar");
+    const auto source = controlledCpuV4ReferencePlan(captured.tape, general);
+    PresentParameters output{};
+    output.backBufferWidth = general.outputDesc.width;
+    output.backBufferHeight = general.outputDesc.height;
+    output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(general.outputDesc.format);
+    output.backBufferCount = 1u;
+    output.windowed = true;
+    output.deviceWindow = Handle{91};
+    output.presentationInterval = PresentInterval::Immediate;
+    MetalDeviceLease resourceDevice;
+    resourceDevice.handle = dxmt9_test_acquire_metal_device();
+    check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "immutable CPU oracle requires real CPU-visible resource backing, not a GPU result oracle");
+    dxmt9::test::CpuGeneralTapeExecutionResult reference;
+    {
+      RuntimeFixture serial(false, false, false, true,
+          WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+      // The established serial executor is an independent normalized oracle;
+      // its publication schedule is not copied into the V4 candidate below.
+      Executor executor(serial, general, blobs, {.route = ProviderReplayPolicy::Compatibility});
+      reference = executor.run();
+      check(reference.complete && reference.logicalResourceOracleComplete && reference.resetOk &&
+                reference.draws == 1u && reference.sourceSummaryCommands == 2u &&
+                reference.observedSnapshots + reference.observedLiveBindings == 2u,
+            "independent serial execution observes the unchanged fixture's full normalized semantics: failure=" +
+                reference.failure + " failed_event=" + std::to_string(reference.failedEvent) +
+                " complete=" + std::to_string(reference.complete) +
+                " logical_oracle=" + std::to_string(reference.logicalResourceOracleComplete) +
+                " reset=" + std::to_string(reference.resetOk) +
+                " commands=" + std::to_string(reference.commands) +
+                " source_commands=" + std::to_string(reference.sourceSummaryCommands) +
+                " draws=" + std::to_string(reference.draws) +
+                " snapshots=" + std::to_string(reference.observedSnapshots) +
+                " live=" + std::to_string(reference.observedLiveBindings));
+    }
+    for (const auto scenario : {Scenario::Complete, Scenario::MissingRawAckObservation,
+                               Scenario::UnfinishedConsumer, Scenario::UnacknowledgedJoin,
+                               Scenario::WrongExpectedByte, Scenario::MissingRecordContext,
+                               Scenario::StaleNativeMapping, Scenario::StaleIdentityMapping,
+                               Scenario::StaleVersionMapping}) {
+      RuntimeFixture fixture(false, false, false, true,
+          WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+      struct Owners {
+        std::vector<runtime::OwnedObject> values{};
+        ~Owners() { for (auto& value : values) runtime::releaseOwnedObject(value); }
+      } objects;
+      objects.values.reserve(general.definitions.size());
+      std::vector<dxmt9::test::detail::LogicalReceipt> logicalReceipts;
+      Executor normalizer(fixture, general, blobs);
+      RenderTapeExecutionV4Evidence evidence;
+      RenderTapeExecutionV4 execution;
+      check(execution.admit(source, general, captured.tape, evidence,
+                RenderTapeExecutionV4PublicationMode::SemanticMapping,
+                RenderTapeExecutionV4ProducerContract::None) &&
+                execution.snapshotPrefixEvents() == 8u,
+            "controlled gate admits exact immutable input before real setup effects");
+      for (const auto& definition : general.definitions) {
+        auto* value = runtime::createRenderTapeObject(fixture.cDevice.get(), definition.fixed,
+            definition.descriptor, blobs, objects.values);
+        check(value != nullptr, "prefix acquires each real provider object exactly once");
+        objects.values.push_back({definition.fixed.identity, value});
+      }
+      check(general.mutations.size() == 2u, "original prefix contains both authenticated buffer seeds");
+      for (const auto& mutation : general.mutations) {
+        const auto* blob = dxmt9::test::detail::cpuGeneralFindBlob(blobs, mutation.digest);
+        auto* buffer = static_cast<D9CBuffer*>(runtime::findExactObject(objects.values, mutation.identity));
+        RenderTapeBufferMutationReplayPlan plan{};
+        void* bits = nullptr;
+        check(blob && buffer && blob->bytes.size() == mutation.byteSize &&
+                  renderTapeBufferMutationReplayPlan(mutation, plan) &&
+                  dxmt9c_buffer_lock(buffer, plan.byteOffset, plan.byteSize, &bits,
+                      plan.lockFlags) == D3D_OK && bits,
+              "authenticated buffer seed enters the actual provider lock path");
+        std::memcpy(bits, blob->bytes.data(), blob->bytes.size());
+        check(dxmt9c_buffer_unlock(buffer) == D3D_OK,
+              "actual provider unlock completes the promised prefix seed");
+        dxmt9::test::detail::cpuGeneralRecordReceipt(logicalReceipts,
+            mutation.identity, mutation.subresource, mutation.digest);
+      }
+      // Bootstrap refers to later definitions. Complete its real state replay
+      // after those owners/seeds exist, before arm or prefix acknowledgment.
+      for (const auto& chunk : general.bootstrapChunks) {
+        std::vector<void*> resolved(chunk.envelope.handleCount);
+        std::size_t count = 0u;
+        check(runtime::resolveCommandHandles(chunk, objects.values, resolved, count) &&
+                  replayPrevalidatedResolvedCommandChunk(fixture.cDevice.get(), chunk.bytes,
+                      chunk.envelope, std::span<void* const>(resolved.data(), count),
+                      ProviderReplayPolicy::Compatibility) == D3D_OK,
+              "real bootstrap resolves its complete resource closure before arm");
+      }
+      check(general.bootstrapChunks.size() == 1u && !fixture.routing->drawCalls &&
+                !fixture.routing->presentCalls && !Access::writingCommandCount(fixture.routing->queue_) &&
+                !Access::readyCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_),
+            "completed prefix emits no interval source or synthetic publication");
+      check(std::none_of(general.events.begin(), general.events.end(), [&](const auto& event) {
+                return event.eventIndex >= execution.snapshotPrefixEvents() &&
+                    event.type == RenderTapeEventType::ResourceMutation;
+              }),
+          "physical fixture proof explicitly excludes every later in-place mutation");
+      const auto freezeActiveResources = [&] {
+        std::vector<std::shared_ptr<const ResourceVersion>> versions;
+        for (const auto& object : objects.values) {
+          if (!object.value) continue;
+          dxmt9::core::Handle native{};
+          const D9CBuffer* buffer = nullptr;
+          if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+            buffer = static_cast<const D9CBuffer*>(object.value);
+            if (buffer->obj) native = buffer->obj->handle();
+          } else if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+            const auto* surface = static_cast<const D9CSurface*>(object.value);
+            if (surface->obj) native = surface->obj->handle();
+          } else if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+            const auto* texture = static_cast<const D9CTexture*>(object.value);
+            if (texture->obj) native = texture->obj->handle();
+          } else continue;
+          dxmt9::test::CpuTapeResourceObservation observation;
+          check(native && normalizer.captureResourceObservation(objects.values, logicalReceipts, {},
+                    object.identity.kind, native, observation),
+              "producer captures admitted normalization from the actual still-owned wrapper");
+          std::uint64_t epoch = 1u;
+          for (const auto& receipt : observation.receipts()) epoch = std::max(epoch, receipt.revision);
+          const dxmt9::test::CpuTapeResourceVersionInput input{
+              .nativeKind = object.identity.kind, .nativeHandle = native, .contentEpoch = epoch,
+              .expectedBufferByteSize = buffer ? buffer->desc.size : 0u,
+              .expectedBufferBytes = buffer ? buffer->obj->bytes() : std::span<const std::uint8_t>{}};
+          std::shared_ptr<const ResourceVersion> version;
+          check(dxmt9::test::buildCpuTapeResourceVersion(input, observation, version) == ContextStatus::Accepted,
+              "producer freezes complete CPU expected bytes and normalized facts into an immutable version");
+          versions.push_back(std::move(version));
+        }
+        std::shared_ptr<const ResourceContext> context;
+        check(dxmt9::test::buildCpuTapeResourceContext(versions, context) == ContextStatus::Accepted,
+            "original record context owns only immutable value versions, never producer wrapper tables");
+        return context;
+      };
+      const auto authenticContext = freezeActiveResources();
+      for (std::uint32_t index = 0u; index < execution.snapshotPrefixEvents(); ++index)
+        check(execution.beginEvent(index) && execution.replayedEvent(index),
+              "original prefix cursor acknowledges already-completed real setup effects");
+      auto capability = fixture.issueControlledCpuCapability();
+      check(execution.armControlledCpu(fixture.cDevice.get(), capability) && evidence.armed &&
+                evidence.localArm.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+                evidence.localArm.version == 4u && evidence.localArm.captureToken &&
+                evidence.localArm.captureEpoch && evidence.localArm.queue,
+            "real isolated fixture arm creates the candidate-local Bound root");
+      const auto deadline = Clock::now() + std::chrono::seconds(10);
+      for (unsigned dimension = 0u; dimension < 5u; ++dimension) {
+        auto foreign = evidence.localArm;
+        switch (dimension) {
+        case 0u: ++foreign.captureToken; break;
+        case 1u: ++foreign.captureEpoch; break;
+        case 2u: ++foreign.queue; break;
+        case 3u: ++foreign.version; break;
+        case 4u: foreign.status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED; break;
+        }
+        check(!fixture.makeControlledCpuConsumer(capability, foreign, {}, deadline),
+              "adapter rejects each mismatched genuine localArm dimension before registration");
+      }
+      // Destruction joins this handle before capability revocation or owner
+      // release, including stack unwinding after any failed assertion.
+      auto oracle = std::make_shared<ControlledCpuV4FixtureOracle>();
+      oracle->root = acquireRenderTapeRuntimeIdentityV4(fixture.cDevice.get());
+      oracle->capture = {evidence.localArm.captureToken, evidence.localArm.captureEpoch, evidence.localArm.queue};
+      oracle->authenticContext = authenticContext;
+      check(oracle->root != nullptr, "consumer session retains the actual local Bound root before start");
+      auto handle = fixture.makeControlledCpuConsumer(capability, evidence.localArm, {}, deadline,
+          [oracle](auto& queue, const auto& publication, const auto& payload) noexcept {
+            oracle->observe(queue, publication, payload);
+          });
+      check(handle && handle->start(), "real localArm factory starts consumer before Compatibility replay");
+      std::size_t publicationCursor = 0u;
+      std::vector<dxmt9::core::metalqueue::ReplaySourcePublicationReceipt> publications;
+      for (const auto& event : general.events) {
+        if (event.eventIndex < execution.snapshotPrefixEvents()) continue;
+        check(execution.beginEvent(event.eventIndex), "original interval event starts exactly once");
+        if (event.type == RenderTapeEventType::CommandChunk) {
+          const auto& chunk = general.commandChunks[event.index];
+          ImportedChunkView imported;
+          check(importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported),
+                "original raw remains unchanged after cold admission");
+          const bool present = imported.records[0].type == D9C_COMMAND_RECORD_PRESENT;
+          auto context = freezeActiveResources();
+          if (!present && oracleNegative(scenario) && scenario != Scenario::MissingRecordContext) {
+            std::vector<std::shared_ptr<const ResourceVersion>> versions(context->entries().begin(),
+                context->entries().end());
+            const auto target = std::find_if(versions.begin(), versions.end(), [&](const auto& version) {
+              return renderTapeIdentityV3SameIdentity(version->identity(),
+                  test::general_cpu_destroy_fixture_detail::kVertexBuffer);
+            });
+            check(target != versions.end(), "negative changes exactly one previously authenticated buffer version");
+            auto observation = (*target)->observation();
+            const auto expected = (*target)->expectedBufferBytes();
+            std::vector<std::uint8_t> bytes(expected.begin(), expected.end());
+            dxmt9::test::CpuTapeResourceVersionInput input{
+                .nativeKind = (*target)->nativeKind(), .nativeHandle = (*target)->nativeHandle(),
+                .contentEpoch = (*target)->contentEpoch(), .expectedBufferByteSize = bytes.size(),
+                .expectedBufferBytes = bytes};
+            if (scenario == Scenario::WrongExpectedByte) {
+              check(!bytes.empty(), "wrong-byte negative targets an owned complete nonempty extent");
+              bytes[0] ^= 1u;
+            } else if (scenario == Scenario::StaleNativeMapping) {
+              input.nativeHandle.value ^= std::uint64_t{1u} << 63u;
+            } else if (scenario == Scenario::StaleVersionMapping) {
+              ++input.contentEpoch;
+            } else {
+              check(scenario == Scenario::StaleIdentityMapping, "remaining negative changes identity only");
+              auto identity = observation.identity();
+              ++identity.generation;
+              const dxmt9::test::CpuTapeResourceObservationInput stale{
+                  .identity = identity, .contentIdentity = identity, .receipts = observation.receipts()};
+              check(dxmt9::test::buildCpuTapeResourceObservation(stale, observation) ==
+                        dxmt9::test::CpuTapeResourceObservationStatus::Accepted,
+                  "stale identity is an internally valid normalization, not producer acquisition authority");
+            }
+            std::shared_ptr<const ResourceVersion> wrong;
+            check(dxmt9::test::buildCpuTapeResourceVersion(input, observation, wrong) == ContextStatus::Accepted,
+                "negative immutable version remains well-formed without proving authentic record binding");
+            *target = std::move(wrong);
+            check(dxmt9::test::buildCpuTapeResourceContext(versions, context) == ContextStatus::Accepted,
+                "negative context is separately owned and cannot mutate the authentic frozen versions");
+          }
+          if (present || scenario != Scenario::MissingRecordContext) {
+            for (std::uint32_t record = 0u; record < imported.records.size(); ++record)
+              check(oracle->records.bind({general.tape.event(event.eventIndex).header.ordinal, record}, context) ==
+                        ContextStatus::Accepted,
+                  "every original canonical locator binds its immutable context before dispatch/publication");
+          }
+          if (present) {
+            const auto writing = Access::writingContinuation(fixture.routing->queue_);
+            check(writing && writing->commandCount == 1u &&
+                      execution.ownsWritingContinuation({writing->writer, writing->source,
+                          writing->commandCount}),
+                  "actual root owns draw continuation across both original destroy events");
+            check(!runtime::findExactObject(objects.values, test::general_cpu_destroy_fixture_detail::kVertexBuffer) &&
+                      !runtime::findExactObject(objects.values, test::general_cpu_destroy_fixture_detail::kIndexBuffer) &&
+                      authenticContext->entries().size() == 3u && context->entries().size() == 1u,
+                "frozen draw versions retain expected bytes after both original wrapper destroys before natural Present");
+            auto wrong = RenderTapeExecutionV4::WritingContinuation{
+                writing->writer, writing->source, writing->commandCount};
+            ++wrong.writer.generation;
+            check(!execution.ownsWritingContinuation(wrong) && !execution.failed(),
+                  "nonmatching continuation cannot borrow actual unpublished provenance");
+          }
+          std::vector<void*> resolved(chunk.envelope.handleCount);
+          std::size_t count = 0u;
+          check(runtime::resolveCommandHandles(chunk, objects.values, resolved, count) &&
+                    execution.bindCommandChunk(chunk.bytes, chunk.envelope,
+                        std::span<void* const>(resolved.data(), count)),
+                "exact command bytes and acquired wrappers bind before observation");
+          auto observation = execution.observation();
+          if (present && scenario == Scenario::MissingRawAckObservation)
+            observation.rawSettled = nullptr;
+          ProviderReplayObservationV4Result result;
+          check(replayPrevalidatedResolvedCommandChunkObservedV4(fixture.cDevice.get(),
+                    chunk.bytes, chunk.envelope, std::span<void* const>(resolved.data(), count),
+                    ProviderReplayPolicy::Compatibility, observation, result) == D3D_OK &&
+                    result.captureAccepted && result.qualificationSucceeded &&
+                    result.ledgerSettlementObserved && result.localRawOrdinal && !execution.failed(),
+                "genuine Compatibility dispatch supplies actual root coverage and renderer raw ACK");
+          check(execution.publishedSources(publicationCursor, publications),
+                "outside-lock pull obtains genuine candidate publication receipts");
+          if (!present) {
+            check(publications.empty() && !Access::readyCount(fixture.routing->queue_) &&
+                      Access::writingCommandCount(fixture.routing->queue_) == 1u &&
+                      evidence.acknowledgedRaws == 1u,
+                  "indexed draw ACK leaves an unpublished writer without forcing the captured cut");
+          } else {
+            check(publications.size() == 1u && publications[0].hasPresent &&
+                      publications[0].source.valid() && publications[0].metadata.valid(),
+                  "original Present naturally publishes one combined candidate source");
+            if (scenario == Scenario::MissingRawAckObservation) {
+              check(evidence.acknowledgedRaws == 1u,
+                    "renderer ACK without executor settlement callback cannot acknowledge the original raw");
+              break; // Original PresentComplete cannot follow an unacknowledged raw.
+            }
+          }
+        } else {
+          if (event.type == RenderTapeEventType::ObjectDestroy) {
+            const auto& identity = general.destroys[event.index].identity;
+            const auto owner = std::find_if(objects.values.begin(), objects.values.end(),
+                [&](const auto& value) { return renderTapeIdentityV3SameIdentity(value.identity, identity); });
+            check(owner != objects.values.end() && owner->value,
+                  "original destroy locates exactly one still-owned provider wrapper");
+            runtime::releaseOwnedObject(*owner);
+            check(!runtime::findExactObject(objects.values, identity),
+                  "actual destroy releases acquisition while identity remains bookkeeping only");
+          } else {
+            check(event.type == RenderTapeEventType::PresentComplete,
+                  "minimal interval has no unimplemented resource/query/control events");
+          }
+          check(execution.replayedEvent(event.eventIndex), "noncommand event acknowledges its actual effect");
+        }
+      }
+      check(publications.size() == 1u, "one natural publication supplies the exact retirement target");
+      const auto& publication = publications[0];
+      const dxmt9::test::CpuV4ConsumerIdentity target{
+          .queue = evidence.localArm.queue, .captureToken = evidence.localArm.captureToken,
+          .captureEpoch = evidence.localArm.captureEpoch, .sequence = publication.metadata.seqId,
+          .sourceIndex = publication.source.id.index, .sourceGeneration = publication.source.id.generation,
+          .storageFirstPage = publication.source.storage.firstPage,
+          .storagePageCount = publication.source.storage.pageCount,
+          .storageGeneration = publication.source.storage.generation};
+      check(handle->consumer->waitThrough(target, deadline),
+            "actual publication target retires through exact submit/acknowledge/FIFO finish");
+      RenderTapeControlledCpuV4Evidence cpu;
+      if (scenario == Scenario::UnfinishedConsumer) {
+        check(!execution.finishControlledCpu(capability, cpu) && execution.failed(),
+              "fully retired sources cannot finalize while producer/consumer remain open and unjoined");
+        emptyCpuOutput(cpu);
+      }
+      check(fixture.closeControlledCpuProducer() && handle->consumer->closeProducer() &&
+                handle->consumer->stopAndJoin(),
+            "producer closes and actual consumer stops/joins without extra publication");
+      if (scenario == Scenario::UnacknowledgedJoin) {
+        check(!execution.finishControlledCpu(capability, cpu) && execution.failed(),
+              "worker join without fixture handle acknowledgment cannot finalize controlled authority");
+        emptyCpuOutput(cpu);
+      }
+      handle->join();
+      const auto receipts = handle->consumer->takeReceipts();
+      const auto consumer = handle->consumer->snapshot();
+      const auto actual = handle->backendState->snapshot();
+      check(receipts.size() == 1u && receipts[0].observation &&
+                receipts[0].observation->identity == target && receipts[0].submitted &&
+                receipts[0].acknowledged && receipts[0].retired && receipts[0].cleanupComplete &&
+                receipts[0].observation->commands.size() == 2u &&
+                receipts[0].observation->commands[0].kind ==
+                    static_cast<std::uint32_t>(MetalCommandKind::DrawRun) &&
+                receipts[0].observation->commands[0].drawCount == 1u &&
+                receipts[0].observation->commands[1].kind ==
+                    static_cast<std::uint32_t>(MetalCommandKind::Present) &&
+                !receipts[0].observation->commands[1].drawCount &&
+                consumer.workerExited && consumer.cleanupComplete && !consumer.cleanupFailed &&
+                consumer.state.retired == 1u && consumer.state.commands == 2u &&
+                actual.observedOutsideQueueMutex && actual.borrowReleased && !actual.queueQuarantined &&
+                actual.phase == Access::ControlledCpuActualPhase::Retired,
+            "owned consumer metadata conserves the genuine grouped draw/Present source and retirement");
+      check(!consumer.payloadDigestPresent && !consumer.fullSemanticOracleComplete &&
+                !consumer.actualMetal && !consumer.gpuResultOracle && !consumer.policyQualified &&
+                !consumer.timingEligible && !Access::residentCount(fixture.routing->queue_) &&
+                !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+            "metadata retirement is not an immutable resource/GPU/policy/timing oracle or queue poison");
+      const bool oracleComplete = oracle->qualified(reference);
+      if (oracleNegative(scenario)) {
+        check(!oracleComplete && oracle->failure && oracle->sources == 1u && !oracle->successfulSources,
+            "authentic metadata retirement alone cannot qualify a failed immutable resource oracle");
+        const char* expectedFailure = scenario == Scenario::WrongExpectedByte
+            ? "fixture-buffer-physical-bytes-mismatch"
+            : scenario == Scenario::MissingRecordContext
+                ? "fixture-missing-record-context" : "fixture-stale-resource-version-mapping";
+        check(std::strcmp(oracle->failure, expectedFailure) == 0,
+            "each negative is detected at its intended context/version/actual-byte boundary");
+      } else {
+        check(oracleComplete && oracle->records.size() == 2u && oracle->selectedRecords.size() == 2u &&
+                  oracle->selectedRecords[0] == dxmt9::render::TapeEmissionRecordLocator{9u, 0u} &&
+                  oracle->selectedRecords[1] == dxmt9::render::TapeEmissionRecordLocator{12u, 0u},
+            "real grouped source origins select the original Draw/Present immutable contexts and match serial semantics: failure=" +
+                std::string(oracle->failure ? oracle->failure : "none") +
+                " scenario=" + std::to_string(static_cast<unsigned>(scenario)) +
+                " sources=" + std::to_string(oracle->sources) +
+                " successful_sources=" + std::to_string(oracle->successfulSources) +
+                " locations=" + std::to_string(oracle->locations) +
+                " draws=" + std::to_string(oracle->draws) +
+                " byte_proofs=" + std::to_string(oracle->bufferProofs) +
+                " snapshots=" + std::to_string(oracle->snapshots) +
+                " live=" + std::to_string(oracle->liveBindings) +
+                " digest=" + std::to_string(oracle->digest) +
+                " reference_digest=" + std::to_string(reference.digest));
+      }
+      if (scenario == Scenario::Complete) {
+        check(oracleComplete && execution.finishControlledCpu(capability, cpu) && !execution.failed() &&
+                  cpu.domain == RenderTapeControlledCpuV4Evidence::Domain::ControlledCpu &&
+                  cpu.controlledCpuComplete && cpu.canonicalTraversalComplete &&
+                  cpu.rawAckCoverageComplete && cpu.semanticMappingComplete &&
+                  cpu.planDigest == source.digest() && cpu.sourceObligationsRegistered == 2u &&
+                  cpu.sourceObligationsQualified == 2u && cpu.semanticMapping && cpu.semanticMapping->valid(),
+              "real arm/replay/join finalizes separate owned CPU provenance and semantic correspondence");
+        check(cpu.actualIdentity.sources.size() == 1u && cpu.actualIdentity.commands.size() == 2u &&
+                  cpu.actualIdentity.settlements.size() == 2u && cpu.actualIdentity.attempts.size() == 2u &&
+                  cpu.semanticMapping->records().size() == 2u && cpu.semanticMapping->sources().size() == 2u &&
+                  cpu.semanticMapping->obligations().size() == 2u,
+              "two original reference sources map to one genuinely published candidate source");
+        for (std::uint32_t index = 0u; index < 2u; ++index) {
+          const auto& relation = cpu.semanticMapping->sources()[index];
+          check(relation.capturedIndex == index && relation.candidateIndex == 0u &&
+                    relation.recordCount == 1u && !relation.coordinatorCommandCount &&
+                    relation.candidateSequence == target.sequence &&
+                    cpu.semanticMapping->obligations()[index].sourceRelationCount == 1u,
+                "each original publication obligation is discharged by its actual contributing record");
+          check(cpu.actualIdentity.attempts[index].receipt.kind ==
+                    static_cast<std::uint32_t>(RenderTapeIdentityV4ReceiptKind::Compatibility),
+                "actual provenance witnesses Compatibility rather than test-authored candidate routing");
+        }
+        check(renderTapeActionWitnessV1MatchesBinding(cpu.actionWitness, evidence.localArm.captureToken,
+                  evidence.localArm.captureEpoch, evidence.localArm.queue) &&
+                  renderTapeActionWitnessV1StableExact(cpu.actionWitness) &&
+                  !acquireRenderTapeRuntimeIdentityV4(fixture.cDevice.get()) &&
+                  !fixture.cDevice->renderTapeRuntimeBindingV4 &&
+                  !fixture.routing->queue_.acquireTapeRuntimeCapture(),
+              "real stable construction Exact witness is owned after exact binding detachment");
+        owned = std::move(cpu);
+        ownedContext = authenticContext;
+        ownedExpectedBytesDigest = expectedBytesDigest(*ownedContext);
+      } else {
+        if (scenario == Scenario::MissingRawAckObservation) {
+          check(!execution.finishControlledCpu(capability, cpu) && execution.failed(),
+                "missing executor raw ACK fails original traversal even after genuine consumer join");
+          emptyCpuOutput(cpu);
+        }
+        if (oracleNegative(scenario)) {
+          check(execution.finishControlledCpu(capability, cpu) && cpu.controlledCpuComplete &&
+                    cpu.semanticMappingComplete && !oracleComplete,
+              "CPU metadata/provenance can finish honestly while independent full-fixture semantic qualification rejects");
+        }
+        execution.cancel();
+      }
+      check(!evidence.complete && !evidence.actualLifecycleComplete && !evidence.actualTopologyComplete &&
+                !evidence.semanticMappingComplete && !evidence.semanticMapping && evidence.qualifierOnly &&
+                !evidence.policyQualified && !evidence.queryReadinessQualified && !evidence.pixelsQualified &&
+                !evidence.timingEligible && !evidence.presentPreparationAttempted,
+            "CPU gate never promotes production GPU/topology/full-resource/pixel/timing evidence");
+    }
+  }
+  check(owned.controlledCpuComplete && owned.actualIdentity.sources.size() == 1u &&
+            owned.semanticMapping && owned.semanticMapping->valid() &&
+            owned.semanticMapping->records().size() == 2u &&
+            renderTapeActionWitnessV1StableExact(owned.actionWitness),
+        "successful CPU mapping/provenance/witness outlive fixture, blobs and authenticated input owners");
+  check(ownedContext && ownedContext->entries().size() == 3u &&
+            expectedBytesDigest(*ownedContext) == ownedExpectedBytesDigest &&
+            std::count_if(ownedContext->entries().begin(), ownedContext->entries().end(), [](const auto& version) {
+              return version->nativeKind() == D9C_CHUNK_HANDLE_KIND_BUFFER &&
+                  !version->expectedBufferBytes().empty() && version->observation().receipts().size() == 1u;
+            }) == 2u,
+      "immutable CPU seed versions/receipts survive wrapper destruction, fixture teardown and original input owners");
+}
+
+// Exercise the executor entrypoint itself on the unchanged small fixture.
+// This is metadata/resource-version inventory, not capture29, a source-cut
+// equivalence claim, or the independent full semantic oracle above.
+void controlledCpuV4ExecutorInventoriesOriginalTape() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  const auto captured = test::makeGeneralCpuDestroyFixture(false, false);
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  check(preflight.complete(), std::string("controlled executor fixture preflight: status=") +
+      frameTapeReplayStatusName(preflight.status) + " failed_event=" + std::to_string(preflight.failedEventIndex));
+  const auto source = controlledCpuV4ReferencePlan(captured.tape, general);
+  std::vector<dxmt9::render::TapeEmissionRecordLocator> originalRecords;
+  for (const auto& event : general.events)
+    if (event.type == RenderTapeEventType::CommandChunk)
+      originalRecords.push_back({general.tape.event(event.eventIndex).header.ordinal, 0u});
+  check(general.events.size() == 13u && general.definitions.size() == 5u && general.mutations.size() == 2u &&
+            general.destroys.size() == 2u && originalRecords.size() == 2u,
+        "direct executor spec retains the original seed, Draw, both destroys and terminal Present events");
+
+  PresentParameters output{};
+  output.backBufferWidth = general.outputDesc.width;
+  output.backBufferHeight = general.outputDesc.height;
+  output.backBufferFormat = devicec::fmtFromD3D(general.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "direct controlled executor inventory requires genuine CPU-visible buffer backing");
+  RuntimeFixture fixture(false, false, false, true,
+      WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+  fixture.routing->recordBoundedCapturedBindings = false;
+  Executor executor(fixture, general, blobs);
+  Executor::ControlledV4InventoryOptions options;
+  options.sourcePlan = &source;
+  options.exactTape = captured.tape;
+  options.expectedBufferBudget = {1024u * 1024u};
+  options.consumerLimits = {.maxSources = 8u, .maxCommands = 8u, .maxLifecycleActions = 32u};
+  options.initialSetupLimits = {.maxObjects = 8u, .maxSeeds = 8u,
+      .maxSeedBytes = 1024u * 1024u, .maxAllocationBytes = 1024u * 1024u};
+  options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  options.maxQueryOraclePolls = 0u;
+  const auto result = executor.runControlledV4Inventory(options);
+  const auto& consumer = result.consumer;
+  const auto& state = consumer.state;
+  const auto& provenance = result.provenance;
+  const auto& cpu = result.controlledCpu;
+  check(result.complete && result.metadataInventoryComplete && result.sourceProgressComplete && result.resetOk &&
+            result.runtimeBudgetedAttempt && result.failure.empty(),
+        "actual controlled executor completes owned metadata inventory: failure=" + result.failure +
+            " failed_event=" + std::to_string(result.failedEvent) + " events=" + std::to_string(result.events) +
+            " commands=" + std::to_string(result.commands) + " draws=" + std::to_string(result.draws) +
+            " raw_acks=" + std::to_string(provenance.acknowledgedRaws) + " retired=" + std::to_string(state.retired) +
+            " consumer_failure=" + std::to_string(static_cast<unsigned>(consumer.failure)) +
+            " reset=" + std::to_string(result.resetOk));
+  check(result.inputAdmission.accepted() && !result.inputAdmission.counts().queryIssues &&
+            result.events == general.events.size() && result.commands == 3u && result.draws == 1u &&
+            result.resourcesCreated == general.definitions.size() && result.resourcesReleased == result.resourcesCreated &&
+            result.observedMutations == general.mutations.size() && !result.observedTextureUploads &&
+            result.recordContexts == 2u && !result.setupSubmissions && !result.setupAcknowledgements &&
+            result.bufferVersionsObserved == 2u && !result.bufferVersionsUnavailable &&
+            !result.resourceVersionFailure && result.initialSetup.hostCheckpointJoined && !result.initialSetup.owners,
+        "executor counters come from original events, genuine object/seed effects and producer version observations");
+  check(provenance.requested && provenance.validated && provenance.armed && provenance.actualAttemptsObserved &&
+            provenance.canonicalTraversalComplete && provenance.rawAckCoverageComplete &&
+            provenance.replayedEvents == 13u && provenance.dispatchedRecords == 2u && provenance.acknowledgedRaws == 2u &&
+            cpu.domain == RenderTapeControlledCpuV4Evidence::Domain::ControlledCpu && cpu.controlledCpuComplete &&
+            cpu.canonicalTraversalComplete && cpu.rawAckCoverageComplete && cpu.semanticMappingComplete &&
+            cpu.planDigest == source.digest() && cpu.sourceObligationsRegistered == 2u && cpu.sourceObligationsQualified == 2u &&
+            cpu.semanticMapping && cpu.semanticMapping->valid() && cpu.semanticMapping->records().size() == 2u &&
+            cpu.actualIdentity.sources.size() == 1u && cpu.actualIdentity.commands.size() == 2u &&
+            cpu.actualIdentity.attempts.size() == 2u && cpu.actualIdentity.settlements.size() == 2u &&
+            renderTapeActionWitnessV1StableExact(cpu.actionWitness),
+        "executor authenticates original traversal/raw ACKs and the natural grouped candidate's separate CPU provenance");
+  check(state.phase == dxmt9::test::CpuV4ConsumerPhase::Stopped && state.producerClosed &&
+            state.sourcePhase == dxmt9::test::CpuV4ConsumerSourcePhase::Empty &&
+            state.limits == options.consumerLimits && state.observed == 1u && state.submitted == 1u &&
+            state.acknowledged == 1u && state.retired == 1u && state.commands == 2u && state.lifecycleActions == 4u &&
+            consumer.failure == dxmt9::test::CpuV4ConsumerFailure::None && consumer.workerExited &&
+            consumer.cleanupComplete && !consumer.cleanupFailed && consumer.receipts == 1u &&
+            result.consumerReceipts.size() == 1u && result.inventory.size() == 1u &&
+            result.consumerReceipts[0].submitted && result.consumerReceipts[0].acknowledged &&
+            result.consumerReceipts[0].retired && result.consumerReceipts[0].cleanupComplete &&
+            result.consumerReceipts[0].observation && result.consumerReceipts[0].observation->commands.size() == 2u,
+        "executor's real consumer observes, submits, acknowledges, retires, cleans up and joins within explicit bounds");
+  const auto& inventory = result.inventory[0];
+  check(inventory.commands.size() == 2u && inventory.origins.size() == 2u && inventory.draws.size() == 1u &&
+            inventory.origins[0].origin.record == originalRecords[0] &&
+            inventory.origins[1].origin.record == originalRecords[1] &&
+            inventory.origins[0].context && inventory.origins[0].context->entries().size() == 3u &&
+            inventory.origins[1].context && inventory.origins[1].context->entries().size() == 1u &&
+            inventory.draws[0].record == originalRecords[0] && inventory.draws[0].parameters.indexed &&
+            inventory.draws[0].parameters.primitiveCount == 1u && inventory.draws[0].streamMask == 1u &&
+            inventory.draws[0].streamStrides[0] == 28u && inventory.draws[0].indexBuffer &&
+            !inventory.draws[0].userVertexBytes && !inventory.draws[0].userIndexBytes &&
+            result.canonicalDrawRecords.size() == 1u && result.canonicalDrawRecords[0].record == originalRecords[0],
+        "owned inventory maps the actual grouped payload to unchanged Draw/Present records and immutable versions after both destroys");
+  ImportedChunkView originalDraw;
+  check(importPrevalidatedCommandChunk(general.commandChunks[0].bytes, general.commandChunks[0].envelope, originalDraw),
+        "canonical draw body remains importable after executor reset");
+  const auto originalPayload = originalDraw.record(0u).payload;
+  check(result.canonicalDrawRecords[0].payload.size() == originalPayload.size() &&
+            std::equal(originalPayload.begin(), originalPayload.end(), result.canonicalDrawRecords[0].payload.begin()) &&
+            result.expectedBufferBudget.maxRetainedExpectedBufferBytes == options.expectedBufferBudget.maxRetainedExpectedBufferBytes &&
+            result.expectedBufferBudget.highWaterExpectedBufferBytes == 90u &&
+            result.expectedBufferBudget.chargedExpectedBufferBytes == 90u,
+        "executor owns exact original Draw bytes and charges the actual 84-byte vertex plus 6-byte index seed versions");
+  check(!result.fullSemanticOracleComplete && !result.actualMetal && !result.gpuResultOracle &&
+            !result.policyQualified && !result.timingEligible && !consumer.payloadDigestPresent &&
+            !consumer.fullSemanticOracleComplete && !consumer.actualMetal && !consumer.gpuResultOracle &&
+            !consumer.policyQualified && !consumer.timingEligible && !result.queryReplay.present &&
+            !result.queryReplay.actualMetal && !result.queryReplay.gpuResultOracle &&
+            !provenance.complete && !provenance.actualLifecycleComplete && !provenance.actualTopologyComplete &&
+            !provenance.semanticMappingComplete && !provenance.semanticMapping && provenance.qualifierOnly &&
+            !provenance.policyQualified && !provenance.queryReadinessQualified && !provenance.pixelsQualified &&
+            !provenance.timingEligible && !provenance.presentPreparationAttempted &&
+            !fixture.cDevice && !fixture.device && !fixture.factory &&
+            !Access::readyCount(fixture.routing->queue_) && !Access::pendingCompletionCount(fixture.routing->queue_) &&
+            !Access::writingCommandCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+            !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+        "completed metadata inventory resets the real fixture without full semantics, production GPU/topology/pixels/policy/timing authority");
+  std::cout << "controlled CPU V4 executor spec passed: events=" << result.events << " commands=" << result.commands
+            << " draws=" << result.draws << " raw_acks=" << provenance.acknowledgedRaws
+            << " retired=" << state.retired << " resources_created=" << result.resourcesCreated
+            << " resources_released=" << result.resourcesReleased << " record_contexts=" << result.recordContexts << '\n';
+}
+
+dxmt9::d3d9::test::GeneralCpuDestroyFixture controlledCpuV4PePresentTape(bool clearBeforeDraw = false) {
+  using namespace dxmt9::d3d9;
+  auto fixture = test::makeGeneralCpuDestroyFixture(false, false);
+  ImportedRenderTapeView original;
+  check(importPrevalidatedRenderTape(fixture.tape, original), "authored PE Present seed tape imports");
+  // Dedicated authored input: two adjacent authentic raws are the producer
+  // contract's prerequisite. The existing destroy fixture stays unchanged.
+  RenderTapeBuilder builder;
+  std::uint64_t nextOrdinal = 1u, lastCommandOrdinal = 0u;
+  bool firstRaw = true;
+  for (std::uint32_t index = 0u; index < original.header.eventCount; ++index) {
+    const auto event = original.event(index);
+    const auto type = static_cast<RenderTapeEventType>(event.header.type);
+    if (type == RenderTapeEventType::ObjectDestroy) continue;
+    if (type == RenderTapeEventType::PresentComplete) {
+      auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+      RenderTapePresentCompleteHeader fixed{};
+      check(payload.size() >= sizeof(fixed) && lastCommandOrdinal,
+            "authored PE Present completion keeps its genuine terminal raw");
+      std::memcpy(&fixed, payload.data(), sizeof(fixed));
+      fixed.presentOrdinal = lastCommandOrdinal;
+      std::memcpy(payload.data(), &fixed, sizeof(fixed));
+      builder.appendRawEvent(type, payload);
+    } else if (type == RenderTapeEventType::CommandChunk && firstRaw && clearBeforeDraw) {
+      ImportedChunkView chunk;
+      RenderTapeCommandChunkHeader fixed{};
+      check(event.payload.size() >= sizeof(fixed), "capacity fixture retains the authentic first raw envelope");
+      std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+      check(importPrevalidatedCommandChunk(event.payload.subspan(sizeof(fixed)),
+                {fixed.wireVersion, fixed.recordCount, fixed.handleCount}, chunk) && chunk.records.size() == 1u,
+            "capacity fixture imports the unchanged indexed Draw record");
+      const auto draw = chunk.record(0u);
+      const std::array records{clearRecord(), RecordSpec{draw.header.type,
+          {draw.payload.begin(), draw.payload.end()}, {draw.handles.begin(), draw.handles.end()}}};
+      // Clear has no handles; Draw's original 0-based references and snapshot
+      // body stay unchanged. Only this dedicated authored raw gains a Clear.
+      const auto wire = makeWireFixture(records);
+      check(validateCommandChunk(wire.bytes, wire.envelope).valid(), "capacity fixture authenticates Clear+Draw wire");
+      builder.appendCommandChunk(wire.envelope, wire.bytes);
+      lastCommandOrdinal = nextOrdinal;
+      firstRaw = false;
+    } else {
+      builder.appendRawEvent(type, event.payload);
+      if (type == RenderTapeEventType::CommandChunk) {
+        lastCommandOrdinal = nextOrdinal;
+        firstRaw = false;
+      }
+    }
+    ++nextOrdinal;
+  }
+  fixture.tape = builder.seal();
+  return fixture;
+}
+
+void controlledCpuV4ExecutorPreservesPePresentContract() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Contract = RenderTapeExecutionV4ProducerContract;
+  const auto captured = controlledCpuV4PePresentTape();
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  check(preflight.complete(), std::string("authored PE Present preflight: status=") +
+      frameTapeReplayStatusName(preflight.status) + " failed_event=" + std::to_string(preflight.failedEventIndex));
+  const auto source = controlledCpuV4ReferencePlan(captured.tape, general);
+  check(general.events.size() == 11u && general.commandChunks.size() == 2u && general.destroys.empty() &&
+            general.presentOrdinal == 10u && general.events[8u].type == RenderTapeEventType::CommandChunk &&
+            general.events[9u].type == RenderTapeEventType::CommandChunk &&
+            source.identity().settlements[0u].eventOrdinal == 9u && source.identity().settlements[1u].eventOrdinal == 10u,
+        "PE contract fixture authenticates original Draw9 immediately before Present10 without authored state cuts");
+  PresentParameters output{};
+  output.backBufferWidth = general.outputDesc.width;
+  output.backBufferHeight = general.outputDesc.height;
+  output.backBufferFormat = devicec::fmtFromD3D(general.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "PE contract inventory uses genuine CPU-visible resources");
+  const auto optionsFor = [&](Contract contract) {
+    Executor::ControlledV4InventoryOptions options;
+    options.sourcePlan = &source;
+    options.exactTape = captured.tape;
+    options.expectedBufferBudget = {1024u * 1024u};
+    options.consumerLimits = {.maxSources = 8u, .maxCommands = 8u, .maxLifecycleActions = 32u};
+    options.initialSetupLimits = {.maxObjects = 8u, .maxSeeds = 8u,
+        .maxSeedBytes = 1024u * 1024u, .maxAllocationBytes = 1024u * 1024u};
+    options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    options.maxQueryOraclePolls = 0u;
+    options.producerContract = contract;
+    return options;
+  };
+  for (const auto contract : {Contract::None, Contract::PePresentReservationV1}) {
+    const bool selected = contract == Contract::PePresentReservationV1;
+    RuntimeFixture fixture(false, false, false, true,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    fixture.routing->recordBoundedCapturedBindings = false;
+    check(fixture.routing->pool() == &fixture.routing->queue_.pool() && !fixture.routing->supportsGpuReadback(),
+        "resource-backed Exact fixture forwards its genuine queue pool without GPU/readback support");
+    Executor executor(fixture, general, blobs);
+    const auto result = executor.runControlledV4Inventory(optionsFor(contract));
+    const auto& provenance = result.provenance;
+    const auto& cpu = result.controlledCpu;
+    const auto& consumer = result.consumer;
+    const auto& state = consumer.state;
+    const auto sources = selected ? 2u : 1u;
+    check(result.complete && result.metadataInventoryComplete && result.resetOk && result.failure.empty(),
+        "PE contract controlled executor finishes: selected=" + std::to_string(selected) + " failure=" + result.failure +
+            " failed_event=" + std::to_string(result.failedEvent) + " raw_acks=" + std::to_string(provenance.acknowledgedRaws) +
+            " retired=" + std::to_string(state.retired) + " consumer_failure=" +
+            std::to_string(static_cast<unsigned>(consumer.failure)) + " reset=" + std::to_string(result.resetOk) +
+            " preparation_attempted=" + std::to_string(provenance.presentPreparationAttempted) +
+            " preparation_completed=" + std::to_string(provenance.presentPreparationCompleted) +
+            " preparation_hresult=" + std::to_string(provenance.presentPreparationHresult) +
+            " flush_calls_including_teardown=" + std::to_string(fixture.routing->flushCalls));
+    const auto expectValue = [&](std::uint64_t actual, std::uint64_t expected, const char* field) {
+      check(actual == expected, std::string("PE contract executor invariant: ") + field +
+          " selected=" + std::to_string(selected) + " actual=" + std::to_string(actual) +
+          " expected=" + std::to_string(expected));
+    };
+    expectValue(static_cast<unsigned>(provenance.producerContract), static_cast<unsigned>(contract), "producerContract");
+    expectValue(provenance.presentPreparationAttempted, selected, "presentPreparationAttempted");
+    expectValue(provenance.presentPreparationCompleted, selected, "presentPreparationCompleted");
+    if (selected) {
+      expectValue(provenance.presentPreparationHresult, D3D_OK, "presentPreparationHresult");
+      expectValue(provenance.presentPreparationEventIndex, 9u, "presentPreparationEventIndex");
+    }
+    // runControlledV4Inventory releases the core before returning; the real
+    // core Device destructor calls upperDevice_->flush() once after the
+    // controlled adapter has been removed. Only the selected contract adds
+    // the earlier preparation flush; the origin/completion proof below binds
+    // that flush to Draw's genuine pre-Present publication, not teardown.
+    expectValue(fixture.routing->flushCalls, 1u + std::uint32_t(selected), "flushCallsIncludingTeardown");
+    expectValue(bool(fixture.routing->flushHook), false, "flushHookRetained");
+    expectValue(result.events, 11u, "events");
+    expectValue(result.commands, 3u, "commands");
+    expectValue(result.draws, 1u, "draws");
+    expectValue(provenance.replayedEvents, 11u, "replayedEvents");
+    expectValue(provenance.dispatchedRecords, 2u, "dispatchedRecords");
+    expectValue(provenance.acknowledgedRaws, 2u, "acknowledgedRaws");
+    expectValue(result.resourcesCreated, 5u, "resourcesCreated");
+    expectValue(result.resourcesReleased, 5u, "resourcesReleased");
+    expectValue(result.observedMutations, 2u, "observedMutations");
+    expectValue(result.recordContexts, 2u, "recordContexts");
+    expectValue(result.sourceProgressComplete, true, "sourceProgressComplete");
+    expectValue(cpu.controlledCpuComplete, true, "controlledCpuComplete");
+    expectValue(cpu.rawAckCoverageComplete, true, "rawAckCoverageComplete");
+    expectValue(cpu.semanticMappingComplete, true, "semanticMappingComplete");
+    expectValue(cpu.actualIdentity.sources.size(), sources, "actualSources");
+    expectValue(cpu.actualIdentity.commands.size(), 2u, "actualCommands");
+    expectValue(cpu.actualIdentity.attempts.size(), 2u, "actualAttempts");
+    expectValue(cpu.actualIdentity.settlements.size(), 2u, "actualSettlements");
+    expectValue(cpu.sourceObligationsRegistered, 2u, "sourceObligationsRegistered");
+    expectValue(cpu.sourceObligationsQualified, 2u, "sourceObligationsQualified");
+    if (selected) {
+      const auto& beforePresent = cpu.actualIdentity.sources[0u].lifecycle;
+      const auto presentAttempt = std::find_if(cpu.actualIdentity.attempts.begin(), cpu.actualIdentity.attempts.end(),
+          [](const auto& attempt) { return attempt.eventOrdinal == 10u; });
+      check(beforePresent.cutEventOrdinal == 9u && beforePresent.cutKind ==
+                static_cast<std::uint32_t>(RenderTapeIdentityV3CutKind::AfterEvent) && !beforePresent.cutRecord &&
+                beforePresent.commandCount == 1u && beforePresent.publicationEdge && beforePresent.submissionEdge &&
+                beforePresent.completionEdge && beforePresent.completedSequence >= beforePresent.seqId &&
+                presentAttempt != cpu.actualIdentity.attempts.end() &&
+                beforePresent.completionEdge < presentAttempt->beginEdge &&
+                result.inventory.size() == 2u && result.inventory[0u].commands.size() == 1u &&
+                result.inventory[0u].draws.size() == 1u && result.inventory[0u].origins.size() == 1u &&
+                result.inventory[0u].origins[0u].origin.record == dxmt9::render::TapeEmissionRecordLocator{9u, 0u} &&
+                result.inventory[1u].commands.size() == 1u && result.inventory[1u].draws.empty() &&
+                result.inventory[1u].origins.size() == 1u &&
+                result.inventory[1u].origins[0u].origin.record == dxmt9::render::TapeEmissionRecordLocator{10u, 0u},
+          "genuine pre-Present flush publishes Draw at its retained AfterEvent cut and completes before the original Present attempt");
+      const auto& drawContext = result.inventory[0u].origins[0u].context;
+      const auto& presentContext = result.inventory[1u].origins[0u].context;
+      check(drawContext && presentContext && drawContext == presentContext && drawContext->entries().size() == 3u &&
+                result.bufferVersions.size() == 2u,
+          "unchanged original Draw/Present records retain the same immutable historical resource inventory after reset");
+      std::size_t historicalBuffers = 0u;
+      for (const auto& version : drawContext->entries()) {
+        if (version->nativeKind() != D9C_CHUNK_HANDLE_KIND_BUFFER) continue;
+        ++historicalBuffers;
+        const auto& facts = version->localBufferFacts();
+        const auto observed = std::find_if(result.bufferVersions.begin(), result.bufferVersions.end(), [&](const auto& item) {
+          return renderTapeIdentityV3SameIdentity(item.identity, version->identity()) &&
+              item.logicalContentEpoch == version->contentEpoch();
+        });
+        // The authentic seed upload advanced local revision from 1 to 2;
+        // first immutable logical normalization independently chose epoch 1.
+        // Preserve both named facts; revision equality is never authority for
+        // the independently established logical epoch or future backing bytes.
+        check(facts && facts->observed() && version->contentEpoch() == 1u && facts->contentRevision == 2u &&
+                  facts->contentRevision != version->contentEpoch() && facts->buffer == version->nativeHandle() &&
+                  facts->byteSize == version->expectedBufferBytes().size() && !facts->hasVersionedBacking &&
+                  facts->currentBacking.metalHandle && observed != result.bufferVersions.end() &&
+                  facts->status == observed->observation.status && facts->buffer == observed->observation.buffer &&
+                  facts->byteSize == observed->observation.byteSize &&
+                  facts->contentRevision == observed->observation.contentRevision &&
+                  facts->hasVersionedBacking == observed->observation.hasVersionedBacking &&
+                  facts->currentBacking.metalHandle == observed->observation.currentBacking.metalHandle &&
+                  facts->currentBacking.byteSize == observed->observation.currentBacking.byteSize,
+            "original record-owned buffer versions preserve optional local backing facts distinctly from logical epoch after reset");
+      }
+      check(historicalBuffers == 2u, "both authentic seeded buffers retain their immutable producer-returned local facts");
+      const auto& actualDraw = result.inventory[0u].draws[0u];
+      const auto& sourceRows = actualDraw.sourceRows;
+      check(actualDraw.record == dxmt9::render::TapeEmissionRecordLocator{9u, 0u} &&
+                actualDraw.physicalCommandIndex == 0u && actualDraw.subdrawIndex == 0u &&
+                result.canonicalDrawRecords.size() == 1u && result.canonicalDrawRecords[0u].record == actualDraw.record &&
+                sourceRows.status == dxmt9::test::CpuTapeSourceObservationStatus::Qualified && sourceRows.qualified() &&
+                sourceRows.sourceSequence == result.inventory[0u].publication.metadata.seqId &&
+                sourceRows.sourceSequence == beforePresent.seqId && sourceRows.completedSequence < sourceRows.sourceSequence &&
+                sourceRows.effectiveIndexed && sourceRows.sourceBase == 0u && sourceRows.sourceStride == 28u &&
+                sourceRows.sourceByteSize == 84u && sourceRows.plannerStatus &&
+                *sourceRows.plannerStatus == dxmt9::test::CpuTapeSourceRowsStatus::Qualified &&
+                sourceRows.qualifiedPrimitiveCount == 1u && sourceRows.sourceElementCount == 3u &&
+                sourceRows.uniqueVertexRows == 3u && sourceRows.vertexRangeCount == 1u &&
+                sourceRows.indexRange && sourceRows.indexRange->byteOffset == 0u && sourceRows.indexRange->byteSize == 6u &&
+                sourceRows.plannedReadBytes == 90u && sourceRows.readProof && sourceRows.readProof->proved() &&
+                sourceRows.readProof->provedRequests == 2u && sourceRows.readProof->provedRanges == 2u &&
+                sourceRows.readProof->provedBytes == 90u,
+          "actual authenticated Draw source owns a qualified instantaneous IB/VB row proof: status=" +
+              std::to_string(static_cast<unsigned>(sourceRows.status)) + " source_sequence=" +
+              std::to_string(sourceRows.sourceSequence) + " completed_sequence=" + std::to_string(sourceRows.completedSequence) +
+              " primitive_count=" + std::to_string(sourceRows.qualifiedPrimitiveCount) +
+              " source_elements=" + std::to_string(sourceRows.sourceElementCount) +
+              " unique_rows=" + std::to_string(sourceRows.uniqueVertexRows) +
+              " vertex_ranges=" + std::to_string(sourceRows.vertexRangeCount) +
+              " planned_bytes=" + std::to_string(sourceRows.plannedReadBytes) +
+              " proof_status=" + (sourceRows.readProof ? std::to_string(static_cast<unsigned>(sourceRows.readProof->status)) : "absent"));
+    } else {
+      check(result.inventory.size() == 1u && result.inventory[0u].commands.size() == 2u &&
+                result.inventory[0u].draws.size() == 1u && result.inventory[0u].origins.size() == 2u &&
+                cpu.actualIdentity.sources[0u].lifecycle.commandCount == 2u,
+          "NONE keeps its natural grouped Draw/Present publication without inferred PE preparation");
+    }
+    check(state.phase == dxmt9::test::CpuV4ConsumerPhase::Stopped && state.producerClosed &&
+              state.observed == sources && state.submitted == sources && state.acknowledged == sources &&
+              state.retired == sources && state.commands == 2u && state.lifecycleActions == 4u * sources &&
+              consumer.workerExited && consumer.cleanupComplete && !consumer.cleanupFailed &&
+              consumer.failure == dxmt9::test::CpuV4ConsumerFailure::None && result.consumerReceipts.size() == sources &&
+              std::all_of(result.consumerReceipts.begin(), result.consumerReceipts.end(), [](const auto& receipt) {
+                return receipt.observation && receipt.submitted && receipt.acknowledged && receipt.retired && receipt.cleanupComplete;
+              }) && !Access::residentCount(fixture.routing->queue_) && !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+        "only the actual consumer submits/acknowledges/retires both genuine publications and joins before clean reset");
+    check(!result.fullSemanticOracleComplete && !result.actualMetal && !result.gpuResultOracle &&
+              !result.policyQualified && !result.timingEligible && !consumer.payloadDigestPresent &&
+              !consumer.fullSemanticOracleComplete && !consumer.actualMetal && !consumer.gpuResultOracle &&
+              !consumer.policyQualified && !consumer.timingEligible && !provenance.complete &&
+              !provenance.actualLifecycleComplete && !provenance.actualTopologyComplete && !provenance.semanticMappingComplete &&
+              !provenance.policyQualified && !provenance.queryReadinessQualified && !provenance.pixelsQualified &&
+              !provenance.timingEligible && provenance.qualifierOnly && renderTapeActionWitnessV1StableExact(cpu.actionWitness),
+        "real PE preparation changes no Exact profile or metadata-only full semantics/GPU/pixel/policy/timing non-claims");
+    std::cout << "controlled CPU V4 PE Present executor spec passed: selected=" << selected
+              << " events=" << result.events << " raw_acks=" << provenance.acknowledgedRaws
+              << " flushes=" << fixture.routing->flushCalls << " retired=" << state.retired << '\n';
+  }
+  {
+    RuntimeFixture fixture(false, false, false, true,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    std::size_t hookCalls = 0u;
+    fixture.routing->flushHook = [&] { ++hookCalls; };
+    Executor executor(fixture, general, blobs);
+    const auto result = executor.runControlledV4Inventory(optionsFor(Contract::PePresentReservationV1));
+    check(!result.complete && result.failure == "controlled-v4-inventory-flush-adapter-preexisting" &&
+              result.failedEvent == 0xffffffffu && !result.provenance.requested && !result.provenance.armed &&
+              !result.resourcesCreated && !result.observedMutations && !result.recordContexts &&
+              !result.provenance.acknowledgedRaws && result.inventory.empty() && !result.consumer.state.observed &&
+              !fixture.routing->flushCalls && !hookCalls && fixture.routing->flushHook &&
+              !Access::residentCount(fixture.routing->queue_) && !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+        "preexisting flush ownership rejects the PE executor before effects and is never replaced or invoked");
+    fixture.routing->flushHook = {};
+  }
+  {
+    const auto capacityTape = controlledCpuV4PePresentTape(true);
+    std::vector<RenderTapeProviderBlob> capacityBlobs;
+    for (const auto& bytes : capacityTape.blobs)
+      capacityBlobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan capacityGeneral;
+    check(runtime::buildGeneralReplayPlan(capacityTape.tape, capacityBlobs, capacityGeneral).complete(),
+        "dedicated pre-Present capacity fixture passes authenticated General preflight");
+    const auto capacitySource = controlledCpuV4ReferencePlan(capacityTape.tape, capacityGeneral);
+    check(capacityGeneral.commandChunks.size() == 2u && capacityGeneral.commandChunks[0u].envelope.recordCount == 2u &&
+              capacityGeneral.commandChunks[1u].envelope.recordCount == 1u &&
+              capacitySource.identity().sources[0u].lifecycle.commandCount == 2u,
+        "first authentic flush source contains Clear+Draw, exceeding the explicit one-command consumer budget");
+    RuntimeFixture fixture(false, false, false, true,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    fixture.routing->recordBoundedCapturedBindings = false;
+    Executor executor(fixture, capacityGeneral, capacityBlobs);
+    auto options = optionsFor(Contract::PePresentReservationV1);
+    options.sourcePlan = &capacitySource;
+    options.exactTape = capacityTape.tape;
+    options.consumerLimits = {.maxSources = 1u, .maxCommands = 1u, .maxLifecycleActions = 4u};
+    const auto result = executor.runControlledV4Inventory(options);
+    const auto& provenance = result.provenance;
+    const auto& consumer = result.consumer;
+    const auto& state = consumer.state;
+    check(!result.complete && !result.metadataInventoryComplete && !result.sourceProgressComplete && !result.resetOk &&
+              result.failure == "v4-present-preparation-failed" && result.failedEvent == 9u &&
+              provenance.armed && provenance.presentPreparationAttempted && !provenance.presentPreparationCompleted &&
+              provenance.presentPreparationHresult != D3D_OK &&
+              consumer.failure == dxmt9::test::CpuV4ConsumerFailure::Capacity && consumer.workerExited &&
+              state.phase == dxmt9::test::CpuV4ConsumerPhase::Failed,
+        "real pre-Present flush capacity failure poisons and wakes preparation: failure=" + result.failure +
+            " failed_event=" + std::to_string(result.failedEvent) + " preparation_hresult=" +
+            std::to_string(provenance.presentPreparationHresult) + " flushes=" + std::to_string(fixture.routing->flushCalls) +
+            " consumer_failure=" + std::to_string(static_cast<unsigned>(consumer.failure)) +
+            " worker_exited=" + std::to_string(consumer.workerExited) + " reset=" + std::to_string(result.resetOk));
+    check(provenance.acknowledgedRaws == 1u && provenance.dispatchedRecords == 2u &&
+              provenance.actualIdentity.attempts.size() == 1u && provenance.actualIdentity.attempts[0u].eventOrdinal == 9u &&
+              provenance.actualIdentity.settlements.size() == 1u && provenance.actualIdentity.settlements[0u].eventOrdinal == 9u &&
+              fixture.routing->clearCalls.load() == 1u && fixture.routing->drawCalls.load() == 1u &&
+              !fixture.routing->presentCalls.load() && result.commands == 3u && result.draws == 1u && result.recordContexts == 2u &&
+              !provenance.rawAckCoverageComplete && !provenance.canonicalTraversalComplete,
+        "the genuine preceding Clear+Draw raw ACKs once; failed preparation never starts, dispatches or ACKs original Present");
+    check(!state.observed && !state.submitted && !state.acknowledged && !state.retired && !state.commands &&
+              !state.lifecycleActions && result.inventory.empty() && result.consumerReceipts.empty() &&
+              consumer.cleanupComplete && !consumer.cleanupFailed &&
+              Access::readyCount(fixture.routing->queue_) == 1u && Access::residentCount(fixture.routing->queue_) == 1u &&
+              !Access::pendingCompletionCount(fixture.routing->queue_) &&
+              Access::controlledCpuQueueStopped(fixture.routing->queue_) &&
+              fixture.routing->flushCalls == 2u && !fixture.routing->flushHook &&
+              !fixture.cDevice && !fixture.device && !fixture.factory,
+        "capacity rejection claims no source: joined adapter cleanup is complete but the real Ready source stays quarantined without synthetic retirement/reset");
+    check(result.controlledCpu.domain == RenderTapeControlledCpuV4Evidence::Domain::None &&
+              !result.controlledCpu.controlledCpuComplete && !result.controlledCpu.semanticMappingComplete &&
+              result.controlledCpu.actualIdentity.sources.empty() && result.controlledCpu.actionWitness == RenderTapeActionWitnessV1{} &&
+              !result.fullSemanticOracleComplete && !result.actualMetal && !result.gpuResultOracle &&
+              !result.policyQualified && !result.timingEligible && !consumer.actualMetal && !consumer.gpuResultOracle &&
+              !consumer.fullSemanticOracleComplete && !consumer.policyQualified && !consumer.timingEligible &&
+              !provenance.complete && !provenance.actualLifecycleComplete && !provenance.actualTopologyComplete &&
+              !provenance.policyQualified && !provenance.pixelsQualified && !provenance.timingEligible,
+        "failed preparation exposes no CPU finalization or semantics/GPU/pixel/policy/timing authority");
+    std::cout << "controlled CPU V4 PE Present capacity failure spec passed: raw_acks=" << provenance.acknowledgedRaws
+              << " present_calls=" << fixture.routing->presentCalls.load() << " consumer_failure="
+              << static_cast<unsigned>(consumer.failure) << " quarantined_ready=" << Access::readyCount(fixture.routing->queue_)
+              << " reset=" << result.resetOk << '\n';
+  }
+}
+
+void controlledCpuV4ExecutorHonorsRequestedRoute() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Policy = ProviderReplayPolicy;
+  check(dxmt9::perf::enabled(), "route spec pins existing perf counters before any fixture or cached use");
+  const auto captured = controlledCpuV4PePresentTape();
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  check(preflight.complete(), std::string("controlled route fixture preflight: status=") +
+      frameTapeReplayStatusName(preflight.status) + " failed_event=" + std::to_string(preflight.failedEventIndex));
+  const auto source = controlledCpuV4ReferencePlan(captured.tape, general);
+  check(general.events.size() == 11u && general.commandChunks.size() == 2u &&
+            general.presentOrdinal == 10u && source.identity().settlements.size() == 2u &&
+            source.identity().settlements[0].eventOrdinal == 9u &&
+            source.identity().settlements[1].eventOrdinal == 10u,
+        "route test retains the authored original PE Draw9/Present10 tape and authenticated source obligations");
+  PresentParameters output{};
+  output.backBufferWidth = general.outputDesc.width;
+  output.backBufferHeight = general.outputDesc.height;
+  output.backBufferFormat = devicec::fmtFromD3D(general.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "controlled route test owns genuine CPU-visible buffer backing without GPU execution");
+  const auto optionsFor = [&](Policy route, bool logical) {
+    Executor::ControlledV4InventoryOptions options;
+    options.route = route;
+    options.sourcePlan = &source;
+    options.exactTape = captured.tape;
+    options.expectedBufferBudget = {1024u * 1024u};
+    options.consumerLimits = {.maxSources = 8u, .maxCommands = 8u, .maxLifecycleActions = 32u};
+    options.initialSetupLimits = {.maxObjects = 8u, .maxSeeds = 8u,
+        .maxSeedBytes = 1024u * 1024u, .maxAllocationBytes = 1024u * 1024u};
+    options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    options.maxQueryOraclePolls = 0u;
+    options.producerContract = RenderTapeExecutionV4ProducerContract::PePresentReservationV1;
+    options.observeLogicalSemantics = logical;
+    options.legalCandidateNoOverwriteContract = logical;
+    options.freshNoAutoDepthSurfaceDefaults = !output.enableAutoDepthStencil;
+    return options;
+  };
+  struct RejectedRoute {
+    Policy requested;
+    bool direct, arena;
+    const char* failure;
+  };
+  const std::array rejectedRoutes{
+      RejectedRoute{Policy::Compatibility, true, true, "controlled-v4-inventory-route-contract"},
+      RejectedRoute{Policy::Compatibility, false, false, "controlled-v4-inventory-route-contract"},
+      RejectedRoute{Policy::ProductionSlot, false, false, "controlled-v4-inventory-route-contract"},
+      RejectedRoute{Policy::ProductionSlot, true, true, "controlled-v4-inventory-route-contract"},
+      RejectedRoute{static_cast<Policy>(0xffu), false, true, "controlled-v4-inventory-route-policy"}};
+  for (const auto& rejectedRoute : rejectedRoutes) {
+    RuntimeFixture fixture(false, false, rejectedRoute.direct, rejectedRoute.arena,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    Executor executor(fixture, general, blobs);
+    const auto result = executor.runControlledV4Inventory(optionsFor(rejectedRoute.requested, true));
+    check(!result.complete && !result.metadataInventoryComplete && !result.sourceProgressComplete &&
+              !result.resetOk && result.failure == rejectedRoute.failure && result.failedEvent == 0xffffffffu &&
+              !result.provenance.requested && !result.provenance.armed &&
+              result.controlledCpu.domain == RenderTapeControlledCpuV4Evidence::Domain::None &&
+              !result.resourcesCreated && !result.resourcesReleased && !result.observedMutations &&
+              !result.commands && !result.draws && !result.recordContexts && !result.setupSubmissions &&
+              !result.setupAcknowledgements && result.inventory.empty() && result.consumerReceipts.empty(),
+          "requested route/support mismatch or unknown policy rejects before original replay effects: failure=" + result.failure);
+    check(fixture.cDevice && fixture.device && fixture.factory &&
+              !fixture.cDevice->renderTapeRuntimeIdentityV4 && !fixture.routing->flushHook &&
+              !fixture.routing->drawCalls && !fixture.routing->clearCalls && !fixture.routing->presentCalls &&
+              !fixture.routing->flushCalls && !fixture.routing->captureCalls && !fixture.routing->mutationApplies &&
+              !Access::readyCount(fixture.routing->queue_) && !Access::writingCommandCount(fixture.routing->queue_) &&
+              !Access::pendingCompletionCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+              !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+          "pre-effect route rejection keeps the genuine fixture unarmed, unsubmitted and available to its owner");
+    const auto& route = result.routeCoverage;
+    const auto& logical = result.logicalSemantics;
+    check(!route.policySelected && !route.complete && !route.directLeases && !route.directDraws &&
+              !route.compatibilityDraws && !route.compatibilityBatches && !route.compatibilityUnbatchedDraws &&
+              !route.fallbackDraws && logical.requested && !logical.accepted && !logical.complete &&
+              !logical.logicalStreamComplete && !logical.fullLogicalSemanticOracleComplete &&
+              !logical.originalSemanticEquivalenceQualified && !logical.crossPolicyEquivalenceQualified,
+          "failed route admission cannot mint route coverage or logical/equivalence capabilities");
+  }
+  for (const auto requested : {Policy::Compatibility, Policy::ProductionSlot}) {
+    const bool production = requested == Policy::ProductionSlot;
+    for (const bool logicalRequested : {false, true}) {
+      // These are the exact harness support contracts. Production keeps the
+      // ordinary Direct ChunkSlot path; no Arena/Direct fallback is forced.
+      RuntimeFixture fixture(false, false, production, !production,
+          WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+      fixture.routing->recordBoundedCapturedBindings = false;
+      check(fixture.routing->supportsDirectChunkSlotReplay() == production &&
+                fixture.routing->supportsCpuReadyArenaReplay() == !production &&
+                fixture.routing->pool() == &fixture.routing->queue_.pool() && !fixture.routing->supportsGpuReadback(),
+          "requested route matches both actual fixture supports and the genuine resource-backed CPU domain");
+      Executor executor(fixture, general, blobs);
+      const auto result = executor.runControlledV4Inventory(optionsFor(requested, logicalRequested));
+      const auto& provenance = result.provenance;
+      const auto& cpu = result.controlledCpu;
+      const auto& consumer = result.consumer;
+      const auto& state = consumer.state;
+      const auto& route = result.routeCoverage;
+      const auto& logical = result.logicalSemantics;
+      check(result.complete && result.metadataInventoryComplete && result.sourceProgressComplete && result.resetOk &&
+                result.failure.empty() && result.events == 11u && result.commands == 3u && result.draws == 1u &&
+                result.resourcesCreated == 5u && result.resourcesReleased == 5u && result.observedMutations == 2u &&
+                result.recordContexts == 2u && !result.setupSubmissions && !result.setupAcknowledgements,
+          "both genuine replay routes complete the unchanged bounded original tape: route=" +
+              std::to_string(static_cast<unsigned>(requested)) + " logical=" + std::to_string(logicalRequested) +
+              " failure=" + result.failure + " direct=" + std::to_string(route.directDraws) +
+              " compatibility=" + std::to_string(route.compatibilityDraws));
+      check(route.requestedRoute == requested && route.effectiveRoute == requested && route.policySelected &&
+                route.observed && route.monotonic && route.complete &&
+                route.directDraws + route.compatibilityDraws == result.draws &&
+                (production ? route.directLeases && route.directDraws == result.draws &&
+                    !route.compatibilityDraws && !route.fallbackDraws : !route.directDraws && !route.directLeases &&
+                    route.compatibilityDraws == result.draws),
+          "actual production replay deltas cover every draw; eligible Direct is exercised without relabeling Compatibility");
+      check(provenance.requested && provenance.validated && provenance.armed && provenance.actualAttemptsObserved &&
+                provenance.canonicalTraversalComplete && provenance.rawAckCoverageComplete &&
+                provenance.replayedEvents == 11u && provenance.dispatchedRecords == 2u &&
+                provenance.acknowledgedRaws == 2u && provenance.presentPreparationAttempted &&
+                provenance.presentPreparationCompleted && provenance.presentPreparationHresult == D3D_OK &&
+                cpu.domain == RenderTapeControlledCpuV4Evidence::Domain::ControlledCpu && cpu.controlledCpuComplete &&
+                cpu.canonicalTraversalComplete && cpu.rawAckCoverageComplete && cpu.semanticMappingComplete &&
+                cpu.planDigest == source.digest() && cpu.sourceObligationsRegistered == 2u &&
+                cpu.sourceObligationsQualified == 2u && cpu.semanticMapping && cpu.semanticMapping->valid() &&
+                cpu.actualIdentity.sources.size() == 2u && cpu.actualIdentity.commands.size() == 2u &&
+                cpu.actualIdentity.attempts.size() == 2u && cpu.actualIdentity.settlements.size() == 2u &&
+                renderTapeActionWitnessV1StableExact(cpu.actionWitness),
+          "requested route preserves authentic canonical traversal, actual raw ACKs and separate controlled provenance");
+      check(cpu.actualIdentity.attempts[0].eventOrdinal == 9u && cpu.actualIdentity.attempts[1].eventOrdinal == 10u &&
+                cpu.actualIdentity.settlements[0].eventOrdinal == 9u && cpu.actualIdentity.settlements[1].eventOrdinal == 10u &&
+                cpu.actualIdentity.settlements[0].rawOrdinal == cpu.actualIdentity.attempts[0].rawOrdinal &&
+                cpu.actualIdentity.settlements[1].rawOrdinal == cpu.actualIdentity.attempts[1].rawOrdinal &&
+                cpu.actualIdentity.attempts[0].receipt.kind == static_cast<std::uint32_t>(production
+                    ? RenderTapeIdentityV4ReceiptKind::DirectChunkSlot : RenderTapeIdentityV4ReceiptKind::Compatibility),
+          "actual Draw route receipt and raw settlements remain joined to their unchanged original events");
+      check(result.inventory.size() == 2u && result.inventory[0].commands.size() == 1u &&
+                result.inventory[1].commands.size() == 1u && result.inventory[0].draws.size() == 1u &&
+                result.inventory[1].draws.empty() && result.inventory[0].origins.size() == 1u &&
+                result.inventory[1].origins.size() == 1u &&
+                result.inventory[0].origins[0].origin.record == dxmt9::render::TapeEmissionRecordLocator{9u, 0u} &&
+                result.inventory[1].origins[0].origin.record == dxmt9::render::TapeEmissionRecordLocator{10u, 0u} &&
+                result.inventory[0].publication.metadata.seqId < result.inventory[1].publication.metadata.seqId &&
+                result.inventory[0].draws[0].sourceRows.qualified() &&
+                cpu.actualIdentity.sources[0].lifecycle.completionEdge < cpu.actualIdentity.attempts[1].beginEdge,
+          "real PE preparation and consumer preserve original Draw-before-Present order and qualified source-row proof");
+      check(state.phase == dxmt9::test::CpuV4ConsumerPhase::Stopped && state.producerClosed &&
+                state.sourcePhase == dxmt9::test::CpuV4ConsumerSourcePhase::Empty && state.observed == 2u &&
+                state.submitted == 2u && state.acknowledged == 2u && state.retired == 2u && state.commands == 2u &&
+                state.lifecycleActions == 8u && consumer.workerExited && consumer.cleanupComplete &&
+                !consumer.cleanupFailed && consumer.failure == dxmt9::test::CpuV4ConsumerFailure::None &&
+                result.consumerReceipts.size() == 2u &&
+                std::all_of(result.consumerReceipts.begin(), result.consumerReceipts.end(), [](const auto& receipt) {
+                  return receipt.observation && receipt.submitted && receipt.acknowledged && receipt.retired && receipt.cleanupComplete;
+                }), "the actual controlled consumer submits, acknowledges, retires and joins both route publications");
+      check(logical.requested == logicalRequested && logical.logicalStreamComplete == logicalRequested &&
+                logical.accepted == logicalRequested && logical.complete == logicalRequested &&
+                logical.receipts.size() == (logicalRequested ? 2u : 0u) &&
+                (!logicalRequested || (logical.sourceRowsRequired == 1u && logical.sourceRowsQualified == 1u &&
+                    logical.conditionalOnLegalNoOverwrite && logical.legalCandidateNoOverwriteContract)) &&
+                !logical.fullLogicalSemanticOracleComplete && !logical.originalSemanticEquivalenceQualified &&
+                !logical.crossPolicyEquivalenceQualified && !logical.gpuResultOracle && !logical.policyQualified &&
+                !logical.timingEligible && !logical.futurePreservationQualified && !logical.fullShaderFetchCoverageQualified &&
+                !result.fullSemanticOracleComplete && !result.actualMetal && !result.gpuResultOracle &&
+                !result.policyQualified && !result.timingEligible && !consumer.payloadDigestPresent &&
+                !consumer.fullSemanticOracleComplete && !consumer.actualMetal && !consumer.gpuResultOracle &&
+                !consumer.policyQualified && !consumer.timingEligible && !provenance.complete &&
+                !provenance.actualLifecycleComplete && !provenance.actualTopologyComplete && !provenance.semanticMappingComplete &&
+                provenance.qualifierOnly && !provenance.policyQualified && !provenance.pixelsQualified && !provenance.timingEligible,
+          "route coverage preserves metadata versus conditional logical-stream authority without semantic/GPU/policy promotion");
+      check(!fixture.cDevice && !fixture.device && !fixture.factory && !fixture.routing->flushHook &&
+                !Access::readyCount(fixture.routing->queue_) && !Access::writingCommandCount(fixture.routing->queue_) &&
+                !Access::pendingCompletionCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+                !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+          "both route executions join consumer ownership before clean exact-profile queue and fixture reset");
+      std::cout << "controlled CPU V4 route spec passed: route=" << (production ? "production-slot" : "compatibility")
+                << " logical=" << logicalRequested << " direct=" << route.directDraws
+                << " compatibility=" << route.compatibilityDraws << " raw_acks=" << provenance.acknowledgedRaws
+                << " retired=" << state.retired << '\n';
+    }
+  }
+}
+
+// The original query is deliberately an unissued TIMESTAMPDISJOINT: its
+// defined constant-false result exercises real GetData/control replay without
+// inventing a query END publication, captured coordinator, or GPU sample
+// oracle. Absolute TIMESTAMP is excluded by the General preflight contract.
+dxmt9::d3d9::test::GeneralCpuDestroyFixture controlledCpuV4ExecuteQueryTape() {
+  using namespace dxmt9::d3d9;
+  auto fixture = controlledCpuV4PePresentTape();
+  ImportedRenderTapeView original;
+  check(importPrevalidatedRenderTape(fixture.tape, original), "execution query seed tape imports");
+  const D9CWireObjectIdentity queryIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 7u, .objectId = 71u};
+  const RenderTapeQueryDescriptorV2 descriptor{.type = 11u, .dataBytes = 4u};
+  const RenderTapeQueryGetDataControlV2 poll{
+      .hasOutput = 1u, .definedBytes = 4u, .dataSize = 4u};
+  RenderTapeBuilder builder;
+  std::uint64_t nextOrdinal = 1u, lastCommandOrdinal = 0u;
+  bool polled = false;
+  for (std::uint32_t index = 0u; index < original.header.eventCount; ++index) {
+    const auto event = original.event(index);
+    const auto type = static_cast<RenderTapeEventType>(event.header.type);
+    if (type == RenderTapeEventType::CommandChunk && !polled) {
+      builder.appendOrderedControl({.identity = queryIdentity,
+          .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+          .disposition = static_cast<std::uint32_t>(RenderTapeControlDisposition::Completed),
+          .resultCode = D3D_OK, .controlBytes = sizeof(poll), .completionOrdinal = 1u},
+          std::as_bytes(std::span(&poll, 1u)));
+      ++nextOrdinal;
+      polled = true;
+    }
+    if (type == RenderTapeEventType::PresentComplete) {
+      auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+      RenderTapePresentCompleteHeader fixed{};
+      check(payload.size() >= sizeof(fixed) && lastCommandOrdinal,
+            "execution query tape retains genuine terminal Present completion");
+      std::memcpy(&fixed, payload.data(), sizeof(fixed));
+      fixed.presentOrdinal = lastCommandOrdinal;
+      std::memcpy(payload.data(), &fixed, sizeof(fixed));
+      builder.appendRawEvent(type, payload);
+    } else {
+      builder.appendRawEvent(type, event.payload);
+      if (type == RenderTapeEventType::CommandChunk) lastCommandOrdinal = nextOrdinal;
+    }
+    ++nextOrdinal;
+    if (type == RenderTapeEventType::BootstrapState) {
+      builder.appendObjectDefine(queryIdentity,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+          std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+      ++nextOrdinal;
+    }
+  }
+  check(polled, "execution query tape retains one original pre-issue GetData before adjacent Draw/Present raws");
+  fixture.tape = builder.seal();
+  return fixture;
+}
+
+void controlledCpuV4ExecutorOmitsObservationForExecution() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Policy = ProviderReplayPolicy;
+  using Mode = dxmt9::test::CpuGeneralTapeControlledV4ExecutionMode;
+  check(dxmt9::perf::enabled(), "execution spec pins genuine replay counters before cached use");
+  const auto captured = controlledCpuV4ExecuteQueryTape();
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  check(preflight.complete(), std::string("execution query tape preflight: status=") +
+      frameTapeReplayStatusName(preflight.status) + " failed_event=" + std::to_string(preflight.failedEventIndex) +
+      " query_failure=" + std::to_string(static_cast<unsigned>(preflight.queryReplay.failure)));
+  const auto source = controlledCpuV4ReferencePlan(captured.tape, general);
+  check(general.events.size() == 13u && general.commandChunks.size() == 2u &&
+            general.presentOrdinal == 12u && source.identity().settlements[0].eventOrdinal == 11u &&
+            source.identity().settlements[1].eventOrdinal == 12u,
+        "execution fixture preserves original query-before-Draw11-before-Present12 order and two real sources");
+  PresentParameters output{};
+  output.backBufferWidth = general.outputDesc.width;
+  output.backBufferHeight = general.outputDesc.height;
+  output.backBufferFormat = devicec::fmtFromD3D(general.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "execution test owns genuine CPU-visible provider resources without GPU execution");
+  const auto optionsFor = [&](Policy route, Mode mode, bool logical) {
+    Executor::ControlledV4InventoryOptions options;
+    options.route = route;
+    options.executionMode = mode;
+    options.sourcePlan = &source;
+    options.exactTape = captured.tape;
+    // A zero diagnostic image budget must not reject genuine execution.
+    options.expectedBufferBudget = {mode == Mode::Observe ? 1024u * 1024u : 0u};
+    options.consumerLimits = {.maxSources = 8u, .maxCommands = 8u, .maxLifecycleActions = 32u};
+    options.initialSetupLimits = {.maxObjects = 8u, .maxSeeds = 8u,
+        .maxSeedBytes = 1024u * 1024u, .maxAllocationBytes = 1024u * 1024u};
+    options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    options.maxQueryOraclePolls = 0u;
+    options.producerContract = RenderTapeExecutionV4ProducerContract::PePresentReservationV1;
+    options.observeLogicalSemantics = logical;
+    options.legalCandidateNoOverwriteContract = true;
+    options.freshNoAutoDepthSurfaceDefaults = !output.enableAutoDepthStencil;
+    return options;
+  };
+  const auto clockAbsent = [](const auto& clock) {
+    return !clock.started && !clock.valid && !clock.complete && !clock.wallNs && !clock.processCpuNs;
+  };
+  for (const auto mode : {Mode::ExecutionOnly, static_cast<Mode>(0xffu)}) {
+    const bool mixed = mode == Mode::ExecutionOnly;
+    RuntimeFixture fixture(false, false, false, true,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    Executor executor(fixture, general, blobs);
+    const auto result = executor.runControlledV4Inventory(optionsFor(Policy::Compatibility, mode, mixed));
+    check(!result.complete && !result.metadataInventoryComplete && !result.sourceProgressComplete &&
+              !result.resetOk && result.failedEvent == 0xffffffffu &&
+              result.failure == (mixed ? "controlled-v4-execution-observer-contract"
+                  : "controlled-v4-inventory-execution-mode") &&
+              !result.provenance.requested && !result.provenance.armed &&
+              result.controlledCpu.domain == RenderTapeControlledCpuV4Evidence::Domain::None &&
+              !result.resourcesCreated && !result.resourcesReleased && !result.observedMutations &&
+              !result.commands && !result.draws && !result.recordContexts && !result.setupSubmissions &&
+              !result.setupAcknowledgements && result.inventory.empty() && result.consumerReceipts.empty() &&
+              !result.executionOnly.complete && !result.executionOnly.lifecycleCoverageComplete &&
+              clockAbsent(result.clocks.setup) && clockAbsent(result.clocks.body) && clockAbsent(result.clocks.teardown),
+          "mixed observation/execution contract and unknown mode reject before effects or clock scopes: " + result.failure);
+    check(fixture.cDevice && fixture.device && fixture.factory &&
+              !fixture.cDevice->renderTapeRuntimeIdentityV4 && !fixture.routing->flushHook &&
+              !fixture.routing->drawCalls && !fixture.routing->clearCalls && !fixture.routing->presentCalls &&
+              !fixture.routing->flushCalls && !fixture.routing->captureCalls && !fixture.routing->mutationApplies &&
+              !fixture.routing->controlledQueries && !result.queryReplay.present &&
+              !Access::readyCount(fixture.routing->queue_) && !Access::writingCommandCount(fixture.routing->queue_) &&
+              !Access::pendingCompletionCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+              !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+          "pre-effect mode rejection leaves genuine query/resource/device/queue ownership untouched");
+  }
+  for (const auto requested : {Policy::Compatibility, Policy::ProductionSlot}) {
+    const bool production = requested == Policy::ProductionSlot;
+    std::array<std::uint32_t, 7u> baselineEffects{};
+    const auto run = [&](Mode mode) {
+      const bool executionOnly = mode == Mode::ExecutionOnly;
+      RuntimeFixture fixture(false, false, production, !production,
+          WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+      fixture.routing->recordBoundedCapturedBindings = false;
+      Executor executor(fixture, general, blobs);
+      auto result = executor.runControlledV4Inventory(optionsFor(requested, mode, !executionOnly));
+      const auto& provenance = result.provenance;
+      const auto& cpu = result.controlledCpu;
+      const auto& consumer = result.consumer;
+      const auto& state = consumer.state;
+      const auto& route = result.routeCoverage;
+      const auto& query = result.queryReplay;
+      const auto& logical = result.logicalSemantics;
+      check(result.complete && result.sourceProgressComplete && result.resetOk && result.failure.empty() &&
+                result.executionMode == mode && result.metadataInventoryComplete == !executionOnly &&
+                result.events == 13u && result.commands == 3u && result.draws == 1u &&
+                result.resourcesCreated == 6u && result.resourcesReleased == 6u && result.observedMutations == 2u &&
+                !result.setupSubmissions && !result.setupAcknowledgements,
+          "both genuine routes execute unchanged query/resource/Draw/Present effects in both modes: " + result.failure);
+      check(provenance.requested && provenance.validated && provenance.armed && provenance.actualAttemptsObserved &&
+                provenance.canonicalTraversalComplete && provenance.rawAckCoverageComplete &&
+                provenance.replayedEvents == 13u && provenance.dispatchedRecords == 2u &&
+                provenance.acknowledgedRaws == 2u && provenance.queryObjectsMapped == 1u &&
+                !provenance.queryBaselineExpected && !provenance.queryBaselinesJoined &&
+                provenance.presentPreparationAttempted && provenance.presentPreparationCompleted &&
+                provenance.presentPreparationHresult == D3D_OK &&
+                cpu.domain == RenderTapeControlledCpuV4Evidence::Domain::ControlledCpu && cpu.controlledCpuComplete &&
+                cpu.canonicalTraversalComplete && cpu.rawAckCoverageComplete && cpu.semanticMappingComplete &&
+                cpu.planDigest == source.digest() && cpu.sourceObligationsRegistered == 2u &&
+                cpu.sourceObligationsQualified == 2u && cpu.semanticMapping && cpu.semanticMapping->valid() &&
+                cpu.actualIdentity.sources.size() == 2u && cpu.actualIdentity.commands.size() == 2u &&
+                cpu.actualIdentity.attempts.size() == 2u && cpu.actualIdentity.settlements.size() == 2u &&
+                renderTapeActionWitnessV1StableExact(cpu.actionWitness),
+          "observer omission preserves authentic original traversal, query binding, raw ACK and CPU-only provenance");
+      check(cpu.semanticMapping->records().size() == 2u,
+            "both genuine original raw records remain covered before inspecting their preserved locations");
+      for (std::size_t index = 0u; index < 2u; ++index) {
+        const auto& attempt = cpu.actualIdentity.attempts[index];
+        const auto& settlement = cpu.actualIdentity.settlements[index];
+        const auto& record = cpu.semanticMapping->records()[index];
+        check(attempt.eventOrdinal == 11u + index && settlement.eventOrdinal == attempt.eventOrdinal &&
+                  settlement.rawOrdinal == attempt.rawOrdinal && record.eventOrdinal == attempt.eventOrdinal &&
+                  record.recordIndex == 0u && record.recordType == (index == 0u
+                      ? D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE : D9C_COMMAND_RECORD_PRESENT) &&
+                  record.capturedRawOrdinal == source.identity().settlements[index].rawOrdinal,
+              "execution-only retains every original record location and captured/raw settlement join");
+      }
+      check(cpu.actualIdentity.attempts[0].receipt.kind == static_cast<std::uint32_t>(production
+                    ? RenderTapeIdentityV4ReceiptKind::DirectChunkSlot : RenderTapeIdentityV4ReceiptKind::Compatibility) &&
+                cpu.actualIdentity.sources[0].lifecycle.completionEdge < cpu.actualIdentity.attempts[1].beginEdge &&
+                route.requestedRoute == requested && route.effectiveRoute == requested && route.policySelected &&
+                route.observed && route.monotonic && route.complete &&
+                (production ? route.directLeases && route.directDraws == 1u &&
+                    !route.compatibilityDraws && !route.fallbackDraws : !route.directLeases && !route.directDraws &&
+                    route.compatibilityDraws == 1u),
+          "genuine route counters and Draw-before-Present completion remain observed without payload inventory");
+      check(query.present && query.transcriptComplete && query.oracleComplete &&
+                query.queryDefinitions == 1u && !query.issueRecords && !query.replayedIssueRecords &&
+                query.recordedPolls == 1u && query.replayedPolls == 1u && query.capturedReady == 1u &&
+                query.replayReady == 1u && !query.capturedPending && !query.replayPending &&
+                query.requiredResults == 1u && query.matchedResults == 1u && query.readinessRequired == 1u &&
+                query.readinessSatisfied == 1u && !query.substitutedResults && !query.supplementalPolls &&
+                !query.supplementalDrains && !query.checkpointDefinitions && query.rows.size() == 1u &&
+                query.rows[0].eventOrdinal == 10u && !query.rows[0].issueCycle &&
+                !query.rows[0].localIssueOrdinal && query.rows[0].capturedResult == D3D_OK &&
+                query.rows[0].replayResult == D3D_OK && query.rows[0].oracleResult == D3D_OK &&
+                query.rows[0].definedBytes == 4u && query.rows[0].resultMatched &&
+                query.rows[0].readinessSatisfied && !query.rows[0].resultSubstituted &&
+                query.rows[0].capturedBytes == query.rows[0].replayBytes && !query.actualMetal && !query.gpuResultOracle,
+          "execution-only preserves the precise unissued TIMESTAMPDISJOINT GetData/readiness/defined-constant-false obligation");
+      check(state.phase == dxmt9::test::CpuV4ConsumerPhase::Stopped && state.producerClosed &&
+                state.sourcePhase == dxmt9::test::CpuV4ConsumerSourcePhase::Empty && state.observed == 2u &&
+                state.submitted == 2u && state.acknowledged == 2u && state.retired == 2u && state.commands == 2u &&
+                state.lifecycleActions == 8u && consumer.workerExited && consumer.cleanupComplete &&
+                !consumer.cleanupFailed && consumer.failure == dxmt9::test::CpuV4ConsumerFailure::None &&
+                result.consumerReceipts.size() == 2u &&
+                std::all_of(result.consumerReceipts.begin(), result.consumerReceipts.end(), [](const auto& receipt) {
+                  return receipt.observation && receipt.submitted && receipt.acknowledged && receipt.retired && receipt.cleanupComplete;
+                }), "real consumer lifecycle metadata survives omission of the optional payload observer");
+      if (executionOnly) {
+        const auto& omitted = result.executionOnly;
+        const auto& budget = result.expectedBufferBudget;
+        const auto clockComplete = [](const auto& clock) {
+          return clock.started && clock.valid && clock.complete && clock.wallNs && clock.processCpuNs;
+        };
+        check(omitted.requested && omitted.complete && omitted.lifecycleCoverageComplete &&
+                  omitted.resourceVersionsOmitted && omitted.recordContextsOmitted && omitted.expectedImagesOmitted &&
+                  omitted.canonicalDrawCopiesOmitted && omitted.payloadObserverOmitted && omitted.sourceRowReadsOmitted &&
+                  omitted.logicalHashingOmitted && omitted.diagnosticMutationReceiptsOmitted &&
+                  omitted.capturedBindingImagesOmitted && omitted.uploadByteComparisonsOmitted &&
+                  omitted.sources == 2u && omitted.commands == 2u && omitted.draws == 1u &&
+                  omitted.submitted == 2u && omitted.acknowledged == 2u && omitted.retired == 2u &&
+                  result.inventory.empty() && result.canonicalDrawRecords.empty() && result.bufferVersions.empty() &&
+                  !result.resourceVersionFailure && !result.recordContexts && !result.bufferVersionsObserved &&
+                  !result.bufferVersionsUnavailable && !budget.maxRetainedExpectedBufferBytes &&
+                  !budget.chargedExpectedBufferBytes && !budget.highWaterExpectedBufferBytes &&
+                  !logical.requested && !logical.accepted && !logical.complete && !logical.logicalStreamComplete &&
+                  logical.receipts.empty() && !logical.sourceRowsRequired && !logical.sourceRowsQualified &&
+                  clockComplete(result.clocks.setup) && clockComplete(result.clocks.body) && clockComplete(result.clocks.teardown),
+            "execution-only omits heavy diagnostic storage/work while reporting genuine complete wall/process-CPU scopes");
+      } else {
+        check(!result.executionOnly.requested && !result.executionOnly.complete &&
+                  result.inventory.size() == 2u && result.canonicalDrawRecords.size() == 1u &&
+                  result.bufferVersions.size() == 2u && result.recordContexts == 2u &&
+                  result.expectedBufferBudget.highWaterExpectedBufferBytes && logical.requested && logical.accepted &&
+                  logical.complete && logical.logicalStreamComplete && logical.receipts.size() == 2u &&
+                  logical.sourceRowsRequired == 1u && logical.sourceRowsQualified == 1u &&
+                  clockAbsent(result.clocks.setup) && clockAbsent(result.clocks.body) && clockAbsent(result.clocks.teardown),
+            "logical Observe baseline actually executes diagnostic copies, source-row proof and hashing omitted by ExecutionOnly");
+      }
+      check(!result.fullSemanticOracleComplete && !result.actualMetal && !result.gpuResultOracle &&
+                !result.policyQualified && !result.timingEligible && !consumer.payloadDigestPresent &&
+                !consumer.fullSemanticOracleComplete && !consumer.actualMetal && !consumer.gpuResultOracle &&
+                !consumer.policyQualified && !consumer.timingEligible && !provenance.complete &&
+                !provenance.actualLifecycleComplete && !provenance.actualTopologyComplete && !provenance.semanticMappingComplete &&
+                provenance.qualifierOnly && !provenance.policyQualified && !provenance.pixelsQualified && !provenance.timingEligible &&
+                !logical.fullLogicalSemanticOracleComplete && !logical.originalSemanticEquivalenceQualified &&
+                !logical.crossPolicyEquivalenceQualified && !logical.gpuResultOracle && !logical.policyQualified &&
+                !logical.timingEligible && !logical.futurePreservationQualified && !logical.fullShaderFetchCoverageQualified,
+          "real clocks and observer-light completion grant no original equivalence, GPU, public policy or timing authority");
+      const std::array effects{fixture.routing->clearCalls.load(), fixture.routing->drawCalls.load(),
+          fixture.routing->presentCalls.load(), fixture.routing->flushCalls, fixture.routing->captureCalls,
+          fixture.routing->combinedMarkCalls, fixture.routing->mutationApplies.load()};
+      if (!executionOnly) baselineEffects = effects;
+      else check(effects == baselineEffects, "observer omission preserves actual provider replay/flush/resource effects");
+      check(!fixture.cDevice && !fixture.device && !fixture.factory && !fixture.routing->flushHook &&
+                !fixture.routing->recordBoundedCapturedBindings && fixture.routing->capturedBindingObservations.empty() &&
+                fixture.routing->textureUploadObservations.empty() && !fixture.routing->textureUploadFailed &&
+                !Access::readyCount(fixture.routing->queue_) && !Access::writingCommandCount(fixture.routing->queue_) &&
+                !Access::pendingCompletionCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+                !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+          "both modes join the genuine consumer before resource/device/queue reset without captured byte images");
+      return result;
+    };
+    const auto baseline = run(Mode::Observe);
+    const auto executed = run(Mode::ExecutionOnly);
+    check(executed.events == baseline.events && executed.commands == baseline.commands && executed.draws == baseline.draws &&
+              executed.resourcesCreated == baseline.resourcesCreated && executed.resourcesReleased == baseline.resourcesReleased &&
+              executed.observedMutations == baseline.observedMutations &&
+              executed.observedTextureUploads == baseline.observedTextureUploads &&
+              executed.provenance.replayedEvents == baseline.provenance.replayedEvents &&
+              executed.provenance.dispatchedRecords == baseline.provenance.dispatchedRecords &&
+              executed.provenance.acknowledgedRaws == baseline.provenance.acknowledgedRaws &&
+              executed.routeCoverage.directLeases == baseline.routeCoverage.directLeases &&
+              executed.routeCoverage.directDraws == baseline.routeCoverage.directDraws &&
+              executed.routeCoverage.compatibilityDraws == baseline.routeCoverage.compatibilityDraws &&
+              executed.routeCoverage.compatibilityBatches == baseline.routeCoverage.compatibilityBatches &&
+              executed.routeCoverage.compatibilityUnbatchedDraws == baseline.routeCoverage.compatibilityUnbatchedDraws &&
+              executed.routeCoverage.fallbackDraws == baseline.routeCoverage.fallbackDraws,
+          "ExecutionOnly matches the genuine logical baseline's original effects, provenance counts and requested-route deltas");
+    for (std::size_t index = 0u; index < 2u; ++index) {
+      const auto& before = *baseline.consumerReceipts[index].observation;
+      const auto& after = *executed.consumerReceipts[index].observation;
+      check(before.commands == after.commands && before.sourceOrdinal == after.sourceOrdinal,
+            "cheap authentic consumer command projection remains unchanged without comparing fresh local identities");
+    }
+    std::cout << "controlled CPU V4 execute spec passed: route=" << (production ? "production-slot" : "compatibility")
+              << " original_query=unissued-timestampdisjoint" << " direct=" << executed.routeCoverage.directDraws
+              << " compatibility=" << executed.routeCoverage.compatibilityDraws
+              << " raw_acks=" << executed.provenance.acknowledgedRaws
+              << " body_wall_ns=" << executed.clocks.body.wallNs
+              << " body_process_cpu_ns=" << executed.clocks.body.processCpuNs << '\n';
+  }
+}
+
+// This authored Tape is sealed once and reused byte-for-byte by every mode
+// and policy. Clears separate otherwise identical draws into real physical
+// commands; the original EVENT END fixes the prefix before the younger draw.
+dxmt9::d3d9::test::GeneralCpuDestroyFixture controlledCpuV4GroupingQueryTape() {
+  using namespace dxmt9::d3d9;
+  auto fixture = controlledCpuV4PePresentTape();
+  ImportedRenderTapeView original;
+  check(importPrevalidatedRenderTape(fixture.tape, original), "grouping query seed tape imports");
+  const D9CWireObjectIdentity queryIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 7u, .objectId = 71u};
+  const RenderTapeQueryDescriptorV2 descriptor{.type = 8u, .dataBytes = 4u};
+  // EVENT GetData supplies readiness but the existing query transcript
+  // contract defines no output bytes, even for a successful four-byte poll.
+  RenderTapeQueryGetDataControlV2 poll{
+      .hasOutput = 1u, .dataSize = 4u, .issueCycle = 1u};
+  RenderTapeBuilder builder;
+  std::uint64_t nextOrdinal = 1u, presentOrdinal = 0u;
+  bool appendedPrefix = false;
+  for (std::uint32_t index = 0u; index < original.header.eventCount; ++index) {
+    const auto event = original.event(index);
+    const auto type = static_cast<RenderTapeEventType>(event.header.type);
+    if (type == RenderTapeEventType::CommandChunk && !appendedPrefix) {
+      RenderTapeCommandChunkHeader fixed{};
+      check(event.payload.size() >= sizeof(fixed), "grouping prefix retains the original draw envelope");
+      std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+      ImportedChunkView chunk;
+      check(importPrevalidatedCommandChunk(event.payload.subspan(sizeof(fixed)),
+                {fixed.wireVersion, fixed.recordCount, fixed.handleCount}, chunk) &&
+                chunk.records.size() == 1u &&
+                chunk.records[0].type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+          "grouping prefix uses the authentic seeded indexed draw");
+      const auto view = chunk.record(0u);
+      const RecordSpec draw{view.header.type, {view.payload.begin(), view.payload.end()},
+          {view.handles.begin(), view.handles.end()}};
+      auto secondDraw = draw;
+      // Only authoring rebases the second copied handle slice. Once sealed,
+      // policy changes never rewrite records, handles or original ordinals.
+      D9CCommandChunkWireDrawHeader drawHeader{};
+      check(secondDraw.payload.size() >= sizeof(drawHeader), "grouping copied draw retains its header");
+      std::memcpy(&drawHeader, secondDraw.payload.data(), sizeof(drawHeader));
+      for (std::uint32_t sectionIndex = 0u; sectionIndex < drawHeader.sectionCount; ++sectionIndex) {
+        const auto offset = static_cast<std::size_t>(drawHeader.sectionTableOffset) +
+            sectionIndex * sizeof(D9CCommandChunkWireSectionDesc);
+        check(offset <= secondDraw.payload.size() &&
+                  sizeof(D9CCommandChunkWireSectionDesc) <= secondDraw.payload.size() - offset,
+              "grouping draw section table is bounds checked before authoring");
+        D9CCommandChunkWireSectionDesc section{};
+        std::memcpy(&section, secondDraw.payload.data() + offset, sizeof(section));
+        const auto* field = sectionHandleFieldRule(section.kind);
+        if (!field) continue;
+        for (std::uint32_t element = 0u; element < section.count; ++element) {
+          const auto handleOffset = static_cast<std::size_t>(section.payloadOffset) +
+              static_cast<std::size_t>(element) * section.elementSize + field->payloadOffset;
+          check(handleOffset <= secondDraw.payload.size() &&
+                    sizeof(std::uint32_t) <= secondDraw.payload.size() - handleOffset,
+              "grouping draw handle stays inside its authenticated payload");
+          std::uint32_t handle = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+          std::memcpy(&handle, secondDraw.payload.data() + handleOffset, sizeof(handle));
+          if (handle == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) continue;
+          check(handle < draw.handles.size(), "grouping seed handle names its original one-record slice");
+          handle += static_cast<std::uint32_t>(draw.handles.size());
+          std::memcpy(secondDraw.payload.data() + handleOffset, &handle, sizeof(handle));
+        }
+      }
+      const D9CCommandChunkWireQueryIssue end{
+          .queryHandleIndex = static_cast<std::uint32_t>(draw.handles.size() * 2u), .flags = 1u};
+      const D9CCommandChunkWireHandleEntry queryHandle{
+          .kind = queryIdentity.kind, .generation = queryIdentity.generation, .objectId = queryIdentity.objectId};
+      const auto endBytes = std::as_bytes(std::span(&end, 1u));
+      const std::array records{draw, clearRecord(), secondDraw, clearRecord(),
+          RecordSpec{D9C_COMMAND_RECORD_QUERY_ISSUE, {endBytes.begin(), endBytes.end()}, {queryHandle}}};
+      const auto wire = makeWireFixture(records);
+      check(wire.envelope.recordCount == 5u && validateCommandChunk(wire.bytes, wire.envelope).valid(),
+          "grouping prefix authenticates four GPU records followed by one real EVENT END");
+      builder.appendCommandChunk(wire.envelope, wire.bytes);
+      ++nextOrdinal;
+      builder.appendOrderedControl({.identity = queryIdentity,
+          .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+          .disposition = static_cast<std::uint32_t>(RenderTapeControlDisposition::Completed),
+          .resultCode = D3D_OK, .controlBytes = sizeof(poll), .completionOrdinal = 1u},
+          std::as_bytes(std::span(&poll, 1u)));
+      ++nextOrdinal;
+      // The younger draw and terminal Present remain adjacent authentic raws,
+      // retaining the genuine PE Present preparation contract unchanged.
+      builder.appendRawEvent(type, event.payload);
+      ++nextOrdinal;
+      appendedPrefix = true;
+      continue;
+    }
+    if (type == RenderTapeEventType::PresentComplete) {
+      auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+      RenderTapePresentCompleteHeader fixed{};
+      check(payload.size() >= sizeof(fixed) && presentOrdinal,
+          "grouping query tape retains the terminal Present completion");
+      std::memcpy(&fixed, payload.data(), sizeof(fixed));
+      fixed.presentOrdinal = presentOrdinal;
+      std::memcpy(payload.data(), &fixed, sizeof(fixed));
+      builder.appendRawEvent(type, payload);
+    } else {
+      builder.appendRawEvent(type, event.payload);
+      if (type == RenderTapeEventType::CommandChunk) presentOrdinal = nextOrdinal;
+    }
+    ++nextOrdinal;
+    if (type == RenderTapeEventType::BootstrapState) {
+      builder.appendObjectDefine(queryIdentity,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+          std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+      ++nextOrdinal;
+    }
+  }
+  check(appendedPrefix && presentOrdinal, "grouping fixture authors one prefix and one terminal Present");
+  fixture.tape = builder.seal();
+  return fixture;
+}
+
+void controlledCpuV4GroupingPreservesQueryEnd(std::size_t drawCommandLimit) {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Mode = dxmt9::test::CpuGeneralTapeControlledV4ExecutionMode;
+  const dxmt9::test::RenderTapeV4ReplayPolicy policy{.drawCommandLimit = drawCommandLimit};
+  check((drawCommandLimit == 0u || drawCommandLimit == 3u || drawCommandLimit == 64u) &&
+            dxmt9::test::renderTapeV4ReplayPolicyValid(policy) && dxmt9::perf::enabled(),
+      "grouping spec requires admitted cold Compatibility policy and existing route counters");
+  const auto captured = controlledCpuV4GroupingQueryTape();
+  const auto originalBytes = captured.tape;
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  check(preflight.complete(), std::string("grouping query preflight: status=") +
+      frameTapeReplayStatusName(preflight.status) + " failed_event=" + std::to_string(preflight.failedEventIndex) +
+      " query_failure=" + std::to_string(static_cast<unsigned>(preflight.queryReplay.failure)));
+  const auto source = controlledCpuV4ReferencePlan(captured.tape, general, true);
+  const auto grammar = dxmt9::test::admitControlledCpuV4Input(general);
+  check(grammar.accepted() && grammar.counts().records == 7u && grammar.counts().draws == 3u &&
+            grammar.counts().queryIssues == 1u && grammar.counts().queryPolls == 1u &&
+            general.events.size() == 14u && general.commandChunks.size() == 3u &&
+            general.presentOrdinal == 13u && source.identity().coordinators.size() == 1u,
+      "unchanged grouping Tape authenticates real END, required-ready poll and younger Draw/Present");
+  PresentParameters output{};
+  output.backBufferWidth = general.outputDesc.width;
+  output.backBufferHeight = general.outputDesc.height;
+  output.backBufferFormat = devicec::fmtFromD3D(general.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "grouping spec owns CPU-visible provider resources only");
+  const auto expectedSources = drawCommandLimit == 3u ? 4u : 3u;
+  const auto run = [&](Mode mode) {
+    const bool executionOnly = mode == Mode::ExecutionOnly;
+    RuntimeFixture fixture(false, false, false, true,
+        WMT::Device{resourceDevice.handle}, nullptr, &output, true);
+    fixture.routing->recordBoundedCapturedBindings = false;
+    Executor executor(fixture, general, blobs);
+    Executor::ControlledV4InventoryOptions options;
+    options.route = ProviderReplayPolicy::Compatibility;
+    options.executionMode = mode;
+    options.sourcePlan = &source;
+    options.exactTape = captured.tape;
+    options.expectedBufferBudget = {executionOnly ? 0u : 1024u * 1024u};
+    options.consumerLimits = {.maxSources = 8u, .maxCommands = 16u, .maxLifecycleActions = 32u};
+    options.initialSetupLimits = {.maxObjects = 8u, .maxSeeds = 8u,
+        .maxSeedBytes = 1024u * 1024u, .maxAllocationBytes = 1024u * 1024u};
+    options.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    options.maxQueryOraclePolls = 1u;
+    options.producerContract = RenderTapeExecutionV4ProducerContract::PePresentReservationV1;
+    options.observeLogicalSemantics = !executionOnly;
+    options.legalCandidateNoOverwriteContract = true;
+    options.freshNoAutoDepthSurfaceDefaults = !output.enableAutoDepthStencil;
+    auto result = executor.runControlledV4Inventory(options);
+    const auto& cpu = result.controlledCpu;
+    const auto& consumer = result.consumer;
+    const auto& state = consumer.state;
+    const auto& query = result.queryReplay;
+    const auto& route = result.routeCoverage;
+    check(result.complete && result.sourceProgressComplete && result.resetOk && result.failure.empty() &&
+              result.metadataInventoryComplete == !executionOnly && result.events == 14u &&
+              result.commands == 8u && result.draws == 3u && result.resourcesCreated == 6u &&
+              result.resourcesReleased == 6u && result.observedMutations == 2u &&
+              cpu.controlledCpuComplete && cpu.rawAckCoverageComplete && cpu.semanticMappingComplete &&
+              cpu.semanticMapping && cpu.semanticMapping->valid() && cpu.semanticMapping->records().size() == 7u &&
+              cpu.actualIdentity.attempts.size() == 3u && cpu.actualIdentity.settlements.size() == 3u &&
+              cpu.sourceObligationsRegistered == 3u && cpu.sourceObligationsQualified == 3u &&
+              cpu.actualIdentity.sources.size() == expectedSources && cpu.actualIdentity.commands.size() == 6u &&
+              renderTapeActionWitnessV1StableExact(cpu.actionWitness),
+        "genuine grouping replay completes every original event/record/ACK with actual changed sources: limit=" +
+            std::to_string(drawCommandLimit) + " execution=" + std::to_string(executionOnly) +
+            " failure=" + result.failure);
+    check(cpu.actualIdentity.coordinators.size() == 1u && cpu.semanticMapping->coordinators().size() == 1u,
+        "both modes retain the actual original EVENT END coordinator");
+    const auto& end = cpu.actualIdentity.coordinators[0].provenance;
+    const auto& mappedEnd = cpu.semanticMapping->coordinators()[0];
+    const auto& first = cpu.actualIdentity.sources[0].lifecycle;
+    const auto endSource = drawCommandLimit == 3u ? 1u : 0u;
+    check(end.eventOrdinal == 10u && end.recordIndex == 4u && end.recordType == D9C_COMMAND_RECORD_QUERY_ISSUE &&
+              end.queryType == 8u && end.flags == 1u && end.issueCycle == 1u && end.issueOrdinal == 1u &&
+              end.prefixKind == static_cast<std::uint32_t>(RenderTapeIdentityV3PrefixKind::RealSource) &&
+              end.sourceIndex == endSource && end.commandEnd == (drawCommandLimit == 3u ? 1u : 4u) &&
+              mappedEnd.prefixRecordCount == 4u && !mappedEnd.prefixCoordinatorCommandCount &&
+              mappedEnd.candidatePrefixSequence == end.prefixSequence &&
+              first.commandCount == (drawCommandLimit == 3u ? 3u : 4u),
+        "natural command-limit publications preserve exactly four pre-END GPU records, never younger work");
+    const auto& mapping = *cpu.semanticMapping;
+    const auto younger = std::find_if(mapping.records().begin(), mapping.records().end(), [](const auto& record) {
+      return record.eventOrdinal == 12u && record.recordIndex == 0u;
+    });
+    check(younger != mapping.records().end() && younger->recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
+              younger->candidateSourceIndex > end.sourceIndex &&
+              cpu.actualIdentity.sources[younger->candidateSourceIndex].lifecycle.seqId > end.prefixSequence,
+        "END's immutable actual prefix excludes the authentic younger Draw and terminal Present");
+    check(query.present && query.transcriptComplete && query.oracleComplete && query.queryDefinitions == 1u &&
+              query.issueRecords == 1u && query.replayedIssueRecords == 1u && query.recordedPolls == 1u &&
+              query.replayedPolls == 1u && query.readinessRequired == 1u && query.readinessSatisfied == 1u &&
+              !query.requiredResults && !query.matchedResults && !query.substitutedResults &&
+              !query.supplementalDrains && query.rows.size() == 1u && query.rows[0].eventOrdinal == 11u &&
+              query.rows[0].issueCycle == 1u && query.rows[0].flags == 0u && !query.rows[0].definedBytes &&
+              query.rows[0].hasOutput && query.rows[0].dataSize == 4u &&
+              query.rows[0].capturedResult == D3D_OK && query.rows[0].oracleResult == D3D_OK &&
+              query.rows[0].localSequence == end.prefixSequence && query.rows[0].readinessSatisfied &&
+              !query.rows[0].resultMatched && query.rows[0].capturedBytes == query.rows[0].replayBytes &&
+              !query.actualMetal && !query.gpuResultOracle,
+        "original required-ready EVENT poll completes only the actual END prefix without invented result bytes");
+    check(state.phase == dxmt9::test::CpuV4ConsumerPhase::Stopped && state.producerClosed &&
+              state.sourcePhase == dxmt9::test::CpuV4ConsumerSourcePhase::Empty && state.observed == expectedSources &&
+              state.submitted == expectedSources && state.acknowledged == expectedSources &&
+              state.retired == expectedSources && state.commands == 6u && state.lifecycleActions == expectedSources * 4u &&
+              consumer.workerExited && consumer.cleanupComplete && !consumer.cleanupFailed &&
+              consumer.failure == dxmt9::test::CpuV4ConsumerFailure::None &&
+              result.consumerReceipts.size() == expectedSources &&
+              std::all_of(result.consumerReceipts.begin(), result.consumerReceipts.end(), [](const auto& receipt) {
+                return receipt.observation && receipt.submitted && receipt.acknowledged && receipt.retired && receipt.cleanupComplete;
+              }) && route.policySelected && route.observed && route.complete && route.monotonic &&
+              route.requestedRoute == ProviderReplayPolicy::Compatibility &&
+              route.effectiveRoute == ProviderReplayPolicy::Compatibility && route.compatibilityDraws == 3u &&
+              !route.directDraws && !route.directLeases && !route.fallbackDraws,
+        "actual source publications conserve FIFO submit/ACK/retire and requested Compatibility work in both modes");
+    if (executionOnly) {
+      check(result.executionOnly.complete && result.executionOnly.lifecycleCoverageComplete &&
+                result.executionOnly.sources == expectedSources && result.executionOnly.commands == 6u &&
+                result.executionOnly.draws == 3u && result.inventory.empty() && result.canonicalDrawRecords.empty() &&
+                !result.recordContexts && !result.logicalSemantics.requested && result.logicalSemantics.receipts.empty(),
+          "ExecutionOnly omits payload observation while retaining genuine grouping/query/lifetime checks");
+    } else {
+      check(result.logicalSemantics.complete && result.logicalSemantics.logicalStreamComplete &&
+                result.logicalSemantics.receipts.size() == 6u && result.logicalSemantics.sourceRowsQualified == 3u &&
+                result.inventory.size() == expectedSources && result.canonicalDrawRecords.size() == 3u,
+          "Observe qualifies every original GPU item and authentic draw source row across changed partitions");
+    }
+    check(captured.tape == originalBytes && !result.actualMetal && !result.gpuResultOracle &&
+              !result.fullSemanticOracleComplete && !result.policyQualified && !result.timingEligible &&
+              !fixture.cDevice && !fixture.device && !fixture.factory && !fixture.routing->flushHook &&
+              !Access::readyCount(fixture.routing->queue_) && !Access::writingCommandCount(fixture.routing->queue_) &&
+              !Access::pendingCompletionCount(fixture.routing->queue_) && !Access::residentCount(fixture.routing->queue_) &&
+              !Access::controlledCpuQueueStopped(fixture.routing->queue_),
+        "grouping never rewrites original Tape or promotes native CPU evidence to public/GPU/timing authority");
+    return result;
+  };
+  const auto observed = run(Mode::Observe);
+  const auto executed = run(Mode::ExecutionOnly);
+  check(observed.events == executed.events && observed.commands == executed.commands && observed.draws == executed.draws &&
+            observed.resourcesCreated == executed.resourcesCreated && observed.resourcesReleased == executed.resourcesReleased &&
+            observed.provenance.acknowledgedRaws == executed.provenance.acknowledgedRaws &&
+            observed.queryReplay.issueRecords == executed.queryReplay.issueRecords &&
+            observed.queryReplay.readinessSatisfied == executed.queryReplay.readinessSatisfied &&
+            observed.consumer.state.observed == executed.consumer.state.observed &&
+            observed.consumer.state.commands == executed.consumer.state.commands &&
+            observed.routeCoverage.compatibilityDraws == executed.routeCoverage.compatibilityDraws &&
+            observed.routeCoverage.compatibilityBatches == executed.routeCoverage.compatibilityBatches &&
+            observed.routeCoverage.compatibilityUnbatchedDraws == executed.routeCoverage.compatibilityUnbatchedDraws,
+      "Observe and ExecutionOnly execute the same admitted grouping policy, original semantics and real lifecycle");
+  for (std::size_t index = 0u; index < observed.consumerReceipts.size(); ++index)
+    check(observed.consumerReceipts[index].observation->commands == executed.consumerReceipts[index].observation->commands,
+        "both modes observe the same actual physical command partition without comparing fresh local identities");
+  std::uint64_t queryDigest = 1469598103934665603ull;
+  const auto& query = observed.queryReplay.rows[0];
+  digestBytes(queryDigest, &query.eventOrdinal, sizeof(query.eventOrdinal));
+  digestBytes(queryDigest, &query.issueCycle, sizeof(query.issueCycle));
+  digestBytes(queryDigest, &query.flags, sizeof(query.flags));
+  digestBytes(queryDigest, &query.capturedResult, sizeof(query.capturedResult));
+  digestBytes(queryDigest, query.capturedBytes.data(), query.definedBytes);
+  std::cout << "{\"schema\":\"dxmt9.native.controlled_cpu_v4.grouping_end.v1\",\"draw_command_limit\":"
+            << drawCommandLimit << ",\"sources\":" << observed.consumer.state.observed
+            << ",\"physical_commands\":" << observed.consumer.state.commands
+            << ",\"events\":" << observed.events << ",\"records\":7,\"draws\":" << observed.draws
+            << ",\"end_prefix_records\":4,\"logical_digest\":" << observed.logicalSemantics.digest
+            << ",\"query_digest\":" << queryDigest << ",\"original_items\":" << observed.logicalSemantics.receipts.size()
+            << ",\"query_issues\":1,\"recorded_polls\":1,\"required_ready\":1,\"raw_acks\":"
+            << observed.provenance.acknowledgedRaws << ",\"retired\":" << observed.consumer.state.retired
+            << ",\"execute_sources\":" << executed.consumer.state.observed
+            << ",\"execute_retired\":" << executed.consumer.state.retired
+            << ",\"input_unchanged\":true,\"actual_metal\":false,\"timing_eligible\":false}\n";
+}
+
+// An explicitly authored native stress input, not a capture29 transcript or
+// an original-production cut-equivalence claim. Only the supported limit=3
+// policy creates candidate publications; this fixture never requests a cut.
+dxmt9::d3d9::test::GeneralCpuDestroyFixture controlledCpuV4ProgressTape() {
+  using namespace dxmt9::d3d9;
+  auto fixture = test::makeGeneralCpuDestroyFixture(false, false);
+  ImportedRenderTapeView original;
+  check(importPrevalidatedRenderTape(fixture.tape, original), "progress seed tape imports");
+  const auto oneRecord = [](const std::vector<std::byte>& bytes, std::uint32_t handles) {
+    ImportedChunkView chunk;
+    check(importPrevalidatedCommandChunk(bytes, {.recordCount = 1u, .handleCount = handles}, chunk),
+          "progress GPU record retains the authentic fixture resource closure");
+    const auto record = chunk.record(0u);
+    return RecordSpec{record.header.type, {record.payload.begin(), record.payload.end()},
+        {record.handles.begin(), record.handles.end()}};
+  };
+  const auto draw = oneRecord(test::general_cpu_destroy_fixture_detail::indexedDrawChunk(), 5u);
+  const auto present = oneRecord(test::general_cpu_destroy_fixture_detail::presentChunk(), 1u);
+  std::vector<RecordSpec> records;
+  records.reserve(256u);
+  std::uint32_t firstHandle = 0u;
+  const auto appendRecord = [&](RecordSpec record) {
+    // Wire payload references are chunk-global, not record-local. The seed
+    // records each came from a one-record chunk with firstHandle=0; copying
+    // their handle slices must rebase every non-null embedded reference.
+    const auto rebaseHandle = [&](std::size_t offset) {
+      check(offset <= record.payload.size() && sizeof(std::uint32_t) <= record.payload.size() - offset,
+            "stress handle field stays inside its authenticated record payload");
+      std::uint32_t handle = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+      std::memcpy(&handle, record.payload.data() + offset, sizeof(handle));
+      if (handle == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) return;
+      check(handle < record.handles.size(), "stress seed handle names its original one-record slice");
+      handle += firstHandle;
+      std::memcpy(record.payload.data() + offset, &handle, sizeof(handle));
+    };
+    if (record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+      D9CCommandChunkWireDrawHeader header{};
+      check(record.payload.size() >= sizeof(header), "stress indexed draw keeps its authentic header");
+      std::memcpy(&header, record.payload.data(), sizeof(header));
+      for (std::uint32_t index = 0u; index < header.sectionCount; ++index) {
+        const auto offset = static_cast<std::size_t>(header.sectionTableOffset) +
+            index * sizeof(D9CCommandChunkWireSectionDesc);
+        check(offset <= record.payload.size() && sizeof(D9CCommandChunkWireSectionDesc) <= record.payload.size() - offset,
+              "stress indexed draw keeps its authentic section table");
+        D9CCommandChunkWireSectionDesc section{};
+        std::memcpy(&section, record.payload.data() + offset, sizeof(section));
+        if (const auto* field = sectionHandleFieldRule(section.kind)) {
+          for (std::uint32_t element = 0u; element < section.count; ++element)
+            rebaseHandle(static_cast<std::size_t>(section.payloadOffset) +
+                static_cast<std::size_t>(element) * section.elementSize + field->payloadOffset);
+        }
+      }
+    } else {
+      for (const auto& field : kRecordHandleFieldRules)
+        if (field.recordType == record.type) rebaseHandle(field.payloadOffset);
+    }
+    firstHandle += static_cast<std::uint32_t>(record.handles.size());
+    records.push_back(std::move(record));
+  };
+  for (std::size_t index = 0u; index < 128u; ++index) {
+    appendRecord(draw);
+    if (index != 127u) appendRecord(clearRecord());
+  }
+  appendRecord(present);
+  const auto wire = makeWireFixture(records);
+  check(wire.envelope.recordCount == 256u, "one stress raw stays within the General record cap");
+  const auto wireValidation = validateCommandChunk(wire.bytes, wire.envelope);
+  if (!wireValidation.valid())
+    std::cerr << "native stress wire validation: status=" << static_cast<unsigned>(wireValidation.status)
+              << " failedRecord=" << wireValidation.failedRecordIndex
+              << " failedSection=" << wireValidation.failedSectionIndex
+              << " failedHandle=" << wireValidation.failedHandleIndex
+              << " byteOffset=" << wireValidation.byteOffset << '\n';
+  check(wireValidation.valid(), "stress raw validates every rebased record-local handle slice");
+  RenderTapeBuilder builder;
+  bool appended = false;
+  std::uint64_t nextOrdinal = 1u, presentOrdinal = 0u;
+  for (std::uint32_t index = 0u; index < original.header.eventCount; ++index) {
+    const auto event = original.event(index);
+    const auto type = static_cast<RenderTapeEventType>(event.header.type);
+    if (type == RenderTapeEventType::ObjectDestroy) continue;
+    if (type == RenderTapeEventType::CommandChunk) {
+      if (appended) continue;
+      builder.appendCommandChunk(wire.envelope, wire.bytes);
+      appended = true;
+      presentOrdinal = nextOrdinal++;
+    } else if (type == RenderTapeEventType::PresentComplete) {
+      auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+      RenderTapePresentCompleteHeader fixed{};
+      std::memcpy(&fixed, payload.data(), sizeof(fixed));
+      fixed.presentOrdinal = presentOrdinal;
+      std::memcpy(payload.data(), &fixed, sizeof(fixed));
+      builder.appendRawEvent(type, payload);
+      ++nextOrdinal;
+    } else {
+      builder.appendRawEvent(type, event.payload);
+      ++nextOrdinal;
+    }
+  }
+  check(appended && presentOrdinal, "stress tape retains one terminal Present and the actual seeded prefix");
+  fixture.tape = builder.seal();
+  return fixture;
+}
+
+// This authenticated authored reference deliberately has one source per GPU
+// record. SemanticMapping is cut-agnostic: it cannot force that morphology on
+// the actual candidate or substitute these labels for local queue receipts.
+dxmt9::d3d9::CaptureSourceReplayPlanV4 controlledCpuV4ProgressReference(
+    std::span<const std::byte> tape,
+    const dxmt9::d3d9::render_tape_runtime::GeneralPreflightPlan& general) {
+  using namespace dxmt9::d3d9;
+  RenderTapeIdentityV4View identity;
+  identity.header.coordinatorDomain = static_cast<std::uint32_t>(TapeCoordinatorAuthority::OrdinarySerial);
+  identity.header.frameId = 9u;
+  identity.header.captureToken = 100u;
+  identity.header.captureEpoch = 101u;
+  identity.header.presentOrdinal = general.presentOrdinal;
+  identity.header.queue = 102u;
+  identity.header.initializerEpoch = 103u;
+  identity.header.baselineCompletionEdge = 1u;
+  identity.header.baselineKind = static_cast<std::uint32_t>(RenderTapeIdentityV3PrefixKind::EmptyBaseline);
+  RenderTapeExecutionTopologyV1View topology;
+  topology.header.captureToken = identity.header.captureToken;
+  topology.header.captureEpoch = identity.header.captureEpoch;
+  topology.header.queue = identity.header.queue;
+  check(general.commandChunks.size() == 1u, "progress reference authenticates one unchanged full raw");
+  const auto event = std::find_if(general.events.begin(), general.events.end(), [](const auto& value) {
+    return value.type == RenderTapeEventType::CommandChunk;
+  });
+  check(event != general.events.end(), "progress reference locates its original command event");
+  const auto ordinal = general.tape.event(event->eventIndex).header.ordinal;
+  const auto raw = 500u + ordinal;
+  const auto& admitted = general.commandChunks[0u];
+  ImportedChunkView chunk;
+  check(importPrevalidatedCommandChunk(admitted.bytes, admitted.envelope, chunk) && chunk.records.size() == 256u,
+        "reference validates the original 256-record raw before authoring provenance");
+  std::uint64_t edge = 2u;
+  const auto begin = edge++, effect = edge++;
+  for (std::uint32_t record = 0u; record < chunk.records.size(); ++record) {
+    const auto type = chunk.records[record].type;
+    const bool draw = type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+    check(draw || type == D9C_COMMAND_RECORD_CLEAR || type == D9C_COMMAND_RECORD_PRESENT,
+          "progress reference admits only the authored GPU record kinds");
+    const auto source = static_cast<std::uint32_t>(identity.sources.size());
+    const auto publication = edge++, acceptance = edge++, submission = edge++, completion = edge++;
+    identity.sources.push_back({.lifecycle = {.sourceOrdinal = source + 1u, .seqId = source + 1u,
+        .writerCaptureId = source + 1u, .writerGeneration = 2u, .storageGeneration = 3u,
+        .publicationEdge = publication, .submissionEdge = submission, .completionEdge = completion,
+        .completedSequence = source + 1u, .cutEventOrdinal = ordinal, .commandCount = 1u,
+        .cutKind = static_cast<std::uint32_t>(RenderTapeIdentityV3CutKind::AfterRecord),
+        .cutRecord = record + 1u}, .rawOrdinal = raw, .publicationBuildGeneration = 1u,
+        .publicationControlIndex = source});
+    identity.commands.push_back({.sourceIndex = source, .physicalCommandIndex = 0u,
+        .kind = static_cast<std::uint32_t>(renderTapeIdentityV3RecordCommandKind(type)),
+        .drawCount = draw ? 1u : 0u});
+    identity.dispositions.push_back({.eventOrdinal = ordinal, .firstRecord = record, .recordCount = 1u,
+        .kind = static_cast<std::uint32_t>(RenderTapeIdentityV3DispositionKind::GpuCommand),
+        .commandIndex = source, .subdrawCount = draw ? 1u : 0u});
+    topology.plans.push_back({.planId = source + 11u, .acceptanceEdge = acceptance,
+        .route = static_cast<std::uint32_t>(RenderTapeExecutionTopologyV1Route::NaturalOrder),
+        .firstPlacement = source, .placementCount = 1u, .executedCount = 1u});
+    topology.placements.push_back({.planIndex = source, .commandIndex = source,
+        .outcome = static_cast<std::uint32_t>(RenderTapeExecutionTopologyV1Outcome::ExecutedWithoutDag),
+        .executionOrdinal = 0u}); // Dense order is plan-local; each authored plan executes one command.
+  }
+  const RenderTapeIdentityV4ReplaySourceIdentity projection{9u, 600u + ordinal, 600u + ordinal, raw};
+  identity.attempts.push_back({.eventOrdinal = ordinal, .rawOrdinal = raw, .attemptGeneration = 1u,
+      .beginEdge = begin, .terminalEdge = edge++, .effectEdge = effect, .identity = projection,
+      .receipt = {.identity = projection, .queueSequence = raw,
+          .kind = static_cast<std::uint32_t>(RenderTapeIdentityV4ReceiptKind::Compatibility), .commandCount = 256u},
+      .recordCount = 256u, .outcome = static_cast<std::uint32_t>(RenderTapeIdentityV4AttemptOutcome::Committed),
+      .stagedCommandCount = 256u});
+  identity.settlements.push_back({ordinal, raw, edge++, 256u});
+  RenderTapeIdentityV4Status identityStatus{};
+  const auto identityBytes = buildRenderTapeIdentityV4(tape, general.catalogue, identity, &identityStatus);
+  if (identityStatus != RenderTapeIdentityV4Status::Valid)
+    std::cerr << "native stress reference identity: status=" << static_cast<unsigned>(identityStatus)
+              << " sources=" << identity.sources.size() << " commands=" << identity.commands.size()
+              << " dispositions=" << identity.dispositions.size() << " attempts=" << identity.attempts.size()
+              << " settlements=" << identity.settlements.size() << '\n';
+  check(identityStatus == RenderTapeIdentityV4Status::Valid, "native stress reference provenance authenticates");
+  RenderTapeExecutionTopologyV1Status topologyStatus{};
+  const auto topologyBytes = buildRenderTapeExecutionTopologyV1(tape, general.catalogue, identityBytes,
+      topology, &topologyStatus);
+  if (topologyStatus != RenderTapeExecutionTopologyV1Status::Valid) {
+    std::cerr << "native stress reference topology: status=" << static_cast<unsigned>(topologyStatus)
+              << " rowsStatus=" << static_cast<unsigned>(validateRenderTapeExecutionTopologyV1Rows(identity, topology))
+              << " plans=" << topology.plans.size() << " placements=" << topology.placements.size() << '\n';
+    for (std::size_t index = 0u; index < topology.placements.size(); ++index) {
+      const auto& placement = topology.placements[index];
+      if (placement.planIndex < topology.plans.size() &&
+          renderTapeExecutionTopologyV1PlacementAdmitted(topology.plans[placement.planIndex], placement)) continue;
+      std::cerr << "native stress reference invalid placement: row=" << index
+                << " planIndex=" << placement.planIndex << " commandIndex=" << placement.commandIndex
+                << " outcome=" << placement.outcome << " executionOrdinal=" << placement.executionOrdinal << '\n';
+      break;
+    }
+  }
+  check(topologyStatus == RenderTapeExecutionTopologyV1Status::Valid,
+        "native stress reference topology authenticates before source-plan admission");
+  CaptureSourceReplayPlanV4 source;
+  const auto sourceStatus = buildCaptureSourceReplayPlanV4(tape, general.catalogue, identityBytes, topologyBytes, source);
+  if (sourceStatus != CaptureSourceReplayPlanV4Status::Valid)
+    std::cerr << "native stress reference source-plan: status=" << captureSourceReplayPlanV4StatusName(sourceStatus)
+              << " identityStatus=" << static_cast<unsigned>(identityStatus)
+              << " topologyStatus=" << static_cast<unsigned>(topologyStatus) << '\n';
+  check(sourceStatus == CaptureSourceReplayPlanV4Status::Valid,
+        "native stress reference pair is validated before candidate effects");
+  return source;
+}
+
+void controlledCpuV4RootProgressUsesNaturalPublications() {
+  using namespace dxmt9::d3d9;
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<RuntimeFixture, Access>;
+  using Context = dxmt9::test::CpuTapeResourceContext;
+  using ContextStatus = dxmt9::test::CpuTapeResourceContextStatus;
+  using Clock = std::chrono::steady_clock;
+  const auto captured = controlledCpuV4ProgressTape();
+  std::vector<RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : captured.blobs)
+    blobs.push_back({RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan general;
+  const auto preflight = runtime::buildGeneralReplayPlan(captured.tape, blobs, general);
+  if (!preflight.complete()) {
+    RenderTapeBlobCatalogue catalogue;
+    for (const auto& blob : blobs)
+      catalogue.blobs.push_back({.digest = blob.digest, .size = blob.bytes.size(), .verified = 1u});
+    const auto validation = validateRenderTape(captured.tape, catalogue);
+    std::cerr << "native stress General preflight: status=" << frameTapeReplayStatusName(preflight.status)
+              << " failedEvent=" << preflight.failedEventIndex
+              << " validation=" << renderTapeValidationStatusName(validation.status)
+              << " validationFailedEvent=" << validation.failedEventIndex
+              << " failedEventType=" << validation.failedEventType
+              << " chunkStatus=" << static_cast<unsigned>(validation.chunkStatus)
+              << " incompleteFrameReason=" << renderTapeIncompleteFrameReasonName(validation.incompleteFrameReason)
+              << " objectDefineReason=" << renderTapeObjectDefineValidationSubreasonName(validation.objectDefine.subreason)
+              << '\n';
+  }
+  check(preflight.complete(),
+        "native stress input passes actual General preflight");
+  const auto grammar = dxmt9::test::admitControlledCpuV4Input(general);
+  check(grammar.accepted() && grammar.counts().records == 256u && grammar.counts().draws == 128u &&
+            grammar.counts().presents == 1u && !grammar.counts().queryIssues &&
+            grammar.sourceProgressRequirement() ==
+                dxmt9::test::ControlledCpuV4SourceProgressRequirement::RequiredUnproven,
+        "Raw256 input admission preserves one terminal Present but grants no source-progress authority");
+  const auto source = controlledCpuV4ProgressReference(captured.tape, general);
+
+  for (const bool failConsumer : {false, true}) {
+    RuntimeFixture fixture(false, false, false, true, {}, nullptr, nullptr, true);
+    fixture.routing->recordBoundedCapturedBindings = false;
+    struct Owners {
+      std::vector<runtime::OwnedObject> values;
+      ~Owners() { for (auto& value : values) runtime::releaseOwnedObject(value); }
+    } objects;
+    RenderTapeExecutionV4Evidence evidence;
+    RenderTapeExecutionV4 execution;
+    check(execution.admit(source, general, captured.tape, evidence,
+              RenderTapeExecutionV4PublicationMode::SemanticMapping), "stress V4 input admits before setup");
+    for (const auto& definition : general.definitions) {
+      auto* value = runtime::createRenderTapeObject(fixture.cDevice.get(), definition.fixed,
+          definition.descriptor, blobs, objects.values);
+      check(value != nullptr, "stress prefix acquires the actual provider object");
+      objects.values.push_back({definition.fixed.identity, value});
+    }
+    std::vector<dxmt9::test::detail::LogicalReceipt> receipts;
+    for (const auto& mutation : general.mutations) {
+      const auto* blob = dxmt9::test::detail::cpuGeneralFindBlob(blobs, mutation.digest);
+      auto* buffer = static_cast<D9CBuffer*>(runtime::findExactObject(objects.values, mutation.identity));
+      RenderTapeBufferMutationReplayPlan plan{};
+      void* bits = nullptr;
+      check(blob && buffer && renderTapeBufferMutationReplayPlan(mutation, plan) &&
+                dxmt9c_buffer_lock(buffer, plan.byteOffset, plan.byteSize, &bits, plan.lockFlags) == D3D_OK && bits,
+          "stress prefix enters the genuine buffer seed lock");
+      std::memcpy(bits, blob->bytes.data(), blob->bytes.size());
+      check(dxmt9c_buffer_unlock(buffer) == D3D_OK, "stress prefix completes actual seed upload");
+      dxmt9::test::detail::cpuGeneralRecordReceipt(receipts, mutation.identity, mutation.subresource, mutation.digest);
+    }
+    for (const auto& bootstrap : general.bootstrapChunks) {
+      std::vector<void*> resolved(bootstrap.envelope.handleCount);
+      std::size_t count = 0u;
+      check(runtime::resolveCommandHandles(bootstrap, objects.values, resolved, count) &&
+                replayPrevalidatedResolvedCommandChunk(fixture.cDevice.get(), bootstrap.bytes, bootstrap.envelope,
+                    std::span<void* const>(resolved.data(), count), ProviderReplayPolicy::Compatibility) == D3D_OK,
+          "stress prefix replays authentic bootstrap against still-owned seeded wrappers");
+    }
+    Executor normalizer(fixture, general, blobs);
+    std::vector<std::shared_ptr<const dxmt9::test::CpuTapeResourceVersion>> versions;
+    for (const auto& object : objects.values) {
+      dxmt9::core::Handle native{};
+      const D9CBuffer* buffer = nullptr;
+      if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+        buffer = static_cast<const D9CBuffer*>(object.value);
+        if (buffer->obj) native = buffer->obj->handle();
+      } else if (object.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+        const auto* surface = static_cast<const D9CSurface*>(object.value);
+        if (surface->obj) native = surface->obj->handle();
+      } else continue;
+      dxmt9::test::CpuTapeResourceObservation observation;
+      check(native && normalizer.captureResourceObservation(objects.values, receipts, {},
+                object.identity.kind, native, observation), "stress producer freezes actual normalized resource facts");
+      std::shared_ptr<const dxmt9::test::CpuTapeResourceVersion> version;
+      check(dxmt9::test::buildCpuTapeResourceVersion({.nativeKind = object.identity.kind, .nativeHandle = native,
+                .contentEpoch = 1u, .expectedBufferByteSize = buffer ? buffer->desc.size : 0u,
+                .expectedBufferBytes = buffer ? buffer->obj->bytes() : std::span<const std::uint8_t>{}},
+                observation, version) == ContextStatus::Accepted, "stress record context owns copied values only");
+      versions.push_back(std::move(version));
+    }
+    std::shared_ptr<const Context> context;
+    check(dxmt9::test::buildCpuTapeResourceContext(versions, context) == ContextStatus::Accepted &&
+              context->entries().size() == 3u, "stress immutable context retains the unchanged resource closure");
+    for (std::uint32_t index = 0u; index < execution.snapshotPrefixEvents(); ++index)
+      check(execution.beginEvent(index) && execution.replayedEvent(index), "stress prefix acknowledges completed real effects");
+    auto capability = fixture.issueControlledCpuCapability();
+    check(execution.armControlledCpu(fixture.cDevice.get(), capability), "stress consumer has a genuine locally Bound V4 root");
+
+    struct Observer {
+      std::shared_ptr<RenderTapeRuntimeIdentityV4> root;
+      dxmt9::render::TapeTopologyCaptureIdentity capture{};
+      std::shared_ptr<const Context> context;
+      dxmt9::test::CpuTapeRecordContextStore records;
+      std::atomic<bool> rawAck{false}, producerDone{false};
+      std::atomic<std::size_t> originsBeforeAck{0u};
+      std::mutex mutex;
+      std::condition_variable cv;
+      bool entered = false, release = false, injectFailure = false;
+      Clock::time_point deadline;
+      std::size_t sources = 0u, origins = 0u;
+      std::vector<bool> selected = std::vector<bool>(256u, false);
+
+      void observe(const dxmt9::core::metalqueue::ReplaySourcePublicationReceipt& publication,
+          const dxmt9::core::metalqueue::SynchronousSourcePayloadBorrow& payload) {
+        RenderTapeRuntimePublishedSourceOriginsV4 copied;
+        check(root->copyPublishedSourceOrigins(capture, publication, copied) &&
+                  copied.commands.size() == payload.commandCount(), "stress consumer pulls real origins during the raw");
+        for (std::size_t index = 0u; index < payload.commandCount(); ++index) {
+          const auto command = payload.commandAt(index);
+          check(copied.commands[index].physicalCommandIndex == index &&
+                    copied.commands[index].kind == dxmt9::render::tapeTopologyCommandKind(command.kind()) &&
+                    copied.commands[index].drawCount == command.command.drawParams.size(),
+                "stress source origin extent matches the retained payload borrow");
+        }
+        for (const auto& origin : copied.origins) {
+          check(origin.record.recordIndex < selected.size() && !selected[origin.record.recordIndex] &&
+                    records.lookup(origin.record) == context, "stress canonical origin selects its pre-dispatch immutable context");
+          selected[origin.record.recordIndex] = true;
+          ++origins;
+        }
+        ++sources;
+        if (!rawAck.load(std::memory_order_acquire)) originsBeforeAck.fetch_add(copied.origins.size());
+        if (sources == 1u) {
+          std::unique_lock lock(mutex);
+          entered = true;
+          cv.notify_all();
+          check(cv.wait_until(lock, deadline, [&] { return release; }), "stress observer gate reaches its bounded release");
+          if (injectFailure) throw TestFailure("injected synchronous consumer observation failure");
+        }
+      }
+    };
+    auto observer = std::make_shared<Observer>();
+    observer->root = acquireRenderTapeRuntimeIdentityV4(fixture.cDevice.get());
+    observer->capture = {evidence.localArm.captureToken, evidence.localArm.captureEpoch, evidence.localArm.queue};
+    observer->context = context;
+    observer->deadline = Clock::now() + std::chrono::seconds(10);
+    const auto& chunk = general.commandChunks[0u];
+    const auto commandEvent = std::find_if(general.events.begin(), general.events.end(), [](const auto& event) {
+      return event.type == RenderTapeEventType::CommandChunk;
+    });
+    check(commandEvent != general.events.end() && observer->root, "stress interval retains one real root and original event");
+    const auto ordinal = general.tape.event(commandEvent->eventIndex).header.ordinal;
+    for (std::uint32_t index = 0u; index < chunk.envelope.recordCount; ++index)
+      check(observer->records.bind({ordinal, index}, context) == ContextStatus::Accepted,
+            "stress producer binds every canonical record context before dispatch");
+    auto handle = fixture.makeControlledCpuConsumer(capability, evidence.localArm, {}, observer->deadline,
+        [observer](auto&, const auto& publication, const auto& payload) {
+          observer->observe(publication, payload);
+        });
+    check(handle && handle->start(), "stress root consumer starts before producer replay");
+    std::vector<void*> resolved(chunk.envelope.handleCount);
+    std::size_t count = 0u;
+    check(execution.beginEvent(commandEvent->eventIndex) &&
+              runtime::resolveCommandHandles(chunk, objects.values, resolved, count) &&
+              execution.bindCommandChunk(chunk.bytes, chunk.envelope, std::span<void* const>(resolved.data(), count)),
+        "stress binds unchanged original raw bytes and genuine wrappers");
+    struct Forward {
+      ProviderReplayObservationV4 upstream;
+      std::shared_ptr<Observer> observer;
+      std::shared_ptr<RuntimeFixture::ControlledConsumerHandle> handle;
+      std::size_t retiredBeforeAck = 0u;
+    } forward{execution.observation(), observer, handle};
+    auto observation = forward.upstream;
+    observation.context = &forward;
+    observation.rawStarted = [](void* p, auto event, auto raw, auto records) noexcept {
+      auto& value = *static_cast<Forward*>(p);
+      return value.upstream.rawStarted(value.upstream.context, event, raw, records);
+    };
+    observation.beforeRecord = [](void* p, auto index, auto type) noexcept {
+      auto& value = *static_cast<Forward*>(p);
+      return value.upstream.beforeRecord(value.upstream.context, index, type);
+    };
+    observation.beforeDispatch = [](void* p, auto index, auto type) noexcept {
+      auto& value = *static_cast<Forward*>(p);
+      return value.upstream.beforeDispatch(value.upstream.context, index, type);
+    };
+    observation.recordDispatched = [](void* p, auto index, auto type, auto result) noexcept {
+      auto& value = *static_cast<Forward*>(p);
+      return value.upstream.recordDispatched(value.upstream.context, index, type, result);
+    };
+    observation.rawSettled = [](void* p, auto raw, auto records, bool succeeded) noexcept {
+      auto& value = *static_cast<Forward*>(p);
+      value.retiredBeforeAck = value.handle->consumer->snapshot().state.retired;
+      value.observer->rawAck.store(true, std::memory_order_release);
+      return value.upstream.rawSettled(value.upstream.context, raw, records, succeeded);
+    };
+    ProviderReplayObservationV4Result replayResult;
+    std::int32_t replayHr = D3DERR_INVALIDCALL;
+    std::exception_ptr producerException;
+    struct Threads {
+      std::shared_ptr<Observer> observer;
+      std::shared_ptr<RuntimeFixture::ControlledConsumerHandle> handle;
+      std::thread producer;
+      ~Threads() {
+        {
+          std::lock_guard lock(observer->mutex);
+          observer->release = true;
+        }
+        observer->cv.notify_all();
+        // Real poison, while authority remains alive, wakes any parked writer.
+        // Join before capability/root/wrapper teardown, also on assertion unwind.
+        handle->cancelAndJoin();
+        if (producer.joinable()) producer.join();
+      }
+    } threads{observer, handle, {}};
+    threads.producer = std::thread([&] {
+      try {
+        replayHr = replayPrevalidatedResolvedCommandChunkObservedV4(fixture.cDevice.get(), chunk.bytes,
+            chunk.envelope, std::span<void* const>(resolved.data(), count), ProviderReplayPolicy::Compatibility,
+            observation, replayResult);
+      } catch (...) { producerException = std::current_exception(); }
+      observer->producerDone.store(true, std::memory_order_release);
+      observer->cv.notify_all();
+    });
+    {
+      std::unique_lock lock(observer->mutex);
+      check(observer->cv.wait_until(lock, observer->deadline, [&] {
+                return observer->entered || observer->producerDone.load(std::memory_order_acquire);
+              }) && observer->entered && !observer->rawAck.load(std::memory_order_acquire),
+            "consumer copies actual root origins before the original raw can ACK");
+    }
+    Access::ControlledCpuParkSnapshot parked;
+    while (Clock::now() < observer->deadline && !observer->producerDone.load(std::memory_order_acquire)) {
+      parked = Access::controlledCpuParkSnapshot(fixture.routing->queue_);
+      if (parked.acquired && parked.writerPressure) break;
+      std::unique_lock lock(observer->mutex);
+      observer->cv.wait_for(lock, std::chrono::milliseconds(1));
+    }
+    check(parked.acquired && parked.writerPressure && parked.writing &&
+              parked.inflight == dxmt9::kMaxQueuedChunks && parked.ready + 1u == parked.inflight &&
+              parked.resident == dxmt9::kMaxQueuedChunks + 1u && !observer->rawAck.load(),
+          "actual producer park owns Ready backlog plus one Represented borrow and one Writing source");
+    {
+      std::lock_guard lock(observer->mutex);
+      observer->injectFailure = failConsumer;
+      observer->release = true;
+    }
+    observer->cv.notify_all();
+    {
+      std::unique_lock lock(observer->mutex);
+      check(observer->cv.wait_until(lock, observer->deadline, [&] {
+                return observer->producerDone.load(std::memory_order_acquire);
+              }), "retirement or actual consumer poison wakes the parked producer before deadline");
+    }
+    threads.producer.join();
+    if (producerException) std::rethrow_exception(producerException);
+    if (failConsumer) {
+      handle->join();
+      const auto consumer = handle->consumer->snapshot();
+      const auto actual = handle->backendState->snapshot();
+      check(replayHr < 0 && consumer.workerExited &&
+                consumer.failure == dxmt9::test::CpuV4ConsumerFailure::Backend &&
+                consumer.state.retired == 0u && !consumer.cleanupComplete && consumer.cleanupFailed &&
+                actual.queueQuarantined && actual.borrowReleased &&
+                actual.phase == Access::ControlledCpuActualPhase::Represented &&
+                !actual.submitted && !actual.acknowledged && !actual.retired &&
+                Access::controlledCpuQueueStopped(fixture.routing->queue_),
+            "failed real observation poisons/wakes the producer without fabricated completion or reclamation");
+      execution.cancel();
+      continue;
+    }
+    check(replayHr == D3D_OK && replayResult.captureAccepted && replayResult.qualificationSucceeded &&
+              replayResult.ledgerSettlementObserved && forward.retiredBeforeAck > 0u &&
+              observer->originsBeforeAck.load() > 0u && !execution.failed(),
+          "root origin consumption and actual FIFO retirement progress while the full raw remains unacknowledged");
+    for (const auto& event : general.events) {
+      if (event.eventIndex <= commandEvent->eventIndex) continue;
+      check(event.type == RenderTapeEventType::PresentComplete && execution.beginEvent(event.eventIndex) &&
+                execution.replayedEvent(event.eventIndex), "stress traversal acknowledges the original terminal completion event");
+    }
+    check(fixture.closeControlledCpuProducer() && handle->consumer->closeProducer() &&
+              handle->consumer->stopAndJoin(), "stress consumer drains natural sources and joins without a synthetic tail cut");
+    handle->join();
+    const auto consumer = handle->consumer->snapshot();
+    const auto actual = handle->backendState->snapshot();
+    check(observer->sources > dxmt9::kMaxQueuedChunks && observer->origins == 256u &&
+              std::all_of(observer->selected.begin(), observer->selected.end(), [](bool value) { return value; }) &&
+              consumer.state.observed == observer->sources && consumer.state.retired == observer->sources &&
+              consumer.state.commands == 256u && consumer.cleanupComplete && !consumer.cleanupFailed &&
+              actual.retired == observer->sources && actual.observedOutsideQueueMutex && actual.borrowReleased &&
+              !Access::residentCount(fixture.routing->queue_),
+          "actual observed counts conserve every original record across more publications than the queue cap");
+    RenderTapeControlledCpuV4Evidence cpu;
+    check(execution.finishControlledCpu(capability, cpu) && cpu.controlledCpuComplete &&
+              cpu.rawAckCoverageComplete && cpu.semanticMappingComplete && cpu.actualIdentity.settlements.size() == 1u &&
+              cpu.actualIdentity.sources.size() == observer->sources && cpu.semanticMapping->records().size() == 256u &&
+              !consumer.fullSemanticOracleComplete && !consumer.payloadDigestPresent &&
+              !consumer.actualMetal && !consumer.gpuResultOracle && !consumer.timingEligible &&
+              !evidence.complete && !evidence.policyQualified && !evidence.timingEligible,
+          "native stress proves controlled root/progress only, not original cuts, full resource semantics, GPU or timing authority");
+  }
+}
 
 // Every command the replayed raw published, in source order, across every
 // source it published. A replayed raw may seal more than one source -- for
@@ -2760,15 +6220,25 @@ void productionGateIsExplicitAndDefaultOff() {
             dxmt9::resolveCpuReadyTapeDirectReplayEnabled("0foo"),
         "CPU-ready Tape promotion gate must be unset/zero off and explicit "
         "non-zero on");
-  check(!dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "1", nullptr) &&
-            !dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "1", "") &&
-            !dxmt9::resolveCpuReadyTapeDirectReplayEnabled(nullptr, "0", "Z:\\\\capture") &&
-            dxmt9::resolveCpuReadyTapeDirectReplayEnabled(
-                nullptr, "1", "Z:\\\\capture") &&
-            dxmt9::resolveCpuReadyTapeDirectReplayEnabled(
-                "1", nullptr, nullptr),
-        "an installed Render Tape publisher selects the production source "
-        "provider without changing capture-off or output-root-free runs");
+  const std::array<const char*, 7> values{nullptr, "", "0", "1", "yes", "01", "0foo"};
+  const std::array<const char*, 5> captures{nullptr, "", "0", "1", "yes"};
+  const std::array<const char*, 3> roots{nullptr, "", "Z:\\\\capture"};
+  for (const auto* value : values) {
+    for (const auto* capture : captures) {
+      for (const auto* root : roots) {
+        check(dxmt9::resolveCpuReadyTapeDirectReplayEnabled(value, capture, root) ==
+                  dxmt9::resolveCpuReadyTapeDirectReplayEnabled(value),
+              "Render Tape publication configuration never changes the "
+              "independently selected CPU-ready source provider");
+      }
+    }
+  }
+  check(!dxmt9::resolveRenderTapePublisherCaptureEnabled(nullptr, "Z:\\\\capture") &&
+            !dxmt9::resolveRenderTapePublisherCaptureEnabled("0", "Z:\\\\capture") &&
+            !dxmt9::resolveRenderTapePublisherCaptureEnabled("1", nullptr) &&
+            !dxmt9::resolveRenderTapePublisherCaptureEnabled("1", "") &&
+            dxmt9::resolveRenderTapePublisherCaptureEnabled("1", "Z:\\\\capture"),
+        "capture and an output root still independently enable the publisher");
 }
 
 void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {
@@ -6058,20 +9528,6 @@ void controlledCompletionBindsProductionQueueAndPool() {
   dxmt9c_buffer_release(buffer);
 }
 
-struct MetalDeviceLease {
-  obj_handle_t handle = NULL_OBJECT_HANDLE;
-  MetalDeviceLease() = default;
-
-  ~MetalDeviceLease() {
-    if (handle != NULL_OBJECT_HANDLE) {
-      dxmt9_test_release_metal_device(handle);
-    }
-  }
-
-  MetalDeviceLease(const MetalDeviceLease&) = delete;
-  MetalDeviceLease& operator=(const MetalDeviceLease&) = delete;
-};
-
 void twoPendingProductionSourcesPreserveQualifiedFifoLifetime() {
   namespace rt = dxmt9::d3d9;
   using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
@@ -6637,6 +10093,7 @@ struct CpuTapeExperimentOptions {
   };
   std::string tapePath;
   bool generalFrame = false;
+  std::string inputAdmissionProfile = "default";
   bool measurement = false;
   bool diagnostic = false;
   bool policyExplicit = false;
@@ -8279,6 +11736,315 @@ void generalCpuCaptureSourcePlanUsesAuthenticatedExecutor() {
         "stale source plan cannot bind by range counts alone");
 }
 
+void generalCpuCaptureSourceV3PreservesCrossEventWriter(bool sharedDrawRun = false) {
+  namespace replay = dxmt9::d3d9;
+  namespace runtime = replay::render_tape_runtime;
+  using Kind = replay::RenderTapeIdentityV3DispositionKind;
+  using Command = replay::RenderTapeIdentityV3CommandKind;
+  using Membership = replay::RenderTapeIdentityV3Membership;
+  using Cut = replay::RenderTapeIdentityV3CutKind;
+
+  auto tape = replay::test::makeGeneralCpuDestroyFixture(
+      true, true, replay::test::GeneralCpuMutationFixture::None,
+      replay::test::GeneralCpuResetFixture::A, sharedDrawRun ? 0u : 1u);
+  if (sharedDrawRun) {
+    replay::ImportedRenderTapeView imported;
+    check(replay::importPrevalidatedRenderTape(tape.tape, imported),
+          "shared DrawRun fixture imports original event bytes");
+    const auto drawBytes = replay::test::general_cpu_destroy_fixture_detail::indexedDrawChunk();
+    replay::ImportedChunkView draw;
+    check(replay::importPrevalidatedCommandChunk(drawBytes,
+              {.recordCount = 1u, .handleCount = 5u}, draw),
+          "shared DrawRun fixture imports exact indexed draw");
+    const auto drawPayload = draw.record(0u).payload;
+    const D9CCommandChunkWireSetConst constants{.registerCount = 1u};
+    std::vector<std::byte> constantPayload(sizeof(constants) + 4u * sizeof(float));
+    std::memcpy(constantPayload.data(), &constants, sizeof(constants));
+    std::vector<std::byte> secondDraw(drawPayload.begin(), drawPayload.end());
+    D9CCommandChunkWireDrawHeader secondHeader{};
+    std::memcpy(&secondHeader, secondDraw.data(), sizeof(secondHeader));
+    // Canonical wire records own disjoint handle slices, even when the two
+    // draws resolve to the same resources and merge into one physical run.
+    for (std::uint32_t index = 0u; index < secondHeader.sectionCount; ++index) {
+      D9CCommandChunkWireSectionDesc section{};
+      std::memcpy(&section, secondDraw.data() + secondHeader.sectionTableOffset +
+                      index * sizeof(section), sizeof(section));
+      std::size_t handleOffset = 0u;
+      switch (section.kind) {
+      case D9C_COMMAND_CHUNK_SECTION_TEXTURE:
+        handleOffset = offsetof(D9CCommandChunkWireTextureBinding, handleIndex); break;
+      case D9C_COMMAND_CHUNK_SECTION_STREAM:
+        handleOffset = offsetof(D9CCommandChunkWireStreamBinding, handleIndex); break;
+      case D9C_COMMAND_CHUNK_SECTION_SHADER:
+        handleOffset = offsetof(D9CCommandChunkWireShaderBinding, handleIndex); break;
+      case D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT:
+        handleOffset = offsetof(D9CCommandChunkWireVertexInput, handleIndex); break;
+      case D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER:
+        handleOffset = offsetof(D9CCommandChunkWireIndexBinding, handleIndex); break;
+      case D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET:
+        handleOffset = offsetof(D9CCommandChunkWireRenderTargetBinding, handleIndex); break;
+      default: throw TestFailure("shared DrawRun fixture has an unexpected binding section");
+      }
+      for (std::uint32_t element = 0u; element < section.count; ++element) {
+        auto* bytes = secondDraw.data() + section.payloadOffset +
+            element * section.elementSize + handleOffset;
+        std::uint32_t handle = 0u;
+        std::memcpy(&handle, bytes, sizeof(handle));
+        if (handle == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) continue;
+        handle += static_cast<std::uint32_t>(draw.handles.size());
+        std::memcpy(bytes, &handle, sizeof(handle));
+      }
+    }
+    const std::vector<D9CCommandChunkWireHandleEntry> drawHandles(
+        draw.handles.begin(), draw.handles.end());
+    using Record = replay::test::general_cpu_destroy_fixture_detail::Record;
+    const std::array records{
+        Record{.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+            .payload = {drawPayload.begin(), drawPayload.end()}, .handles = drawHandles},
+        Record{.type = D9C_COMMAND_RECORD_SET_VS_CONST_F, .payload = constantPayload},
+        Record{.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+            .payload = std::move(secondDraw), .handles = drawHandles}};
+    const auto chunk = replay::test::general_cpu_destroy_fixture_detail::makeChunk(records);
+    replay::RenderTapeBuilder builder;
+    bool replaced = false;
+    for (std::size_t index = 0u; index < imported.events.size(); ++index) {
+      const auto event = imported.event(index);
+      const auto type = static_cast<replay::RenderTapeEventType>(event.header.type);
+      if (!replaced && type == replay::RenderTapeEventType::CommandChunk) {
+        builder.appendCommandChunk({.recordCount = 3u, .handleCount = 10u}, chunk);
+        replaced = true;
+      } else {
+        builder.appendRawEvent(type, event.payload);
+      }
+    }
+    tape.tape = builder.seal();
+  }
+  std::vector<replay::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({replay::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  check(runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete(),
+        "v3 cross-event writer fixture preflights");
+
+  replay::RenderTapeIdentityV3View identity;
+  identity.header.frameId = 1u;
+  identity.header.presentOrdinal = plan.presentOrdinal;
+  identity.header.captureToken = 0x5a18u;
+  identity.header.captureEpoch = 6u;
+  identity.header.queue = 7u;
+  identity.header.baselineSequence = 100u;
+  identity.header.baselineCompletedSequence = 100u;
+  identity.header.baselineInitializer = 17u;
+  identity.header.baselineCompletedInitializer = 17u;
+  identity.header.initializerEpoch = 7u;
+  identity.header.baselineCompletionEdge = 1u;
+  identity.header.baselineKind = static_cast<std::uint32_t>(
+      replay::RenderTapeIdentityV3PrefixKind::ArmBaseline);
+  std::uint64_t drawTailEvent = 0u;
+  std::uint32_t draws = 0u;
+  for (const auto& event : plan.events) {
+    if (event.type != replay::RenderTapeEventType::CommandChunk) continue;
+    const auto ordinal = plan.tape.event(event.eventIndex).header.ordinal;
+    replay::ImportedChunkView chunk;
+    const auto& original = plan.commandChunks[event.index];
+    check(replay::importPrevalidatedCommandChunk(original.bytes, original.envelope, chunk),
+          "v3 fixture retains each original full raw");
+    const bool present = chunk.records[0].type == D9C_COMMAND_RECORD_PRESENT;
+    const auto commandIndex = static_cast<std::uint32_t>(identity.commands.size());
+    identity.commands.push_back({.logicalPassId = present ? 32u : 31u,
+        .sourceIndex = present ? 1u : 0u, .physicalCommandIndex = present ? 0u : draws,
+        .kind = static_cast<std::uint32_t>(present ? Command::Present : Command::DrawRun),
+        .drawCount = present ? 0u : (sharedDrawRun ? 2u : 1u),
+        .membership = static_cast<std::uint32_t>(Membership::Pass),
+        .dagPassIndex = 0u, .passKind = present ? 4u : 1u});
+    identity.dispositions.push_back({.eventOrdinal = ordinal, .recordCount = 1u,
+        .kind = static_cast<std::uint32_t>(Kind::GpuCommand),
+        .commandIndex = commandIndex, .subdrawCount = present ? 0u : 1u});
+    if (!present && sharedDrawRun) {
+      identity.dispositions.push_back({.eventOrdinal = ordinal, .firstRecord = 1u,
+          .recordCount = 1u, .kind = static_cast<std::uint32_t>(Kind::StateOnly)});
+      identity.dispositions.push_back({.eventOrdinal = ordinal, .firstRecord = 2u,
+          .recordCount = 1u, .kind = static_cast<std::uint32_t>(Kind::GpuCommand),
+          .commandIndex = commandIndex, .firstSubdraw = 1u, .subdrawCount = 1u});
+    }
+    identity.settlements.push_back({.eventOrdinal = ordinal,
+        .rawOrdinal = 200u + identity.settlements.size(), .buildGeneration = 3u,
+        .replayEdge = ordinal * 100u + 99u,
+        .recordCount = static_cast<std::uint32_t>(chunk.records.size())});
+    if (!present) {
+      draws += sharedDrawRun ? 2u : 1u;
+      drawTailEvent = ordinal;
+    }
+  }
+  check(draws == 2u && identity.commands.size() == (sharedDrawRun ? 2u : 3u),
+        "v3 fixture maps canonical draws to exact physical commands");
+  const auto appendSource = [&](std::uint32_t index, std::uint64_t event,
+                                Cut cut, std::uint32_t record, std::uint32_t commands) {
+    identity.sources.push_back({.sourceOrdinal = 70u + index, .seqId = 101u + index,
+        .writerCaptureId = 80u + index, .writerGeneration = 90u + index,
+        .storageGeneration = 100u + index, .publicationEdge = event * 100u + 10u,
+        .submissionEdge = event * 100u + 11u, .completionEdge = event * 100u + 12u,
+        .completedSequence = 101u + index, .cutEventOrdinal = event,
+        .commandCount = commands, .cutKind = static_cast<std::uint32_t>(cut),
+        .cutRecord = record});
+  };
+  appendSource(0u, drawTailEvent, Cut::AfterEvent, 0u, sharedDrawRun ? 1u : 2u);
+  appendSource(1u, plan.presentOrdinal, Cut::AfterRecord, 1u, 1u);
+  replay::RenderTapeIdentityV3Status identityStatus{};
+  const auto sidecar = replay::buildRenderTapeIdentityV3(
+      tape.tape, plan.catalogue, identity, &identityStatus);
+  check(identityStatus == replay::RenderTapeIdentityV3Status::Valid && !sidecar.empty(),
+        "v3 cross-event writer sidecar fully authenticates");
+  replay::CaptureSourceReplayPlanV3 sourcePlan;
+  check(replay::buildCaptureSourceReplayPlanV3(tape.tape, plan.catalogue, sidecar,
+            sourcePlan) == replay::CaptureSourceReplayPlanV3Status::Valid,
+        "v3 original-tape source plan authenticates");
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  if (resourceDevice.handle == NULL_OBJECT_HANDLE) return;
+  PresentParameters output{};
+  output.backBufferWidth = plan.outputDesc.width;
+  output.backBufferHeight = plan.outputDesc.height;
+  output.backBufferFormat = replay::devicec::fmtFromD3D(plan.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  RuntimeFixture fixture(false, false, true, false,
+                         WMT::Device{resourceDevice.handle}, nullptr, &output);
+  Executor executor(fixture, plan, blobs,
+                    {.route = replay::ProviderReplayPolicy::Compatibility,
+                     .captureSourcePlanV3 = &sourcePlan,
+                     .captureSourceTape = tape.tape,
+                     .captureSourceIdentitySidecar = sidecar});
+  const auto result = executor.run();
+  if (!result.complete)
+    std::cerr << "v3 cross-event execution failure=" << result.failure
+              << " event=" << result.failedEvent << '\n';
+  check(result.complete && result.resetOk && result.submitted == 2u &&
+            result.completed == 2u && result.draws == 2u,
+        "v3 compatibility preserves one ordinary writer and two canonical draws");
+  const auto& evidence = result.captureSourceReplayV3;
+  check(evidence.complete && evidence.lifecycleComplete && evidence.compatibility &&
+            evidence.qualifierOnly && !evidence.timingEligible &&
+            evidence.dispatchedRecords == (sharedDrawRun ? 4u : 3u) &&
+            evidence.settlements.size() == (sharedDrawRun ? 2u : 3u) &&
+            evidence.publications.size() == 2u && evidence.externalPublicationCuts == 1u &&
+            evidence.publications[0].commandCount == (sharedDrawRun ? 1u : 2u) &&
+            evidence.publications[0].eventOrdinal == drawTailEvent &&
+            !evidence.publications[0].hasPresent && evidence.publications[1].hasPresent,
+        "v3 reports actual receipts, complete lifecycle and original settlements");
+  check(evidence.publications[0].localSequence != identity.sources[0].seqId &&
+            evidence.publications[1].localSequence != identity.sources[1].seqId,
+        "captured completion labels remain provenance rather than local queue authority");
+
+  if (!sharedDrawRun) {
+    for (const auto fault : {
+             Executor::ContinuationIdentityFault::StaleWriterGeneration,
+             Executor::ContinuationIdentityFault::ForeignQueue}) {
+      RuntimeFixture foreign(false, false, true, false,
+                             WMT::Device{resourceDevice.handle}, nullptr, &output);
+      Executor rejectedContinuation(foreign, plan, blobs,
+                                    {.route = replay::ProviderReplayPolicy::Compatibility,
+                                     .continuationIdentityFault = fault,
+                                     .captureSourcePlanV3 = &sourcePlan,
+                                     .captureSourceTape = tape.tape,
+                                     .captureSourceIdentitySidecar = sidecar});
+      const auto foreignResult = rejectedContinuation.run();
+      check(!foreignResult.complete &&
+                foreignResult.failure == "general-executor-nonquiescent-chunk-entry" &&
+                foreignResult.draws == 1u && foreignResult.resourcesCreated != 0u &&
+                foreignResult.resourcesReleased == foreignResult.resourcesCreated &&
+                !foreignResult.captureSourceReplayV3.complete,
+            "v3 cross-event resident admission rejects stale or foreign writer identity");
+    }
+
+    // A valid authenticated sidecar may still disagree with the actual
+    // execution topology. Reject only after the ordinary replay has exercised
+    // the armed observer, and keep the normal executor teardown in the path.
+    auto wrongTopology = identity;
+    for (auto& command : wrongTopology.commands) {
+      if (command.kind == static_cast<std::uint32_t>(Command::DrawRun))
+        command.passKind = 2u;
+    }
+    const auto wrongSidecar = replay::buildRenderTapeIdentityV3(
+        tape.tape, plan.catalogue, wrongTopology, &identityStatus);
+    replay::CaptureSourceReplayPlanV3 wrongPlan;
+    check(identityStatus == replay::RenderTapeIdentityV3Status::Valid &&
+              replay::buildCaptureSourceReplayPlanV3(tape.tape, plan.catalogue,
+                  wrongSidecar, wrongPlan) == replay::CaptureSourceReplayPlanV3Status::Valid,
+          "v3 teardown regression authenticates a distinct expected pass topology");
+    RuntimeFixture failed(false, false, true, false,
+                          WMT::Device{resourceDevice.handle}, nullptr, &output);
+    Executor rejectedTopology(failed, plan, blobs,
+                              {.route = replay::ProviderReplayPolicy::Compatibility,
+                               .captureSourcePlanV3 = &wrongPlan,
+                               .captureSourceTape = tape.tape,
+                               .captureSourceIdentitySidecar = wrongSidecar});
+    const auto failedResult = rejectedTopology.run();
+    check(!failedResult.complete &&
+              failedResult.failure == "v3-execution-topology" &&
+              failedResult.resourcesCreated != 0u &&
+              failedResult.resourcesReleased == failedResult.resourcesCreated &&
+              failedResult.submitted == 2u && failedResult.completed == 2u &&
+              !failedResult.captureSourceReplayV3.complete,
+          "armed v3 topology rejection settles real sources and releases tape owners");
+    failed.releaseCoreForInspection();
+    failed.releaseCoreForInspection();
+    check(!failed.cDevice && !failed.device && !failed.factory,
+          "failed v3 executor teardown is idempotent after core owner release");
+
+    RuntimeFixture fresh(false, false, true, false,
+                         WMT::Device{resourceDevice.handle}, nullptr, &output);
+    Executor freshExecutor(fresh, plan, blobs,
+                           {.route = replay::ProviderReplayPolicy::Compatibility,
+                            .captureSourcePlanV3 = &sourcePlan,
+                            .captureSourceTape = tape.tape,
+                            .captureSourceIdentitySidecar = sidecar});
+    const auto freshResult = freshExecutor.run();
+    check(freshResult.complete && freshResult.resetOk &&
+              freshResult.submitted == 2u && freshResult.completed == 2u &&
+              freshResult.draws == 2u && freshResult.captureSourceReplayV3.complete,
+          "fresh v3 execution succeeds after an armed rejected session teardown");
+  }
+
+  RuntimeFixture production(false, false, true, false,
+                            WMT::Device{resourceDevice.handle}, nullptr, &output);
+  Executor rejectedRoute(production, plan, blobs,
+                         {.route = replay::ProviderReplayPolicy::ProductionSlot,
+                          .captureSourcePlanV3 = &sourcePlan,
+                          .captureSourceTape = tape.tape,
+                          .captureSourceIdentitySidecar = sidecar});
+  const auto rejected = rejectedRoute.run();
+  check(!rejected.complete && rejected.resourcesCreated == 0u && rejected.submitted == 0u &&
+            rejected.failure == "general-executor-v3-capture-source-admission",
+        "v3 ProductionSlot rejects explicitly before any tape effects");
+
+  ++identity.header.captureToken;
+  const auto staleSidecar = replay::buildRenderTapeIdentityV3(
+      tape.tape, plan.catalogue, identity, &identityStatus);
+  replay::CaptureSourceReplayPlanV3 stalePlan;
+  check(identityStatus == replay::RenderTapeIdentityV3Status::Valid &&
+            replay::buildCaptureSourceReplayPlanV3(tape.tape, plan.catalogue, staleSidecar,
+                stalePlan) == replay::CaptureSourceReplayPlanV3Status::Valid,
+        "independently authenticated stale v3 plan has a distinct immutable binding");
+  RuntimeFixture stale(false, false, true, false,
+                       WMT::Device{resourceDevice.handle}, nullptr, &output);
+  Executor rejectedBinding(stale, plan, blobs,
+                           {.route = replay::ProviderReplayPolicy::Compatibility,
+                            .captureSourcePlanV3 = &stalePlan,
+                            .captureSourceTape = tape.tape,
+                            .captureSourceIdentitySidecar = sidecar});
+  const auto staleResult = rejectedBinding.run();
+  check(!staleResult.complete && staleResult.resourcesCreated == 0u &&
+            staleResult.submitted == 0u &&
+            staleResult.failure == "general-executor-v3-capture-source-admission",
+        "stale v3 digest rejects before object creation or publication");
+}
+
 void printCpuTapeLoadedImages() {
   std::cout << '[';
 #if defined(__APPLE__)
@@ -8307,6 +12073,95 @@ void printCpuTapeLoadedImages() {
   }
 #endif
   std::cout << ']';
+}
+
+void printGeneralCpuInputCaps(
+    const dxmt9::d3d9::render_tape_runtime::GeneralCpuAdmissionCaps& caps) {
+  std::cout << R"({"max_events":)" << caps.maxEvents
+            << R"(,"max_objects":)" << caps.maxObjects
+            << R"(,"max_mutations":)" << caps.maxMutations
+            << R"(,"max_chunks":)" << caps.maxChunks
+            << R"(,"max_bootstrap_chunks":)" << caps.maxChunks
+            << R"(,"max_total_chunks":)" << caps.maxTotalChunks
+            << R"(,"max_records":)" << caps.maxRecords
+            << R"(,"max_bootstrap_records":)" << caps.maxRecords
+            << R"(,"max_total_records":)" << caps.maxTotalRecords
+            << R"(,"max_records_per_chunk":)" << caps.maxRecordsPerChunk
+            << R"(,"max_draws":)" << caps.maxDraws
+            << R"(,"max_blobs":)" << caps.maxBlobs
+            << R"(,"max_blob_bytes":)" << caps.maxBlobBytes
+            << R"(,"max_query_definitions":)" << caps.maxQueryDefinitions
+            << R"(,"max_query_issues":)" << caps.maxQueryIssues
+            << R"(,"max_query_polls":)" << caps.maxQueryPolls << '}';
+}
+
+void printGeneralCpuInputCounts(
+    const dxmt9::d3d9::render_tape_runtime::GeneralCpuAdmissionCounts& counts) {
+  // The public receipt validator authenticates this fixed coverage projection.
+  // Detailed budget counters are disclosed separately below.
+  std::cout << R"({"events":)" << counts.events
+            << R"(,"objects":)" << counts.objects
+            << R"(,"mutations":)" << counts.mutations
+            << R"(,"chunks":)" << counts.chunks
+            << R"(,"records":)" << counts.records
+            << R"(,"draws":)" << counts.draws
+            << R"(,"query_definitions":)" << counts.queryDefinitions
+            << R"(,"query_issues":)" << counts.queryIssues
+            << R"(,"query_polls":)" << counts.queryPolls << '}';
+}
+
+void printGeneralCpuInputAdmissionCounts(
+    const dxmt9::d3d9::render_tape_runtime::GeneralCpuAdmissionCounts& counts) {
+  std::cout << R"({"events":)" << counts.events
+            << R"(,"objects":)" << counts.objects
+            << R"(,"mutations":)" << counts.mutations
+            << R"(,"chunks":)" << counts.chunks
+            << R"(,"bootstrap_chunks":)" << counts.bootstrapChunks
+            << R"(,"total_chunks":)" << counts.chunks + counts.bootstrapChunks
+            << R"(,"records":)" << counts.records
+            << R"(,"bootstrap_records":)" << counts.bootstrapRecords
+            << R"(,"total_records":)" << counts.records + counts.bootstrapRecords
+            << R"(,"draws":)" << counts.draws
+            << R"(,"blobs":)" << counts.blobs
+            << R"(,"blob_bytes":)" << counts.blobBytes
+            << R"(,"query_definitions":)" << counts.queryDefinitions
+            << R"(,"query_issues":)" << counts.queryIssues
+            << R"(,"query_polls":)" << counts.queryPolls
+            << R"(,"query_checkpoints":)" << counts.queryCheckpoints << '}';
+}
+
+void printCpuInputAdmissionSelection(
+    std::string_view profile,
+    const dxmt9::d3d9::render_tape_runtime::GeneralCpuAdmissionCaps* caps,
+    const dxmt9::d3d9::render_tape_runtime::GeneralCpuSourceCapacity& sourceCapacity,
+    std::uint32_t maxQueryOraclePolls) {
+  std::cout << R"(,"input_admission_profile":)" << std::quoted(profile)
+            << R"(,"input_admission_caps":)";
+  if (caps) printGeneralCpuInputCaps(*caps);
+  else std::cout << "null";
+  std::cout << R"(,"source_capacity":{"max_publications":)"
+            << sourceCapacity.maxPublications
+            << R"(,"max_progress_steps":)" << sourceCapacity.maxProgressSteps
+            << R"(},"max_query_oracle_polls_per_query":)" << maxQueryOraclePolls;
+}
+
+int rejectCpuInputAdmissionProfile(const CpuTapeExperimentOptions& options,
+                                   const char* status, const char* reason) {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  const Executor::Options executorOptions{};
+  std::optional<runtime::GeneralCpuAdmissionCaps> caps;
+  if (options.inputAdmissionProfile == "default") caps.emplace();
+  else if (options.inputAdmissionProfile == "extended")
+    caps = runtime::generalCpuExtendedInputCaps();
+  std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","status":)"
+            << std::quoted(status) << R"(,"reason":)" << std::quoted(reason);
+  printCpuInputAdmissionSelection(options.inputAdmissionProfile, caps ? &*caps : nullptr,
+                                 executorOptions.sourceCapacity,
+                                 executorOptions.maxQueryOraclePolls);
+  std::cout << "}\n";
+  return 3;
 }
 
 void printCpuQueryReplay(const dxmt9::d3d9::RenderTapeQueryReplayEvidence& evidence,
@@ -8427,13 +12282,30 @@ void printCpuQueryReplay(const dxmt9::d3d9::RenderTapeQueryReplayEvidence& evide
 
 int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  Executor::Options executorOptions{};
+  executorOptions.inputCaps = options.inputAdmissionProfile == "extended"
+      ? runtime::generalCpuExtendedInputCaps() : runtime::GeneralCpuAdmissionCaps{};
+  std::optional<runtime::GeneralCpuAdmissionResult> inputAdmission;
   const bool captureSourceRequested =
       options.sourceBoundaryMode ==
       CpuTapeExperimentOptions::SourceBoundaryMode::CaptureSource;
   const auto reject = [&](const char* status, const std::string& reason) {
     std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","backend":"cpu-metal-resources","status":)"
-              << std::quoted(status) << R"(,"reason":)" << std::quoted(reason)
-              << "}\n";
+              << std::quoted(status) << R"(,"reason":)" << std::quoted(reason);
+    printCpuInputAdmissionSelection(options.inputAdmissionProfile,
+        &executorOptions.inputCaps, executorOptions.sourceCapacity,
+        executorOptions.maxQueryOraclePolls);
+    if (inputAdmission) {
+      std::cout << R"(,"input_counts":)";
+      printGeneralCpuInputCounts(inputAdmission->counts);
+      std::cout << R"(,"input_admission_counts":)";
+      printGeneralCpuInputAdmissionCounts(inputAdmission->counts);
+      std::cout << R"(,"input_admission_reason":)"
+                << std::quoted(runtime::generalCpuAdmissionReasonName(inputAdmission->reason));
+    }
+    std::cout << "}\n";
     return 3;
   };
   if (captureSourceRequested &&
@@ -8508,7 +12380,8 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   if (!preflight.complete())
     return reject("general-preflight-failed",
                   dxmt9::d3d9::frameTapeReplayStatusName(preflight.status));
-  const auto admission = runtime::admitGeneralCpuPlan(plan);
+  inputAdmission = runtime::admitGeneralCpuPlan(plan, executorOptions.inputCaps);
+  const auto& admission = *inputAdmission;
   if (!admission.accepted())
     return reject("unsupported-grammar", runtime::generalCpuAdmissionReasonName(admission.reason));
   if (captureSourceRequested) {
@@ -8544,8 +12417,19 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   output.deviceWindow = Handle{91};
   output.presentationInterval = PresentInterval::Immediate;
 
-  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
-      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  executorOptions.route = options.compatibility
+      ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+      : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
+  executorOptions.beforeNextWork = options.beforeNextWork;
+  executorOptions.maxPendingSources = options.maxPending;
+  executorOptions.holdSafeBufferMutation = sourceOracleRequested;
+  executorOptions.sourceOracle = sourceOracleRows;
+  executorOptions.measurement = options.measurement;
+  executorOptions.captureSourcePlan = captureSourceRequested ? &captureSourcePlan : nullptr;
+  executorOptions.captureSourceTape = captureSourceRequested
+      ? std::span<const std::byte>(tape) : std::span<const std::byte>{};
+  executorOptions.captureSourceIdentitySidecar = captureSourceRequested
+      ? std::span<const std::byte>(identitySidecar) : std::span<const std::byte>{};
   struct Iteration {
     Executor::Result execution;
     std::uint64_t direct = 0u, compatibility = 0u, elapsed = 0u;
@@ -8572,21 +12456,9 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
         fixture.routing->recordBoundedCapturedBindings = false;
         iterationResult.before = dxmt9::perf::snapshotRenderTapeReplay();
         iterationResult.appendBefore = dxmt9::append_diag::snapshot();
-        Executor executor(fixture, plan, blobs, {.route = options.compatibility
-            ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
-            : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
-            .beforeNextWork = options.beforeNextWork,
-            .maxPendingSources = options.maxPending,
-            .holdSafeBufferMutation = sourceOracleRequested,
-            .sourceOracle = sourceOracleRows,
-            .measurement = options.measurement,
-            .captureSourcePlan = captureSourceRequested ? &captureSourcePlan : nullptr,
-            .captureSourceTape = captureSourceRequested ?
-                std::span<const std::byte>(tape) : std::span<const std::byte>{},
-            .captureSourceIdentitySidecar = captureSourceRequested ?
-                std::span<const std::byte>(identitySidecar) :
-                std::span<const std::byte>{},
-            .diagnostic = diagnostic});
+        auto iterationOptions = executorOptions;
+        iterationOptions.diagnostic = diagnostic;
+        Executor executor(fixture, plan, blobs, iterationOptions);
         iterationResult.execution = executor.run();
         iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
         iterationResult.appendAfter = dxmt9::append_diag::snapshot();
@@ -8639,8 +12511,11 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
         return value.nativeCpuNs.has_value();
       });
   std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","attachment_contents":"backend-command-owned-v1","gpu_readback":false,"timing_backend":"encode-substituted","status":)"
-            << std::quoted(complete ? "complete" : "unresolved")
-            << R"(,"run_mode":)" << std::quoted(options.diagnostic ? "diagnose" : options.measurement ? "measure" : "verify")
+            << std::quoted(complete ? "complete" : "unresolved");
+  printCpuInputAdmissionSelection(options.inputAdmissionProfile,
+      &executorOptions.inputCaps, executorOptions.sourceCapacity,
+      executorOptions.maxQueryOraclePolls);
+  std::cout << R"(,"run_mode":)" << std::quoted(options.diagnostic ? "diagnose" : options.measurement ? "measure" : "verify")
             << R"(,"phase_accounting":)"
             << std::quoted(options.diagnostic ? "exclusive-diagnostic-wall-process" :
                            options.measurement ? "iteration-only" : "scoped-observations")
@@ -8692,15 +12567,11 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
             << options.policy.drawCommandLimit
             << R"(,"draw_payload_limit":0,"early_prefix":false,"gpu_submit":false})"
             << R"(,"import_ns":)" << importNs
-            << R"(,"input_counts":{"events":)" << admission.counts.events
-            << R"(,"objects":)" << admission.counts.objects
-            << R"(,"mutations":)" << admission.counts.mutations
-            << R"(,"chunks":)" << admission.counts.chunks
-            << R"(,"records":)" << admission.counts.records
-            << R"(,"draws":)" << admission.counts.draws
-            << R"(,"query_definitions":)" << admission.counts.queryDefinitions
-            << R"(,"query_issues":)" << admission.counts.queryIssues
-            << R"(,"query_polls":)" << admission.counts.queryPolls << R"(},"iterations":[)";
+            << R"(,"input_counts":)";
+  printGeneralCpuInputCounts(admission.counts);
+  std::cout << R"(,"input_admission_counts":)";
+  printGeneralCpuInputAdmissionCounts(admission.counts);
+  std::cout << R"(,"iterations":[)";
   for (std::size_t index = 0u; index < results.size(); ++index) {
     if (index) std::cout << ',';
     const auto& iteration = results[index];
@@ -8711,6 +12582,16 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
               << R"(,"reset_ok":)" << (result.resetOk ? "true" : "false")
               << R"(,"failure":)" << std::quoted(result.failure)
               << R"(,"failed_event":)" << result.failedEvent
+              << R"(,"input_admission_reason":)"
+              << std::quoted(runtime::generalCpuAdmissionReasonName(result.inputAdmission.reason))
+              << R"(,"input_admission_counts":)";
+    printGeneralCpuInputAdmissionCounts(result.inputAdmission.counts);
+    std::cout << R"(,"input_admission_caps":)";
+    printGeneralCpuInputCaps(result.inputAdmission.inputCaps);
+    std::cout << R"(,"source_demand":{"publications":)" << result.sourceDemand.publications
+              << R"(,"progress_steps":)" << result.sourceDemand.progressSteps
+              << R"(},"source_publications":)" << result.sourcePublications
+              << R"(,"progress_steps":)" << result.progressSteps
               << R"(,"semantic_digest":")" << result.digest << '"'
               << R"(,"query_semantic_digest":")" << result.querySemanticDigest << '"'
               << R"(,"query_replay":)";
@@ -10779,6 +14660,13 @@ void generalCpuAliasAfterParentDestroyUsesImmutableIdentity() {
 }
 
 int runCpuTapeExperiment(CpuTapeExperimentOptions options) {
+  if (options.inputAdmissionProfile != "default" &&
+      options.inputAdmissionProfile != "extended")
+    return rejectCpuInputAdmissionProfile(options,
+        "unsupported-input-admission-profile", "input-admission-profile");
+  if (!options.generalFrame && options.inputAdmissionProfile != "default")
+    return rejectCpuInputAdmissionProfile(options, "unsupported-mode",
+        "input-admission-profile-requires-general-frame");
   if (options.generalFrame) return runGeneralCpuTapeExperiment(options);
   if (options.beforeNextWork)
     throw TestFailure("before-next-work requires general-frame grammar");
@@ -11226,10 +15114,53 @@ int runCpuTapeExperiment(CpuTapeExperimentOptions options) {
   return complete ? 0 : 4;
 }
 
+#include "render_tape_cpu_v4_inventory_cli.inc"
+
 }  // namespace
 
 int main(int argc, char** argv) {
   try {
+    if (argc >= 2 && std::string_view(argv[1]) == "--controlled-cpu-v4-grouping-spec") {
+      check(argc == 3, "grouping spec requires one explicit fresh-process limit: 0, 3 or 64");
+      const std::string_view argument = argv[2];
+      check(argument == "0" || argument == "3" || argument == "64",
+          "grouping spec rejects unsupported or malformed policy values before effects");
+      const std::size_t limit = argument == "0" ? 0u : argument == "3" ? 3u : 64u;
+      check(setenv("DXMT9_DISABLE_PRESENT_BOUNDARY", "1", 1) == 0 &&
+                setenv("DXMT9_SYNC_PRESENT_FLUSH", "0", 1) == 0 &&
+                setenv("DXMT9_OFFLOAD_COMMIT_REPLAY", "0", 1) == 0 &&
+                setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT", argv[2], 1) == 0 &&
+                setenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES", "0", 1) == 0 &&
+                setenv("DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES", "0", 1) == 0 &&
+                setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1) == 0 &&
+                setenv("DXMT9_CPU_READY_TAPE", "0", 1) == 0 &&
+                setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1) == 0 &&
+                setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1) == 0 &&
+                setenv("DXMT9_ASYNC_QUERY_FENCES", "1", 1) == 0 &&
+                setenv("DXMT9_COALESCE_QUERY_ENDS", "0", 1) == 0 &&
+                setenv("DXMT9_METAL_OCCLUSION", "0", 1) == 0 &&
+                setenv("DXMT9_QUERY_SCOPE_RANGES", "0", 1) == 0 &&
+                setenv("DXMT_PERF_COUNTERS", "1", 1) == 0,
+          "grouping spec pins isolated ordinary eager-END policy before cached initialization");
+      controlledCpuV4GroupingPreservesQueryEnd(limit);
+      return 0;
+    }
+    if (argc >= 2 && (std::string_view(argv[1]) == "--controlled-cpu-v4-inventory" ||
+        std::string_view(argv[1]) == "--controlled-cpu-v4-semantics" ||
+        std::string_view(argv[1]) == "--controlled-cpu-v4-execute")) {
+      // Fresh-process CPU ownership pins, shared with the controlled fixtures.
+      // They select the isolated harness domain, not a timed renderer policy.
+      setenv("DXMT9_DISABLE_PRESENT_BOUNDARY", "1", 1);
+      setenv("DXMT9_SYNC_PRESENT_FLUSH", "0", 1);
+      setenv("DXMT9_OFFLOAD_COMMIT_REPLAY", "0", 1);
+      // The cold CLI validates and pins its typed grouping policy before any
+      // cached selector, resource setup or replay can observe it.
+      setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1);
+      setenv("DXMT9_CPU_READY_TAPE", "0", 1);
+      setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);
+      setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1);
+      return runControlledCpuV4InventoryCli(argc, argv);
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--qualified-ordinary-growth-spec") {
       qualifiedCapacitySurvivesOrdinaryGrowth();
       std::cout << "qualified ordinary growth spec passed\n";
@@ -11255,27 +15186,62 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-d24s8-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-volume-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-bootstrap-pages-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-consumer-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-integration-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-executor-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-route-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-execute-spec" ||
+                      std::string_view(argv[1]) == "--controlled-cpu-v4-progress-spec" ||
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
                       std::string_view(argv[1]) ==
                           "--cpu-tape-phase-ledger-spec" ||
                       std::string_view(argv[1]) ==
-                          "--capture-source-policy-spec")) {
+                          "--capture-source-policy-spec" ||
+                      std::string_view(argv[1]) ==
+                          "--capture-source-v3-policy-spec")) {
       // Isolate cached policies from the unrelated routing test matrix.
       // The general no-GPU executor requires the same admission/pacing pins
       // as its CLI, established before the first device is constructed.
       setenv("DXMT9_DISABLE_PRESENT_BOUNDARY", "1", 1);
       setenv("DXMT9_SYNC_PRESENT_FLUSH", "0", 1);
       setenv("DXMT9_OFFLOAD_COMMIT_REPLAY", "0", 1);
-      setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT", "0", 1);
+      // Only this fresh-process native stress flag requests the supported
+      // draw-limit policy. No cached policy is mutated in an existing spec.
+      setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT",
+          std::string_view(argv[1]) == "--controlled-cpu-v4-progress-spec" ? "3" : "0", 1);
       setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1);
       setenv("DXMT9_CPU_READY_TAPE", "0", 1);
       setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);
       setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1);
-      if (std::string_view(argv[1]) == "--capture-source-policy-spec") {
+      if (std::string_view(argv[1]) == "--controlled-cpu-v4-route-spec" ||
+          std::string_view(argv[1]) == "--controlled-cpu-v4-execute-spec") {
+        // The existing route delta counters are cached on first use. Pin the
+        // same gate as the controlled semantics CLI before constructing any
+        // fixture; this does not turn the test into a performance lane.
+        check(setenv("DXMT_PERF_COUNTERS", "1", 1) == 0 && dxmt9::perf::enabled(),
+            "controlled route/execution spec requires existing replay counter observation");
+      }
+      if (std::string_view(argv[1]) == "--controlled-cpu-v4-consumer-spec") {
+        controlledCpuV4ConsumerUsesRealQueue();
+      } else if (std::string_view(argv[1]) == "--controlled-cpu-v4-integration-spec") {
+        controlledCpuV4IntegrationUsesObservedReplay();
+      } else if (std::string_view(argv[1]) == "--controlled-cpu-v4-executor-spec") {
+        controlledCpuV4ExecutorInventoriesOriginalTape();
+        controlledCpuV4ExecutorPreservesPePresentContract();
+      } else if (std::string_view(argv[1]) == "--controlled-cpu-v4-route-spec") {
+        controlledCpuV4ExecutorHonorsRequestedRoute();
+      } else if (std::string_view(argv[1]) == "--controlled-cpu-v4-execute-spec") {
+        controlledCpuV4ExecutorOmitsObservationForExecution();
+      } else if (std::string_view(argv[1]) == "--controlled-cpu-v4-progress-spec") {
+        controlledCpuV4RootProgressUsesNaturalPublications();
+      } else if (std::string_view(argv[1]) == "--capture-source-policy-spec") {
         providerSourcePolicyPreservesRawOrderAndSettlement();
         sourcePublicationCaptureOwnsEveryPublicationAndFailsClosed();
         generalCpuCaptureSourcePlanUsesAuthenticatedExecutor();
+      } else if (std::string_view(argv[1]) == "--capture-source-v3-policy-spec") {
+        generalCpuCaptureSourceV3PreservesCrossEventWriter();
+        generalCpuCaptureSourceV3PreservesCrossEventWriter(true);
       } else if (std::string_view(argv[1]) == "--cpu-tape-phase-ledger-spec") {
         cpuTapePhaseLedgerNestedScopeSpec();
       } else if (std::string_view(argv[1]) == "--general-cpu-mipmap-spec") {
@@ -11321,6 +15287,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 3 && (std::string_view(argv[1]) == "--write-general-cpu-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-admission-profile-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-query-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-event-checkpoint-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-d24s8-fixture" ||
@@ -11342,7 +15309,51 @@ int main(int argc, char** argv) {
         for (std::size_t i = 0u; i < fixture.blobs.size(); ++i)
           write(directory / ("blob-" + std::to_string(i) + ".bin"), fixture.blobs[i]);
       };
-      if (std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture")
+      if (std::string_view(argv[1]) == "--write-general-cpu-admission-profile-fixture") {
+        namespace replay = dxmt9::d3d9;
+        namespace runtime = replay::render_tape_runtime;
+        auto fixture = replay::test::makeGeneralCpuMipmapFixture();
+        std::vector<replay::RenderTapeProviderBlob> blobs;
+        for (const auto& bytes : fixture.blobs)
+          blobs.push_back({replay::RenderTapeCaptureSession::sha256(bytes), bytes});
+        runtime::GeneralPreflightPlan plan;
+        check(runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan).complete(),
+              "admission profile fixture base must preflight");
+        // Fixed-size admission-only input: repeated identical uploads cross
+        // the default input bounds without adding any source publications.
+        constexpr std::size_t kAdditionalMutations = 2048u;
+        replay::RenderTapeBuilder builder;
+        bool expanded = false;
+        for (std::size_t index = 0u; index < plan.tape.events.size(); ++index) {
+          const auto event = plan.tape.event(index);
+          const auto type = static_cast<replay::RenderTapeEventType>(event.header.type);
+          if (type == replay::RenderTapeEventType::PresentComplete) {
+            auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+            replay::RenderTapePresentCompleteHeader complete{};
+            std::memcpy(&complete, payload.data(), sizeof(complete));
+            complete.presentOrdinal += kAdditionalMutations;
+            std::memcpy(payload.data(), &complete, sizeof(complete));
+            builder.appendRawEvent(type, payload);
+          } else {
+            builder.appendRawEvent(type, event.payload);
+          }
+          if (!expanded && type == replay::RenderTapeEventType::ResourceMutation) {
+            for (std::size_t extra = 0u; extra < kAdditionalMutations; ++extra)
+              builder.appendRawEvent(type, event.payload);
+            expanded = true;
+          }
+        }
+        check(expanded, "admission profile fixture must contain a seed mutation");
+        fixture.tape = builder.seal();
+        runtime::GeneralPreflightPlan extendedPlan;
+        check(runtime::buildGeneralReplayPlan(fixture.tape, blobs, extendedPlan).complete() &&
+                  runtime::admitGeneralCpuPlan(extendedPlan).reason ==
+                      runtime::GeneralCpuAdmissionReason::EventLimit &&
+                  runtime::admitGeneralCpuPlan(
+                      extendedPlan, runtime::generalCpuExtendedInputCaps()).accepted(),
+              "admission-only fixture must reject default and admit extended input");
+        writeFixture(fixture);
+      } else if (std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuMipmapFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-query-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuQueryFixture());
@@ -11419,6 +15430,8 @@ int main(int argc, char** argv) {
           const std::string_view value(argv[++index]);
           if (value == "general-frame") options.generalFrame = true;
           else if (value != "bounded") throw TestFailure("invalid CPU grammar");
+        } else if (argument == "--input-admission-profile" && index + 1 < argc) {
+          options.inputAdmissionProfile = argv[++index];
         } else if (argument == "--route" && index + 1 < argc) {
           const std::string_view value(argv[++index]);
           if (value == "compatibility") options.compatibility = true;

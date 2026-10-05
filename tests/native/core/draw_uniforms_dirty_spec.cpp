@@ -14,9 +14,11 @@
 // state is required, so this is a free-standing native unit test.
 #include "../../../src/dxmt9/dxmt9_uniform_dirty.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string_view>
 
 using dxmt9::uniform::DirtyBit;
@@ -24,6 +26,7 @@ using dxmt9::uniform::DirtyState;
 using dxmt9::uniform::DirectCbufPayloadCounts;
 using dxmt9::uniform::DirectCbufPayloadSourceHashes;
 using dxmt9::uniform::DrawBindingAbi;
+using dxmt9::uniform::DrawBindingHotStateIdentity;
 using dxmt9::uniform::DrawBindingPath;
 using dxmt9::uniform::DrawBindingPayloadIdentity;
 using dxmt9::uniform::ShaderConstantUsageBounds;
@@ -625,6 +628,201 @@ void testDrawBindingTransitionTruthTable() {
           "pixel constant-count shrink binds the smaller current range");
 }
 
+DrawBindingPayloadIdentity hotRowPayloadIdentity(
+    DrawBindingHotStateIdentity hotState) {
+  return DrawBindingPayloadIdentity{
+      .vertexConstants = 0x10u,
+      .pixelConstants = 0x20u,
+      .fixedFunction = 0x30u,
+      .hotState = hotState,
+  };
+}
+
+// Exhaust the bounded identity domain: two sources, two segments, three rows,
+// unchanged/changed fixed payload, first/later draw, and every ABI/path pair.
+// Expected masks are derived independently of the production planner.
+void testHotRowTransitionExhaustive() {
+  std::array<DrawBindingPayloadIdentity, 12> identities{};
+  std::size_t index = 0;
+  for (std::uint64_t source = 1; source <= 2; ++source) {
+    for (std::uint32_t segment = 0; segment < 2; ++segment) {
+      for (std::uint32_t row = 0; row < 3; ++row) {
+        identities[index++] = hotRowPayloadIdentity({source, segment, row});
+      }
+    }
+  }
+  constexpr std::array abis{
+      DrawBindingAbi::Stage1Direct, DrawBindingAbi::Stage2DirectCbuf,
+      DrawBindingAbi::Stage2ArgumentTable};
+  constexpr std::array paths{
+      DrawBindingPath::Direct, DrawBindingPath::ArgumentTable};
+  constexpr std::array flags{false, true};
+  constexpr auto ffpMask = static_cast<std::uint16_t>(
+      dxmt9::uniform::kFfpVsAny | dxmt9::uniform::kFfpPsAny);
+  const DirectCbufPayloadCounts counts{.vertexFloat = 3, .pixelFloat = 4};
+  std::size_t cases = 0;
+  for (const auto& previous : identities) {
+    for (const auto& hotOnlyCurrent : identities) {
+      for (bool fixedChanged : flags) {
+        auto current = hotOnlyCurrent;
+        current.fixedFunction += fixedChanged ? 1u : 0u;
+        for (bool hasPrevious : flags) {
+          for (auto abi : abis) {
+            for (auto path : paths) {
+              const bool compatible = path == DrawBindingPath::Direct
+                  ? abi != DrawBindingAbi::Stage2ArgumentTable
+                  : abi == DrawBindingAbi::Stage2ArgumentTable;
+              const bool changed = hasPrevious &&
+                  (fixedChanged || previous.hotState != current.hotState);
+              const auto transition = dxmt9::uniform::planDrawBindingTransition(
+                  hasPrevious, previous, current, abi, path);
+              check(transition.next == current,
+                    "hot-row plan preserves the complete next identity");
+              check(transition.psoBindingAbiCompatible == compatible,
+                    "hot-row identity does not alter ABI acceptance");
+              check(transition.fixedFunctionChanged == changed,
+                    "hot-row and fixed-payload edges independently dirty FFP");
+              check(!transition.constantSourceChange.vertex &&
+                        !transition.constantSourceChange.pixel,
+                    "hot-row changes do not alter programmable constants");
+              DirtyState dirty{};
+              if (!hasPrevious) {
+                dxmt9::uniform::markAllDirty(dirty);
+              }
+              const auto initialMask = dirty.mask;
+              check(dxmt9::uniform::applyDrawBindingTransition(
+                        dirty, transition, counts) == compatible,
+                    "hot-row application rejects incompatible bindings");
+              const auto expectedMask = static_cast<std::uint16_t>(
+                  initialMask | (compatible && changed ? ffpMask : 0u));
+              checkEq(dirty.mask, expectedMask,
+                      "hot-row application has exactly the expected mask");
+              checkEq(dirty.maxChangedVsF, 0u,
+                      "hot-row edge does not invent a VS constant range");
+              checkEq(dirty.maxChangedPsF, 0u,
+                      "hot-row edge does not invent a PS constant range");
+              ++cases;
+            }
+          }
+        }
+      }
+    }
+  }
+  checkEq(cases, 3456u, "all bounded hot-row transition cases were visited");
+}
+
+void testHotRowLegacyPredicateCounterexample() {
+  const auto a = hotRowPayloadIdentity({100u, 0u, 0u});
+  const std::array changedRows{
+      hotRowPayloadIdentity({100u, 0u, 1u}),
+      hotRowPayloadIdentity({100u, 1u, 0u}),
+      hotRowPayloadIdentity({101u, 0u, 0u}),
+  };
+  for (const auto& b : changedRows) {
+    auto transition = dxmt9::uniform::planDrawBindingTransition(
+        true, a, b, DrawBindingAbi::Stage1Direct, DrawBindingPath::Direct);
+    DirtyState corrected{};
+    check(dxmt9::uniform::applyDrawBindingTransition(corrected, transition, {}),
+          "hot-row-only corrected transition applies");
+    check(dxmt9::uniform::anyDirty(corrected, dxmt9::uniform::kFfpVsAny) &&
+              dxmt9::uniform::anyDirty(corrected, dxmt9::uniform::kFfpPsAny),
+          "row/source/segment-only edges refresh both fixed-function bindings");
+    // Recreate precisely the old predicate while using the same apply seam.
+    // A consumed binding has zero pending bits: the old predicate retains A
+    // when immutable row B supplies different hot-only uniform inputs.
+    transition.fixedFunctionChanged = a.fixedFunction != b.fixedFunction;
+    DirtyState legacy{};
+    check(dxmt9::uniform::applyDrawBindingTransition(legacy, transition, {}),
+          "legacy counterexample uses the production application seam");
+    checkEq(legacy.mask, 0u,
+            "old fixed-payload-only predicate misses the hot-row change");
+    const auto correctedBound = dxmt9::uniform::anyDirty(
+        corrected, dxmt9::uniform::kFfpPsAny) ? b.hotState : a.hotState;
+    const auto legacyBound = dxmt9::uniform::anyDirty(
+        legacy, dxmt9::uniform::kFfpPsAny) ? b.hotState : a.hotState;
+    check(correctedBound == b.hotState && legacyBound != b.hotState,
+          "old predicate is a concrete stale-binding-generation counterexample");
+  }
+}
+
+// Exhaust all reset/failure/child-selection masks over A -> B -> A for both
+// direct ABIs. This checks the owner protocol around the production reducer:
+// fresh encoders are all-dirty, children are isolated, and only successful
+// encodes commit transition.next. Failed attempts here precede uniform
+// consumption; recovery from partial Metal-binding failure is not modeled.
+void testHotRowEncoderOwnerProtocol() {
+  struct Child {
+    DirtyState dirty{};
+    std::optional<DrawBindingPayloadIdentity> previous;
+    std::optional<DrawBindingHotStateIdentity> boundVs;
+    std::optional<DrawBindingHotStateIdentity> boundPs;
+  };
+  auto reset = [](Child& child) {
+    child = {};
+    dxmt9::uniform::markAllDirty(child.dirty);
+  };
+  const auto a = hotRowPayloadIdentity({100u, 0u, 0u});
+  const auto b = hotRowPayloadIdentity({100u, 0u, 1u});
+  const std::array draws{a, b, a};
+  constexpr std::array abis{
+      DrawBindingAbi::Stage1Direct, DrawBindingAbi::Stage2DirectCbuf};
+  std::size_t cases = 0;
+  for (auto abi : abis) {
+    for (unsigned resetMask = 0; resetMask < 8; ++resetMask) {
+      for (unsigned failureMask = 0; failureMask < 8; ++failureMask) {
+        for (unsigned childMask = 0; childMask < 8; ++childMask) {
+          std::array<Child, 2> children{};
+          for (auto& child : children) {
+            reset(child);
+          }
+          for (unsigned draw = 0; draw < draws.size(); ++draw) {
+            const auto childIndex = (childMask >> draw) & 1u;
+            auto& child = children[childIndex];
+            const auto siblingBefore = children[1u - childIndex];
+            if ((resetMask & (1u << draw)) != 0u) {
+              reset(child);
+            }
+            const auto previousBefore = child.previous;
+            const auto transition = dxmt9::uniform::planDrawBindingTransition(
+                child.previous.has_value(), child.previous.value_or(
+                    DrawBindingPayloadIdentity{}), draws[draw], abi,
+                DrawBindingPath::Direct);
+            check(dxmt9::uniform::applyDrawBindingTransition(
+                      child.dirty, transition, {}),
+                  "direct child hot-row transition applies");
+            if ((failureMask & (1u << draw)) == 0u) {
+              if (dxmt9::uniform::anyDirty(
+                      child.dirty, dxmt9::uniform::kFfpVsAny)) {
+                child.boundVs = draws[draw].hotState;
+              }
+              if (dxmt9::uniform::anyDirty(
+                      child.dirty, dxmt9::uniform::kFfpPsAny)) {
+                child.boundPs = draws[draw].hotState;
+              }
+              dxmt9::uniform::clearBits(child.dirty, 0x1fffu);
+              child.previous = transition.next;
+              check(child.boundVs == draws[draw].hotState &&
+                        child.boundPs == draws[draw].hotState,
+                    "persistent/reset child consumes the required hot row");
+            } else {
+              check(child.previous == previousBefore,
+                    "failed encode does not commit the planned identity");
+            }
+            const auto& sibling = children[1u - childIndex];
+            check(sibling.dirty.mask == siblingBefore.dirty.mask &&
+                      sibling.previous == siblingBefore.previous &&
+                      sibling.boundVs == siblingBefore.boundVs &&
+                      sibling.boundPs == siblingBefore.boundPs,
+                  "reset/transition/failure does not modify sibling binding state");
+          }
+          ++cases;
+        }
+      }
+    }
+  }
+  checkEq(cases, 1024u, "all bounded hot-row owner protocols were visited");
+}
+
 }  // namespace
 
 int main() {
@@ -639,5 +837,8 @@ int main() {
   testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse();
   testDirectCbufPayloadSourceDirtyRebind();
   testDrawBindingTransitionTruthTable();
+  testHotRowTransitionExhaustive();
+  testHotRowLegacyPredicateCounterexample();
+  testHotRowEncoderOwnerProtocol();
   return 0;
 }

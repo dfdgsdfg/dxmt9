@@ -825,6 +825,19 @@ Native tests bind malformed layout/result rejection to that shared contract;
 the Metal oracle must compare nonuniform raw bits across capture and restored
 readback before original-workload qualification.
 
+R-HARN-REPLAY-9.13 extends the existing four-byte checkpoint encoding to the
+exact single-level DEFAULT R32F Texture2D RT shape. The shared descriptor and
+layout predicates admit positive extents with checked four-byte rows. Unix
+routes this shape through the exclusive checkpoint transfer used by exact A8
+and RGBA16Float snapshots, never the generic application-readback fallback.
+The leased transfer validates physical `R32Float` storage and copies raw bits;
+the ordinary same-format upload restores them without a numeric conversion.
+PE keeps the result in the arm-local immutable overlay, independently of its
+CPU shadow. Native shape/layout tests and real Metal A/B/A restoration must
+cover nonuniform float32 bit patterns and pending initializer work without an
+external flush. This extends captured content support, not production replay
+ordering or resource-lifetime policy.
+
 The V2 payloads are now the single production representation. A texture
 payload is one `RenderTapeTextureDescriptorV2` header plus an exact tail of
 `D9CSurfaceDesc` values: one complete mip chain for 2D and volume textures and
@@ -834,7 +847,8 @@ attributes, mip extents, and volume mip depth before any replay effect. Texture
 initial content is `CompleteSeed` by default; texture `Unavailable` is
 rejected except for the bounded `ProducedByCapturedPass` exception. That
 exception is limited to one Texture2D mip and subresource, render-target
-usage, one exact generation-qualified Surface alias at subresource 0, and a
+usage (or the exact DF24 depth-only policy below), one exact
+generation-qualified Surface alias at subresource 0, and a
 single unresolved obligation. Both definitions must precede the resolving
 command chunk, which must be retained and bind the exact alias before an
 unrestricted full clear as the first terminal access. The obligation resolves
@@ -852,6 +866,59 @@ materialization, publication validation, inspection, projection, and provider
 preflight all consume the same V2 bytes. Unsupported provider capabilities,
 including canonical cube or volume inputs outside the bounded provider slice,
 return the typed unsupported result only after structural V2 validation.
+
+The DF24 Produced extension (R-HARN-REPLAY-7.37) uses a shared typed texture
+policy and first-terminal witness. It admits only DEFAULT-pool DF24
+Texture2D, usage exactly DEPTHSTENCIL, one mip/subresource, positive 2D extent,
+depth one and zero multisample type/quality. The witness must name its exact
+generation-qualified level-zero alias in DEPTH_STENCIL, with ZBUFFER-only
+Clear flags and an empty canonical rectangle tail. DF24 maps to Depth32Float;
+no stencil plane needs prior content. Existing color proof remains a distinct
+policy rather than broadening a render-target usage-bit test to all depth
+textures. Canonical obligation settlement and General preflight recheck the
+same witness; the legacy bounded color provider still rejects this grammar.
+DF24 obligations are per parent identity rather than a tape-global singleton:
+several parents retain independent exact aliases and independent first-write
+proofs. A proof for one parent cannot settle another, and ambiguous aliases or
+mutations of an admitted Produced DF24 parent/alias remain rejected.
+
+This proof is relative to current backend stream semantics: an empty-rectangle
+Z-only clear becomes a full-attachment depth load action and store. Deferred
+clear uses the same attachment-key contract, and a following color attachment
+forces the depth-only pending clear to flush separately. No Clear rendering
+behavior or ordinary factory changes are part of the extension. In particular,
+the API viewport/scissor conformance question is excluded and must not be
+inferred from the captured-stream proof. Native bounded trace enumeration
+covers first-terminal order, role/aspect/rectangle flags and identity/topology
+counterexamples. A Metal A/B/A prior-depth oracle checks every texel through
+raw depth or sampled red, including deferred/forced-flush paths and
+seed-dependent negative controls. This cold capture eligibility change does
+not alter queue interleaving or lifetime policy; GPU and original-workload
+evidence remain independent of the native predicate tests.
+
+The bounded `NullRtDescriptorOnly` disposition (R-HARN-REPLAY-7.36) is
+independent of both complete seed and produced-pass authority. It admits only
+a DEFAULT-pool, render-target-only, single-sample NULL Texture2D with one mip,
+one subresource and positive canonical extent. Its exact generation-qualified
+subresource-0 Surface alias retains `TextureSubresource`/`Unavailable` storage
+and parent-before-alias closure. The parent has zero expected seed bytes and
+zero content entries; neither parent nor alias may receive seed mutations.
+The provider recreates their original descriptors using the ordinary factories.
+This disposition does not imply absent physical backing: a NULL texture alias
+may retain placeholder backing even though it has no meaningful initial color
+content. It must not substitute a color format or change attachment routing.
+
+The shared access predicate checks every reference in every chunk, including
+already materialized objects and repeated same-chunk uses. Only the exact alias
+in the bounded render-target binding/write-only domain is admitted. Texture or
+sampler bindings, copies, reads, updates, mip generation, CPU mutations,
+readback and oracle attachment use reject qualification before their effects.
+PE registry preflight, complete-tape validation and provider preadmission use
+the same predicate; a first-origin locator is not an access proof. Native
+truth tables cover malformed descriptors and aliases, nonzero seeds, and RT
+binding followed by a forbidden use in the same or a later chunk. This is a
+cold capture grammar extension, not a scheduling or lifetime-policy change;
+original-workload GPU/pixel qualification remains a separate evidence gate.
 
 Writable buffer/surface/texture mutations are copied before provider unlock,
 and readonly buffer locks are journaled as controls. Buffer `CpuUnlock`
@@ -953,6 +1020,14 @@ no predicate is relaxed and no capacity is raised. This makes the fused
 distinguishable from an unverified blob — so an interval abort can be told
 apart from a registry-shape or capacity failure without guessing.
 
+The capture owner independently bounds event and unique-blob counts at 4,096
+by default. Capture-only `DXMT9_RENDER_TAPE_MAX_EVENTS` and
+`DXMT9_RENDER_TAPE_MAX_BLOB_ENTRIES` use decimal counts with default fallback
+for invalid, zero or overflowing text and a hard ceiling of 65,536. The session
+constructor also enforces those ceilings. Count overrides leave the 64 MiB
+event-byte budget, byte-ownership rules, original event stream and renderer
+policy unchanged; they are never read on the capture-off path.
+
 The capture owner also bounds the total owned blob bytes (256 MiB by default,
 268,435,456 bytes), with overflow-safe admission before hashing or copying.
 `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES` is a capture-only decimal-byte override:
@@ -1031,6 +1106,43 @@ This is a backend-semantic capture, not an exact D3D9 API trace. Multiple setter
 already coalesced into one draw delta cannot be reconstructed, and CPU timing or
 Wine scheduling before publication is not preserved.
 
+The capture owner may back durable CPU content versions with a shared anonymous
+scratch arena (R-HARN-REPLAY-9.12). Each immutable version retains its arena and
+extent; fixed-size reads replace permanent mappings or full-content read caches.
+CPU partial writes stream the previous CPU version into a tentative extent,
+patch it, and commit only after successful I/O. Final-lease release returns an
+extent to the arena without allocation. Reusable holes do not imply physical
+file truncation. GPU arm snapshots retain their independent byte authority;
+spilling CPU shadows does not by itself eliminate a resource-sized GPU readback
+allocation or change the bundle's unique-blob budget.
+
+GPU arm payload has a separate preallocation credit owner
+(R-HARN-REPLAY-9.15). `PeCaptureState` initializes it once from normalized
+`RenderTapeCaptureSession::limits()`, not raw environment text. The cold owner
+has retained and transient dimensions and produces typed shared receipts. A
+retained receipt precedes the PE vector allocation and follows the vector's
+consuming bootstrap/JIT transfer into immutable storage. Copies of the
+immutable backing share the receipt; a second independent allocation cannot
+reuse its credit. Storage destruction frees payload before returning credit.
+Raw arm owners are move-only. Replacing a populated owner retires its old
+payload and receipt together, freeing bytes before returning credit; memberwise
+lease-first assignment is not an ownership transfer. Capture input blobs may
+copy unleased bytes or share immutable backing, but reject raw leased copies
+before allocating. A retained receipt binds the exact original allocation,
+not just its size, and consuming admission validates that binding before dedup.
+Transient receipts span the synchronous snapshot provider call and return on
+every exit. Equality dedup occurs later and cannot retroactively authorize the
+initial allocation. Conservative pre-dedup admission can reject a duplicate-rich
+capture even if its unique-blob total would fit.
+
+The arm provider independently checks a fixed 64 MiB resource ceiling before
+its own registry materialization and readback allocation. Existing forwarding
+drains may precede that provider guard; the production PE admission guard runs
+before entering the bridge at all. These checks do not claim a shared global
+PE/Unix credit pool or a total process-memory bound. Present mirror/oracle
+payloads, late CPU seed temporaries, scratch-file quotas, allocator capacity
+rounding, and Metal driver allocations remain separate accounting domains.
+
 ### 8.2 Bundle layout
 
 The logical bundle is:
@@ -1056,7 +1168,7 @@ capturing process.
 The coordinator-capable extension (R-HARN-REPLAY-7.26–7.28) uses identity v3
 without reinterpreting v2. Its cold Unix capture owner separates unique actual
 source publications from event-local record dispositions and replay settlements.
-Publication observers copy source/pass values before Ready visibility or reclaim;
+Publication observers copy source/command values before Ready visibility or reclaim;
 replay observers bind record anchors to these values even when one writer spans
 events. CPU/state-only and query-coordinator dispositions carry no invented
 source or pass. The source table owns exactly-once render-source completion
@@ -1067,6 +1179,302 @@ share one physical command without inventing a new publication or pass.
 Generated coordinator commands name their coordinator owner explicitly. END
 cursor validation uses all physical-command provenance, including shared draws,
 and rejects a command spanning both sides of the END boundary.
+
+Pass-plan evidence has a later authority boundary (R-HARN-REPLAY-7.30).
+Publication-time graph reconstruction is not proof of the plan Encode chose.
+A cold observer stages bounded candidate membership and accepts it only after
+the ordinary selected plan passes its final ownership/frontier checks. Rejected
+candidates are discarded. Multi-source membership is bound to qualified source
+and physical-command identities rather than source-local pass numbers. Natural,
+bypassed and optimized execution retain distinct evidence; command omission and
+execution order require explicit representation rather than synthetic no-pass
+membership. Logical accepted-plan groups do not identify actual Metal encoders.
+
+The versioned representation is identity v4 plus a required
+execution-topology v1 companion (R-HARN-REPLAY-7.31). V4 physical commands carry
+source/command identity, kind, draw extent and coordinator ownership without
+legacy pass placeholders. The companion owns accepted invocation, route,
+acceptance edge, execution order, omission and plan-local DAG group values.
+It binds the sealed identity component and events by length and digest, as well
+as capture token/epoch and queue. The manifest authenticates both components:
+`components.identity` names `identity.bin`, and `components.execution_topology`
+names `execution_topology.bin` with schema
+`dxmt9.render_tape.execution_topology.v1`. Pair attachment and staged publication
+are atomic; a missing companion or an orphan topology with a legacy identity
+must reject. These components prove neither replayed poll readiness nor pixels;
+the identity header requires the companion version but does not hash it back.
+V3 remains a separate exact grammar, not an automatic migration input.
+The private V4 exact diagnostic (`dxmt9-render-tape-v4-capture-diagnostic`,
+launched by `scripts/check/run_render_tape_v4_capture_diagnostic.py`) is an
+evidence-acquisition surface, not public policy execution. It authenticates
+the original bundle through the existing
+manifest loader, then independently checks the owned event, identity, topology,
+blob and oracle digests before creating a fresh device. A device-free inspect
+step derives the source-plan digest; execution requires that explicit nonzero
+digest and the caller's explicit normal renderer route. It replays complete
+original raws and observes actual publication, submission and completion; it
+must not force captured source cuts, substitute query results or silently
+reduce the input. Component and aggregate allocation bounds and a process
+timeout bound the diagnostic. Separate result fields retain provenance,
+query-result and strict original source/output pixel evidence. Successful
+diagnosis alone must not set policy or timing eligibility, and public V4
+execution remains closed until its independent qualification gates are met.
+Before installing its local capture root, V4 setup must complete both ordinary
+queue work and initializer uploads from the authenticated snapshot prefix.
+An ordinary device flush alone is insufficient for a texture upload with no
+ordinary writer. The existing checked Render Tape checkpoint owns publication,
+actual initializer completion and terminal rejection. Its lock must be released
+before arm. This setup-only fence must not run again inside the captured
+interval or supply fabricated source/query completion authority; failure leaves
+execution unarmed and unqualified.
+For a restored completed EVENT query, replay must join the authenticated
+checkpoint descriptor to the retained, actually completed local setup-END
+snapshot before exposing the capture root. The executor owns immutable captured
+identity/cycle/ordinal facts; binding verifies the live wrapper's device and
+registry ownership, core identity, epoch, current ordinal and exact fence.
+Every admitted checkpoint, including a lazily activated definition, must join
+exactly once. Duplicate, foreign, reset, cancelled, active, failed or incomplete
+snapshots reject the entire arm without publishing partial authority.
+
+This replay-only join seeds local query history, not captured GPU completion.
+The first interval Issue must advance the actual local ordinal by exactly one
+with valid identity/epoch continuity; supplying a captured cycle must not bypass
+that check. A checkpoint-only Poll validates its exact retained seed but creates
+no coordinator or source. After reissue, an old checkpoint Poll cannot be
+attached to the replacement coordinator. Seeding is confined to the pre-event
+arm transaction and cannot mutate a retired or frozen root.
+
+Captured and local query facts remain separate. The executor derives local
+record facts through the query-cycle transition from the authenticated local
+baseline, while preserving validation of the original transcript and captured
+facts. Actual coordinator rows must match those derived local facts; exact
+comparison joins the two query identities through the admitted mapping, never
+by observation order alone. This does not relax source cuts, initializer cuts,
+command extents, END cursors or publication policy. V3 and the public capture C
+ABI retain their existing behavior. Native counterexamples must cover skipped
+ordinals, stale identities/epochs, duplicate admission, checkpoint-only polls,
+reissue and pre-effect rollback; original-input query/pixel qualification is a
+separate gate.
+`RenderTapeExecutionV4` owns descriptor admission, local record-fact derivation
+and definition activation. `beginRenderTapeIdentityCaptureV4ForReplay` owns the
+live registry/snapshot join and exception-safe observer installation;
+`RenderTapeRuntimeIdentityV4::seedQueryBaselines` admits history through a short
+capture-lease visit before device exposure. The root retains scalar query
+identity and an `EndReceipt`, not the snapshot's owning backend pointer, avoiding
+a root/backend/queue ownership cycle. An empty admitted batch still selects
+replay-only strict continuity for fresh queries. Actual query mutation requires
+the observed irreversible-effect transition; pre-effect rollback preserves the
+seed, while post-Issue retry is forbidden.
+
+V4 exact replay must distinguish lazy initial snapshot materialization from an
+application write. An authenticated `CompleteSeed` definition and its promised
+full initial Upload events are setup data even when their logical definition
+appears after the first captured command. A bounded, typed setup owner must
+admit their complete dependency/subresource/byte closure before effects, retain
+the exact original event indexes and blob digests, and prepare the physical
+resource and initial uploads before arm. The checked setup checkpoint completes
+those real uploads. The original ObjectDefine then activates the retained owner
+exactly once; each original initial Upload consumes its admitted seed exactly
+once and preserves logical seeded-attachment bookkeeping without another
+physical upload or mutation drain. Initial contents cannot be inferred from an
+arbitrary later write, and no command/control/destruction use may intervene in
+an admitted initial seed block.
+
+Produced-by-captured-pass resources and true subsequent writes retain their
+original execution order and synchronization. Texture-subresource aliases have
+no independent seed: their original definition must resolve the activated,
+generation-qualified parent and pass the existing alias/subresource validator.
+Setup ownership must account for hidden acquisition, activation, failure and
+release exactly once, with explicit object/subresource/byte limits and rejection
+of incomplete or unsupported promised closures before interval effects. This
+is not the texture-prestage audit policy and must not enable its option, remove
+ordinary mutation drains, fabricate initializer completion or rewrite source
+cuts. Native chronology/ownership counterexamples and original-input exact
+query/source/pixel checks gate qualification.
+The private V4 provider's default setup admission limits are 1,024 late owners,
+8,192 seeds and 512 MiB of promised seed bytes; related alias metadata has the
+same independent 1,024-entry bound. Repeated blob digests still consume each
+resource's full promised-byte budget. Plan metadata is value-owned and
+move-only; it does not clone blob payloads or retain runtime pointers.
+Physical setup success requires actual buffer/texture backing and an admitted
+upload outcome, not merely a non-null wrapper or successful frontend unlock.
+An immediate shared-texture write and a failed staging allocation must remain
+distinguishable. Missing backing, invalid subresources or failed staging must
+latch initializer failure so that a later empty/otherwise-completed checkpoint
+cannot qualify the missing seed. The real pre-arm checkpoint must complete both
+ordinary and initializer streams and reject GPU errors; logical activation and
+seed consumption do not manufacture that completion authority.
+
+Two further V4-only refinements preserve the production timeline:
+
+- An authenticated DEFAULT+DYNAMIC VB/IB `CpuUnlock/NoOverwrite` may omit only
+  the General provider's extra pre-mutation flush. Admission requires exact
+  active generation-qualified ownership, complete initial content, subresource
+  zero and a nonempty, overflow-safe recorded range within the original buffer
+  descriptor. The unchanged production lock/unlock and range-upload path still
+  executes that exact write. Its D3D9 NoOverwrite disjoint-range promise is the
+  semantic premise; this is not authority for Managed, Plain, Discard, textures,
+  hidden/released objects or destruction. All other mutation drains remain.
+- A late `NullRtDescriptorOnly` texture with no initial content promise may
+  have an explicitly allocation-only setup owner. Its normal physical creation
+  and any resulting zero-initializer work finish before arm. Its exact original
+  ObjectDefine activates ownership once; aliases still resolve at their original
+  events against that active generation. This owner grants no seed or content
+  authority, cannot consume an Upload, and must never classify a
+  `ProducedByCapturedPass` resource as setup. Allocation-only footprint is
+  bounded independently from promised seed bytes, including overflow rejection;
+  the private provider's default allocation-only footprint limit is 64 MiB.
+  Zero-seed ownership and failure release use the same checked lifecycle with
+  an explicit mode, not an unchecked zero-count exception.
+
+Native distinguishing traces cover pending Clear across NoOverwrite and across
+descriptor-only allocation/alias activation, negative drain classes, stale
+identities and range bounds, zero-seed failure cleanup and produced-resource
+exclusion. The original query/source/initializer comparator and independent
+pixel/readback gate remain unchanged. No timing/policy eligibility follows from
+these preparation refinements alone.
+
+Policy-qualified input additionally requires an observed capture-action witness
+(R-HARN-REPLAY-9.14). The queue owns the actual attachment-preservation profile
+and a monotonic change revision, including construction/pre-arm history. The
+cold policy setter records real changes; no new per-draw observation is needed.
+The keyed capture binding retains the initial observation and verifies stability
+at freeze. Equal endpoint booleans are insufficient: an intervening
+enabled/disabled/enabled transition invalidates the witness. Frozen transport
+and publication use explicit schema evolution and authenticate the returned
+facts with the event/identity/topology bundle, never reinterpret reserved bytes
+or synthesize a declaration in the publisher. An absent witness decodes as
+LegacyUnknown. The exact private diagnostic remains separate from candidate
+semantic mapping and from public policy/timing acceptance.
+
+The cold snapshot transfer evolves explicitly from `D9RTSNV2` (448-byte
+header) to `D9RTSNV3` (512-byte header). V3 appends a 64-byte action witness;
+V2 decodes to canonical `LegacyUnknown`. The witness binds token, epoch and
+queue, the construction/arm/freeze profiles, and arm/freeze change revisions.
+Revision zero means no change since construction, not merely no change since
+arm. Repeated assignment of the current policy does not advance revision;
+revision exhaustion permanently invalidates its history. A cold mutex
+serializes setters and snapshots while render-path reads retain one atomic
+boolean load. Known nonstable history remains diagnostic evidence, but never
+qualifies a stable-exact policy input.
+
+Observed production publication adds `action_profile.bin`, schema
+`dxmt9.render_tape.action_profile.v1`. Its 200-byte little-endian header binds
+the witness to the byte sizes and SHA-256 digests of events, identity and
+execution topology. The manifest authenticates the component itself. Publisher
+scope strings are derived summaries, not independent authority. Attachment of
+identity, topology and witness is transactional; frozen size-query/copy reads
+the same receipt without resampling queue state. Legacy bundles remain
+unchanged and inspectable, not retroactively qualified.
+
+This slice observes policy changes; it does not change render scheduling or
+attachment-action selection. The production history reducer is checked by
+`dxmt9-render-tape-action-profile-spec` over all binary setter traces through
+length eight and all arm/freeze positions, with explicit overflow and ABA
+negatives. Transfer, runtime-binding, capture, publisher and V4 CLI tests bind
+the reducer observations to the serialized credential and byte-digest joins.
+Existing queue/lifecycle TLA models remain regression gates, not a proof of
+GPU pixels or of unimplemented candidate policy mappings.
+
+The production PE capture-Present adapter has an additional causal boundary:
+before stamping/committing the selected Present raw, mirror reservation joins
+software replay and flushes the preceding ordinary writer. Failed reservation
+aborts production capture. This is capture instrumentation, not a D3D9 Present
+requirement. The private diagnostic may explicitly select the
+`pe-present-reservation-v1` producer contract for a digest-bound production PE
+bundle with both captured source and output oracles. Generic validated Tape,
+an expected publication row, or a Present opcode alone grants no such authority.
+The selected contract is reported in the receipt and remains ineligible for
+policy timing.
+
+Under this contract the adapter invokes the same production reservation
+preparation helper exactly once before starting the authenticated Present raw.
+The previous acknowledged raw's AfterEvent scope remains active during that
+operation, and its exact source comparison runs afterwards without changed
+cuts or extents. The helper preserves production software-join/flush ordering;
+failure is terminal for this diagnostic and cannot be retried after effects.
+The provider's existing offscreen output owns the replay readback target, so
+this adapter grants no duplicate mirror allocation or query completion facts.
+Native tests must cover unselected contracts, wrong event/digest, duplicate
+preparation, failure after entry, and preparation-before-close ordering.
+Controlled CPU inventory may select the same authenticated producer contract,
+but preparation must hold a fresh exact-device/backend/root capability lease
+across the real queue flush and completion wait. Its dedicated consumer owns
+submission, acknowledgement and retirement; the caller must not fabricate them
+or substitute a captured source count. The inert fixture's flush adapter is
+session-owned, installed only after consumer start, and removed after join
+before revocation or resource release. Existing adapter ownership rejects before
+effects. Completion before Present does not imply that consumer retirement has
+already finished; final drain/join verifies retirement separately. This path
+grants controlled CPU metadata evidence only, never Metal completion or pixels.
+In the private diagnostic, a pixel mismatch at the final PresentComplete must
+not be mistaken for missing CPU/query evidence. After successful readback it may
+retain that mismatch, acknowledge only the existing final event and finalize
+the original query/source/topology evidence. No subsequent rendering or retry
+is authorized. Overall status remains OutputMismatch, and pixel/policy/timing
+qualification remains false; an independent finalization failure keeps its own
+failure evidence. Optional readback artifacts are bounded, written exclusively
+to the private output directory after device teardown, and never overwrite the
+immutable input or a previous artifact.
+
+Primary backbuffer aliasing is a physical-storage fact, not a Present role.
+Capture must classify each live, generation-qualified surface through the
+provider's actual core-surface identity before serializing its arm descriptor.
+The V2 `SwapchainBackbuffer` storage names primary swapchain zero/backbuffer
+zero only. Multiple logical wrappers may carry that storage; their identities,
+seed event order and destruction remain distinct. The provider resolves and
+retains the exact registered wrapper while checking device ownership and the
+current primary backing; classification performs no flush, snapshot or GPU work.
+Equal dimensions, formats, seed digests or pixels never establish aliasing.
+
+General replay selects its output from the original explicit Present source,
+then checks the exact PresentComplete oracle identity. Definition order does not
+select the output. Handle-less Present is admissible only with one unambiguous
+live primary-backbuffer candidate. Tagged aliases reconstruct facades over the
+same primary backing; destroying one facade must not invalidate another. A
+standalone descriptor continues to allocate independent storage even when its
+contents match a backbuffer. Unsupported late aliases, arbitrary standalone
+aliases and additional swapchain indices remain fail-closed in this bounded
+lane; they must not inject interval snapshots or acquire authority from expected
+pixels. An older capture without authenticated backing information cannot be
+repaired by relabelling its descriptors; a new genuine capture is required.
+Native distinguishing cases cover non-first explicit output selection, stale
+generation, ambiguous handle-less Present, independent alias destruction and
+equal-content nonaliases. Actual original-input pixel equality remains a
+separate qualification gate.
+Pending publication is insufficient to seal this pair. Rejected candidates
+provide no placement authority; prefix and suffix invocations cannot borrow
+each other's pass membership. Fully omitted sources require their actual
+terminal acknowledgment or remain unsupported, never fabricated GPU work.
+
+The shared v3/v4 provenance validator owns canonical event/record facts and
+source, initializer, coordinator, exact END cursor and replay-settlement
+checks. Version-specific pass semantics remain in the v3 command adapter;
+v4 supplies only neutral physical fields. Direct GetData grammar and captured
+query-cycle values are authenticated with the Tape, but provenance admission
+alone is not proof that a replayed poll is ready. Execution must join the
+transcript with live retained receipts, including legitimate checkpoint-only
+queries whose END precedes capture.
+
+Deferred Encode candidates (R-HARN-REPLAY-7.32) retain invocation order and
+owned command references. A successful prefix Encode return records an effect,
+not source registration or accepted plan authority. Later suffix planning may
+consume that exact observed prefix while its candidate remains pending.
+Registration-based batch acceptance validates the whole selected candidate set
+before publishing any topology; rejected executed candidates poison capture.
+Acceptance-before-execution is also valid for registered combined plans. Final
+snapshot qualification joins both facts, irrespective of which occurred first;
+accepted-but-unexecuted commands cannot be reported as executed.
+The synchronous observer scope holds a retained attachment through the entire
+backend call, including portions outside the queue lock.
+The attachment owns one checked monotonic edge clock shared by provenance and
+topology. Endpoint arms are never reused: old leases retain only their original
+owner, and retirement closes new diagnostic admission before joining admitted
+callbacks. Short diagnostic visits run outside endpoint locks; a retained lease
+spanning Encode is not an in-flight visit spanning Encode. Retirement must not
+hold locks required by a callback, and self-retirement from an admitted callback
+must reject instead of joining itself. Clock exhaustion or revocation cannot
+wrap or reactivate an old capture.
 
 A query association retains a generation-qualified END receipt, keyed by wire
 identity and issue cycle, until the actual publication edge binds its marker.
@@ -1084,6 +1492,77 @@ prefix dependencies before either CPU or Metal replay changes state. Runtime,
 bridge and harness integration evidence is tracked in the owning gap document;
 the v3 contract does not itself promote or relax existing v2 readers.
 
+The legacy V3 cold Unix-to-PE transfer has a separate magic/version and six
+bounded POD tables. The V4 paired transport (`D9RTSNV2`, transport version 2)
+uses a 448-byte header, seven provenance tables including actual attempts, and
+two topology tables. Its transport version is independent of identity V4 and
+topology V1. Each grammar deliberately has no events digest authority: Unix freezes observed
+facts, while PE builds and validates the final sidecar against the actual sealed
+tape. Paired V4 decoding checks the independently retained arm token/epoch and
+queue, the pair's identical identities and canonical contiguous table extents;
+it clears both outputs on failure. The publication manifest names the validated
+sidecar version rather than labelling all identities v2. Queue observer removal
+must synchronize with in-flight callbacks and revoke stale callback copies
+before the capture owner can be destroyed.
+
+Runtime replay-attempt identity is capture-local and monotonic, allocated by
+the observer at the actual transaction-begin callback. Both coordinator and
+V3 settlement `buildGeneration` fields use this domain, independently of raw FIFO
+identity and source/storage generations. The observer records commit only from
+the real committed transaction and emits settlement only after the owning
+replay ledger acknowledges that raw. Callback/walker completion does not grant
+settlement or GPU completion authority.
+
+V4 separates raw acknowledgment from transaction attempts (R-HARN-REPLAY-7.33).
+Its raw settlement carries event/raw identity, record count and acknowledgment
+edge, not a transaction generation. A mandatory attempt table carries actual
+begin/terminal edges, generation, record range, outcome and destination receipt.
+Committed ranges cover the raw exactly once in original order; a pre-effect
+rollback contributes no coverage and a retry receives a new attempt identity.
+Coordinators join the committed attempt containing their original record.
+Source metadata retains the actual raw/build/control provenance needed to join
+destination receipts to publication; receipt command count is the transaction's
+staged count, not a substituted physical DrawRun extent. Compatibility receipt
+sequence remains raw identity, while GPU submission requires its independent
+observed source lifecycle. Arena admission identifies its producer interval,
+not an invented one-source transaction, and joins its first published ticket
+before transaction commit. Direct continuations may commit while their shared
+destination remains Writing: each span has a fresh build ticket, but eventual
+publication may occur after several commits. Their receipt joins the stable
+sequence/source/storage/control identity; it must not claim each span's
+raw/build ticket equals eventual publication metadata. Exact receipt evidence
+comes from the actual accepted destination and successful transaction commit,
+not an inferred publication. Post-effect failure invalidates capture.
+The attempt's producer interval is observed local begin/receipt evidence; the
+canonical CommandChunk does not independently serialize that interval. All
+attempts of one raw must retain the same projection identity. This join must
+not be reported as a separate proof of ingress producer-interval authenticity.
+
+Coordinator admission is a closed authority sum (R-HARN-REPLAY-7.35):
+`SessionRelease` carries the real posted/acknowledged release receipt;
+`OrdinarySerial` carries a positive observation of the actual no-session
+production dispatch boundary. The latter has no session-release receipt and
+must not be inferred from absent observer callbacks. The observation joins the
+capture/queue and active event/raw/attempt/original-record context, not a
+synthetic source. Whole-raw compatibility fallbacks and mixed-route coordinator
+spans use the same admission contract. The capture core validates the selected
+authority before completing the coordinator record; the shared query-prefix
+and lifecycle validator remains authoritative for actual END effects. V3
+retains its original release-only grammar. V4 serialization and its adapter
+must distinguish ordinary authority explicitly without relaxing V3 reserved
+fields or treating zero release fields as successful session release.
+The V4 header is 264 bytes: the prior 256-byte prefix is followed by an explicit
+`coordinatorDomain` and a required-zero reserved word. The domain records the
+queue's immutable session policy even when no coordinator occurs. A V4
+coordinator row is 208 bytes: unchanged 192-byte V3 provenance fields followed
+by its ordinary admission edge, explicit authority and required-zero reserved
+word. `SessionRelease=1` requires the real release fields and no ordinary edge;
+`OrdinarySerial=2` requires zero release fields and an observed admission edge
+within the matching attempt, before dispatch. Rows must match the header
+domain. Old 256-byte V4 headers reject structurally rather than being silently
+reinterpreted. V3 bytes and reserved fields remain unchanged. The paired
+transport, topology binding and source-plan digest retain this explicit domain.
+
 The v3 plan is an owned, fully admitted sequence of record/event execution,
 expected actual publication and replay-settlement actions. Publication actions
 qualify receipts at authenticated cuts; they do not unconditionally publish a
@@ -1094,6 +1573,604 @@ field encoding of tape/identity component hashes and lengths, referenced verifie
 blob identities and sizes, and the validated canonical tables. It must not hash
 native padding. Original RGBA oracles remain bound by the enclosing bundle and
 qualification receipt, not silently inferred from this native plan digest.
+
+V4 execution declares its correspondence mode (R-HARN-REPLAY-9.16).
+Exact-source diagnostics compare original publication cuts and physical
+command extents. Semantic mapping instead joins each canonical
+`(event, raw, record)` and draw locator to actual candidate command/subdraw
+origins, with many-to-many source relations. State-only records retain their
+disposition; generated coordinator commands retain an explicit ordered origin
+relation. Original and candidate END prefixes are projected onto canonical
+effect coverage, including all earlier sources, so an empty/baseline label
+cannot hide omitted pre-END work or admit younger work.
+
+The pure mapper consumes a validated immutable source plan, canonical event
+facts, actual local query facts and complete candidate identity rows. It
+revalidates real lifecycle, attempt/rollback and raw-ack coverage before
+publishing any owned result. Finite dimension limits and atomic failure apply
+to source relations and command expansion as well as record count. The first
+implementation explicitly rejects interval initializer correspondence rather
+than inferring it from render-source sequences.
+
+In semantic execution, encountering a reference publication action registers a
+bounded deferred obligation. Advancing the traversal cursor acknowledges that
+registration only, not actual publication or completion. Final mapping must
+discharge every original source obligation against genuine candidate source
+membership; missing obligations or unfinished candidate work prevent success.
+No observer callback, cursor action or mapper may flush or force a reference
+partition. Actual topology and query/pixel qualification remain independent
+gates. Private semantic diagnostics do not themselves enable public policy or
+timing acceptance.
+
+CPU General execution shares its explicit input budget with grammar admission
+(R-HARN-REPLAY-9.17). Default and extended profiles are distinct values, reused
+for every iteration; body and bootstrap work have individual and aggregate
+bounds. Separate publication and progress capacities constrain actual execution,
+not the number of canonical events. Enlarging a selected input profile grants
+no route or completion override and does not imply V4 execution support.
+The default 2,048-blob metadata cap is a new explicit limit, not a claim of
+byte-only legacy admission equivalence. Actual publication counts come from
+queue progress; execution progress counts each submission and each query probe.
+Recovery still retires published owners after a sample is rejected.
+
+CPU V4 execution is a separate controlled-queue domain
+(R-HARN-REPLAY-9.18), not incomplete Metal execution. Its input authenticates
+the full captured V4 pair, but its candidate output contains actual replay
+attempts, command origins, publication, controlled submission/acknowledgment
+and semantic correspondence only. It contains no invented Encode topology.
+An exclusive CPU fixture capability binds the live queue/device and capture
+root. Provenance-only finalization uses a distinct evidence type; the public
+finish ABI and ordinary Metal executor remain topology-complete or reject.
+
+The CPU consumer observes queue-owned payloads before controlled retirement.
+Publication callbacks are evidence-only and never reenter the locked queue.
+Progress occurs at checked unlocked boundaries, with conservative admission
+against real available capacity between those boundaries. No per-raw flush
+may reproduce a reference partition or manufacture progress. CPU query
+readiness is qualified only against controlled queue receipts; numeric GPU
+results and original pixels require the independently executed Metal lane.
+
+The dedicated consumer uses the actual publication condition variable with a
+local close/stop predicate; normal shutdown does not set the production queue's
+terminal flag. Its receipt mailbox is bounded by admitted total sources rather
+than resident queue slots. Backend calls occur outside the controller mutex,
+and capability validation precedes queue locking. Fixture ownership requires
+consumer join before revoke, reset or wrapper destruction. If a failure leaves
+an already-dequeued source without a valid retirement path, the poisoned queue
+retains its exact owner for teardown. Released borrowed views, joined threads
+and quarantined owners are separate facts; quarantine does not satisfy
+`cleanupComplete` or any normal completion gate.
+
+Concurrent semantic observation must not read the producer executor's mutable
+object, receipt, tombstone or CPU-shadow tables. The producer owns those tables
+and normalizes immutable identity/content versions after each successful
+definition, mutation or destruction. The observation context binds versions to
+canonical command/subdraw locators, not just the latest registry at publication:
+one source may span several resource epochs. State/uniform spans remain inside
+the represented payload borrow. Buffer backing comparisons require the matching
+immutable expected bytes and generation-qualified physical view; a payload pin
+alone does not protect in-place resource writes. Consumer-local proof caches
+must include version identity, and nonversioned mutation requires an explicit
+observation/retirement fence. Metadata-only kind/count observations never satisfy
+this full semantic gate.
+
+Logical content evidence and physical fetch evidence have separate authorities.
+For controlled V4 logical observation, physical source partitions are not part
+of the semantic stream key: each command/subdraw is keyed by its authenticated
+original record locator. Effective state and uniforms come from the represented
+payload borrow. Buffer content hashes use complete immutable record-qualified
+images and explicitly project logical content epochs; Pool revisions remain
+separate physical observations. The legacy serializer retains its existing
+revision projection unless the caller explicitly selects the V4 projection.
+Complete field collection is not an equivalence oracle. A single diagnostic
+execution may qualify original-keyed stream coverage, but must leave original
+scalar/uniform equivalence, cross-policy equality, GPU and timing authorities
+false. A changed state value may produce a different valid fingerprint; the
+paired qualification layer must actually compare independently replayed
+reference/candidate streams before asserting equality. Redundant uniform cache
+hashes are excluded only in the explicitly versioned logical projection when
+their complete values are serialized; legacy fingerprints remain unchanged.
+The same projection hashes effective per-draw alpha-test values through
+`FsVolatile` rather than also hashing the batch's first-draw alpha state entries.
+Its remaining render-state count excludes that redundant trio, so split and
+batched representations of the same effective draws agree. Non-alpha state,
+effective alpha changes and complete uniform values remain observable.
+
+A private cold controlled-session route comparison must bind both requested
+policy and actual backend capabilities before effects. The existing
+Compatibility fixture exposes Arena replay but disables Direct ChunkSlot;
+the ProductionSlot fixture disables Arena selection and enables Direct
+ChunkSlot. Leaving Arena enabled for the latter can select an earlier Arena
+candidate and does not establish final-slot coverage. The controlled consumer
+borrows both represented payload forms through the existing queue resolver;
+its lifetime capability does not require Arena selection. Setup and original
+body replay must use the same selected policy. Actual body route-counter deltas
+must conserve original draw count and remain distinct from requested policy.
+Verification may explicitly enable existing perf counters before cached
+initialization; such executions remain observer-heavy and timing-ineligible.
+Any semantic-mapping GPU diagnostic requesting ProductionSlot must
+also demonstrate positive actual Direct lease and draw counters. A complete
+all-compatibility replay preserves its diagnostic artifacts but does not
+qualify an exercised Direct candidate. Natural mixed fallback remains valid.
+These GPU counters cover the diagnostic replay lifecycle, not a newly claimed
+body-only counter scope. Public paired qualification additionally requires
+independent original readback authentication and final input/executable/loaded
+image reauthentication; native gate booleans alone are insufficient.
+
+The private actual-Metal diagnostic may export existing prepared-replay phase
+clocks and quiescent runtime-counter deltas as diagnostic service-cost evidence
+under R-HARN-REPLAY-9.5. Prepared clocks exclude input-file loading and fresh
+factory/device creation and destruction; chunk replay may include synchronous
+waits. Runtime deltas span before factory creation through completed teardown,
+not only the captured body. These elapsed scopes can overlap or nest and must
+not be summed into thread CPU, an exclusive encode cost, or a critical path.
+A disabled gated counter is not evidence of zero work. Missing pass-planning,
+encoder-only, GPU execution and completion/readback-exclusive dimensions remain
+explicitly unavailable. Exporting these readings does not grant policy or timing
+eligibility. Legacy diagnostic receipts may omit them; malformed present
+measurements must fail closed without weakening original pixel/query gates.
+
+Existing query clocks may be exported separately: checkpoint restoration
+includes fresh EVENT creation, END, polling and pending-poll yields; transcript
+time covers captured GetData execution and evidence construction, not the whole
+transcript; oracle time covers supplemental readiness/result settlement.
+Checkpoint retry counts are yield counts, not measured blocking time. These
+scopes are nested in provider replay and may overlap asynchronous encoding.
+Only successful actual-Metal qualification and completed teardown authorize
+observed values; inspection or failed runs expose nulls. Legacy absence is
+permitted, while malformed present query measurements reject. Neither query
+time nor zero supplemental polls establish numeric occlusion coverage.
+
+Prepared V4 attribution may separately observe outer source-plan/admission
+and initial-setup validation, inner execution admission, the pre-arm queue
+checkpoint call, and execution finish/qualification. Outer preparation is
+outside replay wall; the latter three are within it. These scopes do not
+define an exhaustive or additive partition and do not isolate CPU from waits.
+The historical non-prepared provider path must acquire no additional clock
+reads. Measurement must not skip a validation pass, reuse mutable execution
+state or alter publication/completion ordering. Optional exported readings
+follow the same success-only/null and strict-present-schema rules above.
+
+The diagnostic caller may additionally time the complete prepared-provider
+call, ending only after its result assignment and return-temporary destruction.
+This elapsed scope includes provider-local plan/executor destruction even when
+it lies outside the internal replay/admission clocks. It excludes caller input
+preparation, execution-option construction, factory/device creation, subsequent
+device teardown and independent caller qualification. It is an inclusive
+service-cost reading, not thread CPU, GPU time, or an exclusive sum of the
+internal phases. Result ownership retained by the caller is not destroyed by
+this scope. Optional per-execution export follows the same qualification and
+strict schema rules; a repeat-root aggregate must not masquerade as one call.
+
+Prepared V4 execution must retain a single admitted execution owner for one
+provider invocation. The source plan, General plan, tape storage and result
+evidence must remain at their admitted addresses until that execution is
+cancelled. The private replay helper mutates caller-owned result storage;
+it must not copy the result and silently discard admission-time vector capacity
+or leave the executor pointing to a different evidence object.
+
+A prepared handoff is an irreversible, pre-arm claim bound to the exact
+admitted plan/General/evidence/tape owners and publication/producer policies.
+It rejects unadmitted, failed, consumed, non-pristine, stale-owner or
+policy-mismatched claims before effects. Matching digests do not authorize a
+different owner. It must neither reparse/re-admit the input nor copy/move the
+executor, whose callback context remains stationary. Each invocation still
+owns fresh mutable query identities, cursor and actual completion evidence;
+the claim does not authorize cross-iteration mutable reuse or warm-device
+qualification.
+
+The borrowed executor must be cancelled at the helper's original destruction
+boundary on every exit. Explicit cleanup retains cancel-before-flush-before-
+resource-retirement ordering; an outer destructor may only perform idempotent
+cancellation afterward. Missing-device failure remains pre-effect. The inner
+admission clock stays zero when no admission call occurs; independent
+admission-count/consumption evidence must identify the exercised path rather
+than treating a zero clock as proof. Bounded predicate and actual-owner negative
+tests precede original-input GPU/query qualification.
+
+#### Immutable V4 preparation boundary
+
+Cross-iteration reuse must use an explicitly prepared immutable owner, not a
+lazy mutation of a const input or a process-global cache keyed by a digest or
+environment selector. That owner must retain the authenticated tape/blob
+storage and its General plan, V4 source plan, initial-setup plan, and validated
+execution templates. Publication mode and producer contract are preparation
+inputs. Preparation must finish all required input, closure and capacity
+validation before publishing usable authority; failure publishes no partial
+owner and causes no device or queue effect. A caller-set validated flag is not
+authority to bypass authentication.
+
+Reusable facts may include canonical events, command hashes/envelopes/types,
+source obligations, query descriptor/cycle templates, snapshot boundary and
+Present locator. Each invocation must construct fresh query bindings and local
+record facts before translating identities, a fresh cursor and Present phase,
+fresh obligation-registration state, and fresh device/root/completion evidence.
+Initial-setup metadata does not authorize reuse of physical objects, setup
+checkpoint completion or prior readbacks. Neither a cancelled nor a successful
+execution may alter the prepared templates or seed the next execution's state.
+
+The immutable owner must outlive every borrowed execution and all of its
+callbacks. Moves must preserve stable internal storage identity; moved-from or
+unprepared owners cannot authorize replay. Runtime owner/policy checks remain
+pre-effect, and the invocation-local one-shot claim above remains irreversible.
+An immutable preparation witness grants input validity only, never actual
+traversal, publication, query readiness, GPU completion or pixel correctness.
+
+`prepareRenderTapeIdentityV4` is the eager factory. Its preparation options
+bind the identity/topology pair, required expected source-plan digest,
+publication mode and producer contract. `replayPreparedRenderTapeIdentityV4`
+accepts only the prepared owner, current device, route and optional observer;
+it cannot override the frozen inputs/policies and requires a caller-provided
+fresh device.
+Legacy-only owners cannot authorize the named V4 entry point. Conversely,
+V4-prepared owners must not enter the legacy configurable replay API. A failed
+V4 factory invalidates the whole result even if General preflight succeeded.
+
+The existing move-only `PreparedRenderTape` facade owns stable PIMPL storage.
+Its internal execution preparation is stationary and sealed after validation;
+repreparing or moving that storage while a session borrows it is prohibited.
+Legacy direct admission uses the same template-validation algorithm, followed
+by fresh execution initialization. Immutable event/command/obligation vectors
+are borrowed as const spans; query binding and translated-record storage is
+execution-local. Runtime command-byte and physical-identity checks still run.
+
+Provider evidence distinguishes one successfully published immutable V4
+preparation from each fresh local admission and its consumed claim. The
+one-off V4 preparation clock excludes earlier independent diagnostic
+inspection and is nested in the complete eager input-preparation clock. A
+per-iteration copy of that reading is the same once-only measurement, not
+additional work. Changed timing boundaries use versioned receipts; historical
+timing schemas retain their original meanings. Observed new-path timings
+require matching immutable-preparation and local-admission evidence.
+Final prepared-owner destruction occurs once after its last use and is outside
+both factory and individual provider-call clocks. Legacy direct admission may
+incur an additional mutable-record seed copy through the common algorithm;
+reuse-path measurements must not imply that the legacy path became faster.
+
+Verification must cover owner moves/lifetime, distinct same-digest owners,
+policy mismatch, template isolation across success/cancellation/failure, and
+allocation failure before effects. Original-input CPU/query/GPU gates apply to
+every repetition. One-off preparation and complete provider-call elapsed time
+must be reported separately; relocating work outside an internal timer is not
+evidence of reduced total experiment cost or increased game FPS.
+
+In-process V4 diagnostic repetitions retain one authenticated immutable
+prepared-input owner but keep one fixed route/grouping/capacity policy for the
+entire process. Cached environment selectors are not an iteration-level policy
+interface. Each fresh-device iteration constructs its own factory/device,
+executes the original plan and query/pixel qualification, drains and destroys
+the device, and preserves independently verifiable readbacks before the next
+iteration. Warm-up iterations pass the same gates and remain distinct from
+measured iterations. Any failed iteration or final input/image reauthentication
+rejects the whole run; a successful prefix is evidence, not an accepted aggregate.
+Output count and cumulative readback bytes must be admitted before GPU work.
+Sharing input preparation does not authorize warm-device reset or mutable
+resource reuse. Fresh-device repetitions do not reset the system driver cache;
+actual warm-device/cache qualification still requires the changed-state and
+mutation A-to-B-to-A oracle in R-HARN-REPLAY-8.3.
+The private repeat envelope admits at most 64 total warm-up/measured iterations,
+512 MiB cumulative raw readbacks, 16 MiB per native iteration receipt and
+128 MiB cumulative receipt bytes. The launcher derives private iteration paths
+from admitted ordinals and verifies every receipt and original readback, rather
+than trusting paths in the manifest. Preparation count is one: repeated
+`prepare_wall_ns` fields name that same one-off preparation, not per-iteration
+work. The heavy original encode-draw witness remains a separate single-execution
+diagnostic and is rejected in this repeated service-cost mode.
+
+The public V4 paired qualification entrypoint owns one immutable staged input.
+It authenticates the stable-exact action witness and explicit producer and
+candidate-legal-NOOVERWRITE contracts before sequential CPU reference/candidate
+and two fresh GPU executions per route. CPU pairing compares every ordered
+original locator, command kind and logical fingerprint; physical sequence and
+batch locations are excluded. Each child independently retains its lifecycle,
+query, coverage and route gates. GPU pairing independently checks both emitted
+RGBA files against the authenticated original bytes. Distinct CPU/GPU endpoint
+executables are bound separately; shared loaded runtime modules must agree.
+Actual forced stage configurations are recorded separately from inherited
+environment, not misrepresented as identical CPU/GPU execution environments.
+Final input, executable and image reauthentication precedes aggregate
+acceptance. Failed child artifacts remain available, and unrelated legacy
+execution commands continue to reject unsupported V4 input.
+
+A capacity candidate is a route-qualified cold policy identity, not an inherited
+environment override. Exact-fit uses zero per-payload and aggregate headroom.
+Positive ProductionSlot candidates require both values: per-payload 1--64 MiB,
+aggregate at least the per-payload ceiling and at most 512 MiB. Compatibility
+accepts only exact-fit. The shared native admission reuses `CpuTapePolicy`;
+the capacity-only identity does not encode grouping or encoder partitioning.
+The native endpoints apply both production headroom selectors before device
+creation and record requested policy and actual stage values independently.
+Effect-free inspection records only requested policy. Missing, mismatched,
+half-paired or out-of-range policy evidence rejects qualification or measurement.
+
+Public paired qualification keeps its Compatibility reference exact-fit and
+binds the selected capacity to every ProductionSlot CPU/GPU child. Repetitions
+derive capacity from that authenticated route, never from ambient variables.
+Original event/query semantics and canonical work coverage remain unchanged;
+physical grouping may differ. A retained-capacity ceiling is not a strict
+source-byte cap, and qualification must not assume that positive headroom caused
+reuse or a partition change. Mechanism counters are separate evidence. These
+controls reuse production provisioning; they do not promote it by default or
+introduce new source cuts, completion policy, or Metal scheduling authority.
+
+The versioned `dxmt9.render_tape.v4_replay_policy.v1` identity extends native
+policy admission with route and `draw_command_limit`, retaining the two capacity
+values. A zero command limit preserves ordinary batching; positive values
+3--64 are Compatibility-only and cannot combine with positive headroom.
+ProductionSlot accepts only zero command limit. Admission delegates to the
+existing `CpuTapePolicy` predicate without applying its legacy Raw64 pending
+arithmetic to Raw256. Both native endpoints pin the production command selector
+and zero payload-limit selector before any setup replay or device creation.
+Actual values and requested policy are independently recorded. Effect-free
+inspection uses the non-execution route sentinel `inspection`; it grants no
+runtime-route evidence. Generic Metal encoder partition settings remain outside
+this policy.
+
+Grouping changes must arise from genuine queue publication, not inserted
+flushes, rewritten captured raws or synthetic completion. The real concurrent
+consumer supplies bounded progress through Raw256 pressure. A grouping-plus-END
+fixture must distinguish natural L0/L3 partitions while preserving all four
+original records before EVENT END and excluding later Draw/Present. Each
+source must have real submit/ACK/retire evidence; Observe and ExecutionOnly
+must use the same admitted policy. Public qualification and measurement must
+bind this full policy identity before any positive grouping result is accepted.
+
+A failed grouping pixel oracle remains rejected even when logical/query and
+instantaneous buffer-byte witnesses pass. Standalone Metal mechanism fixtures
+may compare immutable draws in one render pass, a Store/Load close/reopen in
+one command buffer, and an ordered two-command-buffer split. Such fixtures
+must report source attachment and final sampled-output equality separately,
+verify repeatability and non-degenerate output, and fail on setup/readback/GPU
+errors. Split equality is an observed result, not an assumed test precondition.
+They grant no captured-workload, queue-lifetime, future-mutation or performance
+authority. No production scheduling transition is changed by these diagnostic
+fixtures; the existing grouping/lifecycle models remain the scheduling evidence.
+
+An execution-only mode uses the same controlled V4 event driver without the
+diagnostic resource-version/context images, canonical draw copies, inventory
+payload observer, source-row reads or logical hashing. Essential resource
+creation, uploads, query/provenance handling and consumer completion remain.
+The body clock begins after actual setup/arm and includes consumer completion;
+setup and teardown are separately reported. Monotonic wall and process CPU
+clocks are separate quantities. An execution-only receipt supplies no new
+semantic or pixel authority and cannot qualify itself for measurement. Only a
+successful paired qualification bound to the same input, images, policy and
+configuration may authorize a later measurement aggregate. Cold repetitions
+use fresh devices; failed and warm-up iterations remain explicit artifacts.
+The experiment aggregate supports forward, reversed and same-route A/A arms.
+It admits at most 64 warm-up-plus-measurement rounds per arm and 128 fresh
+children in total, with 1–32 measured rounds; fewer than 16 samples per arm
+is smoke evidence, not a comparison-ready result. Original event/effect/query
+counts and original provenance coverage must agree with authenticated paired
+CPU evidence even when physical batching differs. Timeout or missing lifecycle
+evidence rejects a sample. Validation/HUD-enabled environments cannot supply
+measurement acceptance. Final qualification, input, launcher and loaded-image
+reauthentication must succeed before measured summaries become accepted.
+
+The standalone `scripts/tools/render_tape_v4_capacity_experiment.py` compares
+ProductionSlot arms from two independently authenticated paired qualifications.
+Original manifest/action/plan/work, endpoint/runtime images, base environment
+and preservation contracts must agree; only admitted capacity identities and
+their derived stage pins may differ. Every ordered candidate logical item is
+compared across qualifications before execution. Each sample retains its own
+arm's frozen policy authority while both arms reuse one content-identical owned
+input. Both qualifications and candidate streams are reauthenticated at the
+end. At least two warmups and 16--32 measured samples per arm are required,
+with the same 64-round-per-arm limit. Reversing qualification arguments reverses
+order; using the same qualification supplies A/A. This establishes only the
+declared two-arm comparison, not completeness of a larger capacity matrix.
+
+SURFACE aliases require role-qualified provenance. A cold canonical fold tracks
+only render-target slots, depth/stencil and the explicit Present source from
+authenticated full/sparse state and draw records. Unknown bindings are distinct
+from known null bindings. The observer selects that exact wire identity from
+the immutable original context and checks its native association against the
+actual payload role. It must not select the first matching native alias or
+promote an alias inventory to unique-native authority. Equal native storage
+cannot by itself distinguish which canonical alias a role named. Missing role
+provenance, stale identity or native-association disagreement rejects logical
+qualification without granting policy or timing authority.
+The fold defaults to unknown roles. An explicit fresh-device authority may
+seed RT slots 1--3 and depth/stencil as known null only when fixture construction
+is fresh and automatic depth/stencil creation is disabled. This follows
+`DeviceState::reset` and `Device::initializeDefaultSwapChain`, not observed
+consumer handles. RT0 remains unknown until canonical provenance names it.
+The seed cannot reset an already advanced fold or erase authenticated bindings.
+
+The logical digest uses the complete immutable record-qualified image. A
+NOOVERWRITE residency token preserves allocation lifetime, not that historical
+whole image: later legal writes outside an earlier draw's footprint may change
+the same allocation. Unconditional physical qualification must compare the
+represented draw's accessed bytes (or a sound conservative overapproximation)
+against its immutable expected version under the buffer arena's shared lock.
+The queue mutex is not the lock used by in-place uploads. Footprint derivation
+must use actual normalized draw parameters, effective bindings and retained
+layout, including indexed/base-vertex, instanced and inline payload cases;
+unsupported or unbounded fetches reject before dereference. Physical proof
+caches require an observation-coherent mutation epoch or revalidation; the
+captured revision alone cannot certify unchanged physical bytes. Whole-backing
+timeline comparison or append-time proof alone is supplemental evidence, not
+a consumption-time proof. Any qualification relying instead on the application's
+legal-NOOVERWRITE contract must state that conditional authority explicitly.
+An individual arena-locked comparison certifies only the selected buffer bytes
+at that observation. It does not certify atomic observation across multiple
+buffers, preservation after the lock is released, or synchronization with raw
+mapped/GPU writers. Whole-draw qualification must separately establish those
+obligations for its admitted execution domain. A failed or empty footprint
+must not mint a successful byte-proof receipt.
+
+The consumer joins each physical command/subdraw to a canonical record using
+the actual root's source-specific publication-origin projection. The request
+binds capture token/epoch/queue and the entire actual publication receipt.
+Origins are readable once publication is observed, even when a generating
+coordinator has not returned or the current raw has not acknowledged: waiting
+for those later boundaries can prevent the producer from obtaining capacity.
+The projection owns value-only provenance, never resource state or payload
+borrows, and grants no completion or coordinator-success authority. Invalid or
+stale read requests return empty output without mutating the capture root.
+Resource contexts are separately bound before dispatch. Same-record retries
+reuse the same immutable context; a later context cannot replace an earlier
+record's resource epoch merely because their commands share one source.
+
+Controlled V4 input admission is a distinct raw256 profile, not a larger
+legacy serial-queue allowance. It retains state-only bootstrap bounds and
+accepts the authenticated complete gamma ramp without rewriting its values.
+An accepted input result still carries an unproven source-progress prerequisite;
+it grants no resident-capacity, execution or semantic authority. Legacy input
+profiles retain their previous record and identity-gamma restrictions.
+
+Producer context linkage obtains current local buffer revision and allocation
+identity from one arena-locked value observation, including nonversioned
+buffers. Logical content epoch and local Pool revision are distinct values.
+This observation is instantaneous and neither pins storage nor authenticates
+an old ring entry's revision. The controlled session's expected-byte budget
+reserves aggregate credit before copying immutable buffer images. Credit
+follows each version until its final owner releases the byte storage; shared
+contexts do not charge the same version twice. Failed replacement preserves
+the prior version and unwinds tentative credit. Original-input context admission
+must require every version's association with that exact session budget.
+This expected-byte limit excludes metadata, context vectors, allocator overhead
+and process/GPU memory; legacy unbudgeted helper results cannot establish it.
+
+Successful producer-local buffer observations are value-owned by the immutable
+resource version alongside its logical expected image. A later mutation,
+destruction or record retry must not substitute the producer's current
+observation for that historical value. Failed observations remain explicitly
+absent. Handle, extent and observation validity are checked before version
+allocation; logical epoch and local content revision are not equated.
+
+A source-read proof involving indices and vertices must compare all selected
+buffers under one shared buffer-arena lock. Separate successful per-buffer
+probes do not establish a coherent draw observation. Immutable expected index
+bytes may determine a bounded read plan before locking, but both those selected
+index bytes and the resulting vertex ranges are compared inside the same lock.
+Batch requests must agree on source/completed watermarks and obey aggregate
+request, range and byte limits; any failure grants no partial batch authority.
+Whole-stride footprints are conservative source-read qualification, not exact
+shader demand: a mismatch does not by itself prove a rendered semantic error.
+This cold proof excludes unsynchronized raw mapped writes and GPU writers and
+does not promise preservation after unlocking or post-transformation Encode
+bytes. Actual geometry routes and GPU equality remain separate gates.
+
+The controlled source observer attaches this read evidence while holding the
+real generation-qualified synchronous source borrow, before that source's
+submit/ACK. Original publication origins select the write-once record context;
+the observer must not consult the producer's current resource ledger. Binding
+overrides apply to both retained hot state and shader layout. Single-stream
+qualification also inspects declaration elements, since a stream mask alone
+does not exclude additional programmable bindings. Snapshot metadata association
+is checked separately from concrete byte equality. Each draw's batch uses one
+actual source/completed window and explicitly bounded member and aggregate
+limits. Only value evidence keyed by original record and actual source/command/
+subdraw may survive the borrow.
+
+Unsupported shapes, missing historical facts, association failures and
+conservative row mismatches remain separately typed not-qualified outcomes;
+they do not imply corrupted pixels or authorize a policy comparison. Malformed
+origin mappings, foreign contexts and lifecycle failures retain fail-stop
+behavior. Row observation success never upgrades full-semantic, future-fetch,
+executed Encode, GPU, pixel or timing authority.
+
+The private native diagnostic may independently observe actual Encode through
+the existing optional recorder. It must leave Metal issue, side effects,
+expansion, staging and publication policies unchanged. The recorder owner
+outlives device reset and queue-thread join, including error unwinding; an
+existing recorder cannot be replaced. The observation domain is serial Encode.
+Since the existing recorder vetoes
+parallel Encode, a queue with cached explicit-parallel execution must reject
+attachment before installing the recorder; it must not silently select serial.
+Draw identity is the actual sequence, physical command and subdraw.
+Original-record attribution requires an authentic
+semantic publication mapping, never an inferred ordinal match.
+
+Successful transient or staged uploads are candidate storage, not draw issue.
+Final bindings and actual draw calls select candidate receipts; unused uploads
+remain orphans. Binding state survives draws and source fragments and is cleared
+at actual render-pass boundaries. Cache hits reference an earlier authentic
+upload receipt without rereading mutable input or claiming another copy.
+
+Accepted-storage inspection is cold and synchronous. A genuine live Shared
+Metal buffer may be compared with the complete accepted upload span, under
+explicit per-member and aggregate byte limits admitted before reading. Bounds,
+overflow, storage mode and destination mismatch failures grant no partial
+equality. Only numeric receipts survive; input fingerprints are diagnostic,
+not collision-free semantic proofs. Immediate input/destination equality does
+not establish preservation until GPU consumption, original expected-version
+equivalence, shader fetch coverage or coupled CPU/GPU qualification. Recorder
+failure must not change rendering policy or suppress a real draw, and requested
+observation must report failure separately from independent pixel success.
+
+Direct-native vertex/index bindings are retained independently of upload
+receipts. A buffer may have no observed upload at all. Exported native
+observation IDs identify equal local handle values only within one diagnostic
+execution; they are not cross-run identities, allocation generations or
+lifetime capabilities. Changing a stream buffer/offset replaces its binding,
+inline bytes invalidate it, and unrelated uniform slots cannot erase it.
+
+Original expected BUFFER images for actual Encode comparison must come from
+authenticated canonical seed/patch bytes, not from the current wrapper shadow,
+mapped native bytes, or another replay execution. A definition starts with
+unknown contents until an admitted complete seed establishes its image.
+Hidden preparation, logical activation and consumed setup seeds remain
+distinct: activation does not create another owner or logical version, and
+consumption does not apply a hidden seed twice. Later patches preserve earlier
+record-bound immutable versions through destruction and rename.
+
+A caller-owned, optional prepared-V4 observer may bind these expected versions
+to actual provider objects. It observes successful definitions/mutations,
+retirement before release, actual arm credentials, and the existing post-drain
+before-record boundary. Managed unlock success alone is not a physical-update
+completion witness. The observer must not add drains, cuts, uploads or waits.
+Its callbacks consume provider-local wrappers/descriptors synchronously; the
+tests-side owner copies immutable data and bounded value associations. Failure
+disables further diagnostic data collection and rejects its qualification,
+not the original renderer's execution or HRESULT. Cleanup notification does
+not permit destruction of the callback owner before queue teardown.
+
+The Encode observation domain is `AwaitingArm -> Armed -> Closed`, using the
+provider's genuine arm after its existing completed setup checkpoint and its
+cleanup notification. Setup and post-close source fragments are counted as
+outside the original body, not assigned synthetic original identities. Draw
+attempts or original-record callbacks outside `Armed` reject observation.
+Every armed source still requires an authenticated publication-origin lookup;
+an absent lookup is never treated as another setup fragment. Repeated arm or
+close transitions reject, and all final diagnostic reads occur after device
+teardown/join. No extra synchronization may be introduced to enforce this
+diagnostic lifecycle.
+
+Actual source Encode entry may pull canonical origins using its full local
+SourceRef and sequence. The root resolves exactly one already-owned publication
+receipt and applies the same capture/writer/generation/coverage checks as the
+receipt-qualified API. It does not manufacture a publication, wait for raw ACK,
+or prove a resource byte span. This pull runs outside the queue scheduling lock;
+the publication sink is not an allowed re-entrant lookup point. The root lock
+is released before immutable record lookup or native byte inspection.
+
+Final direct-binding comparison must account for both native draw arguments
+and shader-side vertex base/address constants. Matching logical handles,
+snapshot metadata or issue counts alone cannot establish the native fetch
+address. Unsupported address/format/storage domains remain explicitly
+unqualified; a policy experiment cannot replace this gap with forced staging.
+Where the existing arena-locked multi-buffer proof is reused, the diagnostic
+must first match each issued native binding to the actual selected snapshot
+or admitted nonversioned backing. Requests retain the selected snapshot facts;
+they cannot synthesize a substitute snapshot from logical handles. One batch
+compares the IB interval and VB rows after releasing provenance/context locks.
+This remains a scoped instantaneous observation and excludes unsynchronized
+mapped/GPU writes; it is not a promise about later GPU consumption.
+
+The cold producer ledger distinguishes `SemanticUniqueNative` contexts from
+explicit `V4SurfaceAliasInventory` contexts. The latter preserve distinct full
+wire SURFACE identities sharing a native surface without merging epochs or
+receipts; BUFFER and TEXTURE native collisions still reject. Every version
+must belong to the exact session budget. Ambiguous native-key lookup returns
+no result, while full-wire lookup preserves kind, generation and object ID.
+Even empty or alias-free inventory contexts grant no semantic-unique-native,
+physical-byte, GPU or timing authority. Semantic consumers reject that purpose.
+Original record retries retain their original immutable context; alias mutation
+or destruction never rewrites an earlier record or implicitly propagates to
+another wire owner. Resource-context and producer-ledger native specs bind
+these value/ownership rules, including allocation failure and concurrent readers.
 
 `identity.bin` is a cold, fixed-layout, little-endian sidecar. Version 1 used
 schema `dxmt9.render_tape.identity.v1` and one source entry per canonical

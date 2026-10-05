@@ -11,6 +11,7 @@
 #include "dxmt9_query_policy.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_texture_upload_outcome.hpp"
 
 #include <algorithm>
 #include <array>
@@ -248,7 +249,21 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
   auto staging = pool_->stageTextureUpload(device_, handle, level, width,
                                              height, depth, pitch, slicePitch,
                                              bytes.data(), bytes.size());
-  if (staging) {
+  const auto* record = pool_->findTexture(handle.value);
+  const auto outcome = textureUploadStageOutcome({
+      .destinationPresent = record != nullptr,
+      .physicalBackingPresent = record && bool(record->texture),
+      .subresourceValid = record && textureUploadSubresourceValid(
+          record->desc.type, record->desc.levels, level),
+      .sourceNonempty = !bytes.empty(),
+      .stagingRequired = record && record->needsStagingBlit,
+      .stagingProduced = staging.has_value(),
+  });
+  if (outcome == TextureUploadStageOutcome::Failed) {
+    failTextureUploadUnlocked();
+    return;
+  }
+  if (outcome == TextureUploadStageOutcome::DeferredStaging) {
     enqueuePendingUploadUnlocked(std::move(*staging));
   }
 
@@ -270,7 +285,11 @@ void Initializer::uploadTextureLevel(core::TextureHandle handle,
 void Initializer::initializeTextureZero(core::TextureHandle handle) {
   std::lock_guard lock(queue_->mutex_);
   auto* record = pool_->findTexture(handle.value);
-  if (!record || !record->texture || !shouldZeroInitializeTexture(record->desc)) {
+  if (!record || !record->texture) {
+    failTextureUploadUnlocked();
+    return;
+  }
+  if (!shouldZeroInitializeTexture(record->desc)) {
     return;
   }
 
@@ -291,17 +310,36 @@ void Initializer::initializeTextureZero(core::TextureHandle handle) {
       const std::size_t slicePitchBytes = core::formatByteSize(desc.format, width, height);
       if (pitch == 0 || slicePitchBytes == 0 ||
           slicePitchBytes > std::numeric_limits<u32>::max()) {
-        continue;
+        failTextureUploadUnlocked();
+        return;
+      }
+      if (depth > std::numeric_limits<std::size_t>::max() / slicePitchBytes) {
+        failTextureUploadUnlocked();
+        return;
       }
       const std::size_t byteCount = slicePitchBytes * static_cast<std::size_t>(depth);
       if (byteCount == 0 || byteCount > std::numeric_limits<u32>::max()) {
-        continue;
+        failTextureUploadUnlocked();
+        return;
       }
       zeros.assign(byteCount, 0u);
       auto staging = pool_->stageTextureUpload(
           device_, handle, subresourceIndexForZeroInit(desc, slice, mip), width, height,
           depth, pitch, static_cast<u32>(slicePitchBytes), zeros.data(), zeros.size());
-      if (staging) {
+      const auto outcome = textureUploadStageOutcome({
+          .destinationPresent = true,
+          .physicalBackingPresent = bool(record->texture),
+          .subresourceValid = textureUploadSubresourceValid(desc.type, desc.levels,
+              subresourceIndexForZeroInit(desc, slice, mip)),
+          .sourceNonempty = !zeros.empty(),
+          .stagingRequired = record->needsStagingBlit,
+          .stagingProduced = staging.has_value(),
+      });
+      if (outcome == TextureUploadStageOutcome::Failed) {
+        failTextureUploadUnlocked();
+        return;
+      }
+      if (outcome == TextureUploadStageOutcome::DeferredStaging) {
         enqueuePendingUploadUnlocked(std::move(*staging));
       }
     }
@@ -328,15 +366,58 @@ std::optional<std::uint64_t> Initializer::publishQueryPrefixUnlocked() {
 
 Initializer::QueryProgress Initializer::queryProgressUnlocked() noexcept {
   const auto signaled = event_ ? WMT::SharedEvent{event_.handle}.signaledValue() : 0;
-  if (!queryTrackingEnabled_) return {lastSignaledValue_, signaled, false};
+  const auto tapeSink = queue_->tapeRuntimeObserverLocked();
+  if (!tapeSink && (tapeUploadCount_ || tapeUploadFailed_)) {
+    for (auto& upload : tapeUploads_) upload = {};
+    tapeUploadHead_ = tapeUploadCount_ = 0u;
+    tapeUploadFailed_ = false;
+  } else if (tapeSink) {
+    while (tapeUploadCount_) {
+      auto& upload = tapeUploads_[tapeUploadHead_];
+      const auto status = upload.buffer.status();
+      if (status == WMTCommandBufferStatusError) {
+        tapeUploadFailed_ = true;
+        tapeSink.fn(tapeSink.context, {.edge = render::TapeRuntimeEdge::Failed});
+        break;
+      }
+      if (!render::tapeRuntimeUploadCompleted(status == WMTCommandBufferStatusCompleted,
+              status == WMTCommandBufferStatusError)) break;
+      tapeSink.fn(tapeSink.context, {
+          .edge = render::TapeRuntimeEdge::InitializerComplete,
+          .sequence = upload.sequence, .completedSequence = upload.sequence});
+      upload = {};
+      tapeUploadHead_ = (tapeUploadHead_ + 1u) % tapeUploads_.size();
+      --tapeUploadCount_;
+    }
+  }
+  if (!queryTrackingEnabled_) {
+    return {lastSignaledValue_, signaled, queryUploads_.failed() || tapeUploadFailed_};
+  }
   const auto completed = queryUploads_.poll(signaled, [](auto& buffer) {
     const auto status = buffer.status();
     return status == WMTCommandBufferStatusError ? query::UploadStatus::Failed :
         status == WMTCommandBufferStatusCompleted ? query::UploadStatus::Complete :
                                                    query::UploadStatus::Pending;
   });
+  if (tapeSink && queryUploads_.failed())
+    tapeSink.fn(tapeSink.context, {.edge = render::TapeRuntimeEdge::Failed});
   if (queryUploads_.failed()) queue_->requestSchedulingStopLocked();
   return {lastSignaledValue_, completed, queryUploads_.failed()};
+}
+
+bool Initializer::refreshTapeRuntimeCompletionsUnlocked() noexcept {
+  if (!queue_->tapeRuntimeObserverLocked()) return false;
+  const auto progress = queryProgressUnlocked();
+  return render::tapeRuntimeInitializerCompletionAdmitted(
+      hasPendingUploadsUnlocked(), progress.failed || tapeUploadFailed_, tapeUploadCount_);
+}
+
+void Initializer::failTextureUploadUnlocked() noexcept {
+  // This latch survives setup before the capture sink exists. A checkpoint
+  // must not authenticate a prefix which silently lost an upload before it
+  // acquired any pending/submission receipt.
+  queryUploads_.fail();
+  tapeUploadFailed_ = true;
 }
 
 void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
@@ -349,7 +430,12 @@ void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
   // `{}` that dxmt9-encode-scheduling-progress-spec enqueues to exercise the
   // empty-to-non-empty wake hook, which the duplicate aborted on.
   const bool wasEmpty = pendingUploads_.empty();
-  pendingUploads_.push_back(std::move(staging));
+  try {
+    pendingUploads_.push_back(std::move(staging));
+  } catch (...) {
+    failTextureUploadUnlocked();
+    throw;
+  }
   if (render::initializerPendingTransitionNeedsWake(
           wasEmpty, pendingUploads_.empty())) {
     queue_->noteInitializerPendingUploads();
@@ -451,6 +537,23 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   if (queryTrackingEnabled_ && !queryUploads_.append(commandBuffer, value))
     queue_->requestSchedulingStopLocked();
   lastSignaledValue_ = value;
+  const auto tapeSink = queue_->tapeRuntimeObserverLocked();
+  if (tapeSink) {
+    tapeSink.fn(tapeSink.context, {
+        .edge = render::TapeRuntimeEdge::InitializerPublish,
+        .sequence = value});
+    tapeSink.fn(tapeSink.context, {
+        .edge = render::TapeRuntimeEdge::InitializerSubmit,
+        .sequence = value});
+    if (tapeUploadCount_ == tapeUploads_.size()) {
+      tapeUploadFailed_ = true;
+      tapeSink.fn(tapeSink.context, {.edge = render::TapeRuntimeEdge::Failed});
+    } else {
+      tapeUploads_[(tapeUploadHead_ + tapeUploadCount_) % tapeUploads_.size()] =
+          {commandBuffer, value};
+      ++tapeUploadCount_;
+    }
+  }
   pendingUploads_.clear();
   result.value = value;
   result.didFlush = true;

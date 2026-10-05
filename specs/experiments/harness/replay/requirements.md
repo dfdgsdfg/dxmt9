@@ -675,6 +675,17 @@ override or change the normal recorder/bridge path. GT2 r7 and r8 measurements
 are lower bounds on the required owned bytes, not a proof that a complete GT2
 bundle fits; that bundle-capacity claim remains unproven.
 
+Event and unique-blob cardinality limits default independently to 4,096.
+Capture-only `DXMT9_RENDER_TAPE_MAX_EVENTS` and
+`DXMT9_RENDER_TAPE_MAX_BLOB_ENTRIES` may override those counts in decimal;
+unset, invalid, zero or integer-overflow text resolves to the default, and a
+valid value above 65,536 resolves to that hard ceiling. The capture owner must
+also clamp directly supplied counts to the ceiling. These overrides must not
+increase the 64 MiB event-byte budget or 1 GiB hard blob-byte budget, truncate
+events, change original identities/cuts, or select a different renderer path.
+Capture-off must not read them. Capacity rejection remains transactional and
+must retain its first-failure evidence.
+
 Frame-tape bootstrap materialization is an exact closure, not an all-live
 snapshot. Its roots are the generation-qualified handles in the freshly
 validated bootstrap overlay plus the required Present output; versioned
@@ -769,7 +780,8 @@ exact dimension-appropriate resource type and mip extent, and volume entries
 preserve the depth of each mip. Textures use `CompleteSeed` by default; texture
 `Unavailable` remains invalid except for the bounded
 `ProducedByCapturedPass` lane. That exception admits exactly one Texture2D
-with one mip and one subresource, render-target usage, and exactly one
+with one mip and one subresource, render-target usage (or the exact DF24
+depth-only exception in R-HARN-REPLAY-7.37), and exactly one
 generation-qualified `TextureSubresource` Surface alias at subresource 0. The
 texture and alias definitions must precede the resolving command chunk. The
 same retained command chunk must bind that exact alias and perform an
@@ -845,6 +857,15 @@ applies bootstrap state or command work. Missing, stale, partial, unsupported,
 or late seeds fail closed. A fresh-process exact-output comparison is required
 to promote this lane; clearing or substituting a newly allocated output is not
 equivalent evidence when the captured interval preserves prior pixels.
+
+Distinct logical surface identities that wrap the same primary backbuffer must
+preserve that sharing through provider-authenticated storage classification.
+Capture must not infer shared backing from equal descriptors or content. The
+explicit Present source selects the logical output independently of definition
+order; ambiguous implicit selection must reject. Replay must preserve separate
+wrapper lifetimes over the shared backing. Unsupported alias classes or missing
+original backing authority must fail closed, not be repaired from expected
+pixels or by inserting interval snapshot work.
 
 **R-HARN-REPLAY-7.14** Deterministic provider repetition must construct a fresh
 device for every warm-up and measured run, validate before effects, cap both
@@ -1220,6 +1241,165 @@ one-source-per-control convention. Bounded model-code tests must cover empty
 END, Draw/END/younger Draw, deferred binding, reissue/reset, cross-event writers,
 stale generations, capacity failure and exactly-once settlement. These tests
 do not replace original query-result and GPU-byte qualification.
+
+**R-HARN-REPLAY-7.29** A runtime identity snapshot transferred from Unix to
+PE must use a distinct bounded transport grammar, not impersonate a completed
+identity sidecar. The receiver must match the capture token and epoch against
+its independently retained arm key, bind the snapshot to its actual sealed
+events and verified blob catalogue, and perform complete v3 validation before
+publication. A size-query/copy pair must observe one frozen snapshot. Malformed
+extent, stale key, failed completion or incomplete evidence must leave no
+published identity. Detaching the observer must revoke previously copied
+callbacks before releasing their capture owner; a stale callback must not
+write into a subsequent capture incarnation.
+
+The v3 coordinator and settlement `buildGeneration` fields identify the same
+capture-qualified replay-attempt incarnation allocated at the actual replay
+transaction begin. They must not alias a raw FIFO ordinal or an Arena
+source-build ticket. Settlement requires both the successful production
+transaction commit and its successful replay-ledger acknowledgment; record
+walker exhaustion alone is not settlement. Failed commit or ledger publication
+must invalidate the capture without manufacturing a settlement row.
+
+**R-HARN-REPLAY-7.30** Publication authenticates source identity and immutable
+physical command extents, not the eventual Encode pass plan. Executed-topology
+evidence must originate at the selected production plan's acceptance boundary,
+after frontier, ownership and completion-registration checks. Candidate graphs
+that are rolled back or rejected must not contribute authenticated topology.
+Natural-order execution, planner bypass, accepted optimized order and proven
+command omission must be distinguishable; an omitted command must not be
+represented as an executed no-pass command. Cross-source pass equivalence must
+come from the accepted combined plan, never from equal source-local pass indices.
+Logical plan membership must not claim physical Metal encoder equivalence.
+Missing or unsupported topology evidence must reject qualification without
+changing the production route or introducing a capture-only publication.
+
+**R-HARN-REPLAY-7.31** Neutral physical provenance uses a new identity v4
+grammar with a required execution-topology v1 companion. Existing v3 pass
+membership semantics remain unchanged; conversion must not invent pass values.
+The companion authenticates the exact identity bytes and digest, event bytes
+and digest, capture token/epoch and queue identity. Bundle publication must
+authenticate both components without circular digest dependencies.
+Every physical command has exactly one terminal placement: executed in an
+accepted DAG, executed without a selected DAG, or proven omitted. Execution
+ordinals are distinct from canonical physical-command order. DAG equivalence
+requires the same accepted plan and group, not equal local indices. Earlier
+encoded prefixes and later suffixes retain separate accepted invocations;
+a later graph cannot retroactively authorize earlier execution. Missing
+submission evidence for a fully omitted source must not be replaced with a
+synthetic GPU submission or completion.
+
+**R-HARN-REPLAY-7.32** An Encode invocation may execute before its source's
+completion ownership is registered. Its selected topology and successful
+execution observation must remain distinct from accepted topology. Capture
+must retain bounded owned candidates across such prefix/suffix invocations,
+preserve their exact execution order, and promote them only after the actual
+registration receipt validates the complete source closure. A suffix may use
+an earlier successfully encoded prefix as an execution witness, but selection
+alone is insufficient. Rejecting an already executed invocation invalidates
+capture rather than erasing the observed effect. Batch acceptance validates
+all identities, generations, dependencies, capacity and order before exposing
+any accepted placement. Missing evidence must not alter production execution.
+Registration acceptance and successful execution are independent facts: a
+combined plan may be accepted before its fragments execute, while a speculative
+prefix may execute before registration. Final executed-topology qualification
+requires both facts; neither order may be fabricated to fit the observer.
+
+**R-HARN-REPLAY-7.33** V4 must distinguish a raw event's replay-ledger
+acknowledgment from the actual replay transactions used to execute its spans.
+Every admitted span attempt retains its actual generation, original record
+range, terminal outcome and destination receipt. Committed spans must partition
+the original raw's records exactly in order before that raw may settle.
+Pre-effect rollback contributes no committed coverage; a retry has a new real
+attempt identity. A coordinator binds to the attempt that dispatched it, not
+an invented raw-wide generation. Post-effect failure invalidates capture.
+Receipt fields retain their production meaning: a compatibility transaction's
+sequence is not independently authenticated GPU submission evidence. Source
+publication/submission/completion remain separately observed facts. Legacy V3
+keeps its original single-transaction settlement contract; supporting V4 spans
+must not alter renderer route selection or construct synthetic transactions.
+
+**R-HARN-REPLAY-7.34** The PE owner must retain the capture token, epoch and
+queue identity returned by the successful Unix arm operation independently of
+the transferred sidecars. Size-query, copy, pair decoding and final attachment
+must agree with that retained binding and Present ordinal. A frozen size-query
+must not expose a different pair on the copy call. Missing, mismatched or
+orphan identity/topology components must abort publication atomically. A valid
+pair alone does not grant query-readiness, GPU/pixel or timing qualification.
+
+**R-HARN-REPLAY-7.35** V4 coordinator admission must distinguish an actual
+acknowledged session release from an actual ordinary serial dispatch with no
+CPU-ready session. The ordinary witness must originate at the production
+coordinator admission boundary, positively establish the absent session, and
+bind the capture, queue, event, raw, attempt and original record identity.
+The V4 header must retain the observed immutable queue session domain, and
+every coordinator's authority must agree with that domain, including after
+paired transport and source-plan authentication.
+A missing release callback alone must not authorize ordinary admission.
+Ordinary admission must not invent a release ordinal, generation, posted
+request, acknowledgment, source publication or completion. Session-enabled
+coordinators still require their real release receipt, including when their
+writer is empty. Both coordinator-only whole-raw replay and coordinator spans
+within mixed replay must be covered. Existing query END/prefix, dispatch,
+exactly-once and raw-acknowledgment obligations remain independent and mandatory.
+Legacy V3's strict session-release grammar must remain unchanged; V4's distinct
+admission meaning must be explicit in its versioned evidence and validators.
+
+**R-HARN-REPLAY-7.36** A bounded descriptor-only NULL render-target lane may
+admit the exact supported `D3DFMT_NULL` Texture2D render-target descriptor and its
+generation-qualified Surface alias without an initial color payload. This is
+an explicit no-meaningful-color-content authority, not a complete seed,
+produced-by-pass proof or general permission for unavailable texture content.
+Replay must recreate the original descriptors through the ordinary factories;
+the lane must not substitute another format, alter renderer routes or assume
+that every physical implementation allocates no backing.
+
+This lane is limited to a DEFAULT-pool, render-target-only, single-sample
+texture with one mip and one subresource and its subresource-0 alias; standalone
+surfaces remain outside this authority. The descriptor/usage shape and alias
+parent, generation, level, dimensions and
+format must remain exact. Every use, including later references to an already
+admitted object and repeated references within one chunk, must remain in the
+allowed render-target binding/write-only domain. Sampler bindings, content
+reads, copies, CPU mutations, readbacks and oracle attachments remain outside
+this lane and must reject capture/replay qualification before their effects.
+Unknown formats, non-render-target NULL objects and invented content bytes
+must not acquire this authority. PE capture, wire validation and provider
+preadmission must share the classification and access contract, with native
+positive/negative parity tests before original-workload GPU qualification.
+
+**R-HARN-REPLAY-7.37** Produced content authority may also admit an exact DF24
+Texture2D with DEFAULT pool, DEPTHSTENCIL-only usage, positive canonical
+extent, one mip and subresource, and no multisampling. Its physical format is
+Depth32Float and its only meaningful contents aspect is depth. It must retain
+the exact generation-qualified subresource-zero Surface alias and all existing
+first-terminal-access, definition ordering, per-identity obligation and no-seed
+mutation constraints. PE admission, canonical validation and General-provider
+preadmission must use the same typed descriptor and witness policy. Each
+parent owns one independently settled obligation and an unambiguous alias;
+several independent DF24 parents may coexist only when each is separately
+proved. The legacy bounded color provider's singleton restriction is not a
+tape-global restriction on this General-provider extension.
+
+The accepted producer must be the exact alias in the DEPTH_STENCIL binding
+section of a canonical Clear, with flags exactly ZBUFFER and an empty, valid
+rectangle tail. The authority refines the current captured backend stream,
+whose empty-rectangle depth clear overwrites the whole attachment. It does not
+certify D3D9 API viewport/scissor Clear conformance. Mixed color/depth clears,
+stencil-only clears, partial rectangles, unsupported depth formats/topologies,
+read-before-clear and ambiguous/stale identities must not acquire this
+authority. A later clear cannot repair a rejected first terminal access.
+
+Restoration must use ordinary texture/alias creation and ordinary Clear
+execution, without an invented initial seed, format substitution, route
+override or new depth checkpoint encoding. The bounded color provider must
+remain color-only; its unsupported result may select the existing General
+provider. Before original-input qualification, bounded native trace/flag/
+identity checks must bind this contract to production predicates, and a real
+Metal oracle must prove whole-image independence from distinct prior depth
+contents, including deferred-clear and attachment-mismatch flush paths.
+Original STALKER source/query/pixel and policy-performance qualification
+remain separate mandatory gates.
 
 ## 8. Fixed-Input Policy Experiment Loop
 
@@ -1625,3 +1805,137 @@ pending-initializer publication through GPU transfer completion and host copy,
 as required by R-HARN-REPLAY-9.10. It must validate physical BGRA8 storage and
 must not require an external preflush, an ordinary source, or an oracle-only
 upload wait. This does not change ordinary application readback policy.
+
+**R-HARN-REPLAY-9.12** Capture payload storage may spill immutable versions
+to owner-scoped scratch storage without retaining their full contents in PE
+address space. Reads, hashes, equality checks and publication must use bounded
+windows and propagate I/O failure. CPU shadow contents and authenticated GPU
+arm contents remain distinct authorities; a GPU checkpoint must not replace
+the CPU base used by later partial mutations. A partial write stages a new
+version and exposes it only after all copying and patching succeeds. Retained
+leases prevent extent reuse, including after capture cancellation. Failed
+staging must preserve prior bytes and retire tentative storage. Live scratch
+bytes, reusable extents, physical high-water and resident heap capacity must
+not be conflated. Scratch storage is not a durability or GPU-byte oracle.
+
+**R-HARN-REPLAY-9.13** The version-1 four-byte arm checkpoint may also admit
+single-level, single-subresource, non-MSAA DEFAULT-pool Texture2D render targets
+with `D3DFMT_R32F` and render-target usage only. Capture and restoration must
+preserve raw little-endian float32 bits in matching physical `R32Float`
+storage, with checked pitch `4 * width` and extent `4 * width * height`.
+No color swizzle, alpha normalization, quantization or float-value conversion
+is permitted. The exact parent identity, generation, descriptor and subresource
+remain authoritative for its Surface aliases.
+
+Capture must hold the existing exclusive checkpoint producer lease from
+pending-initializer publication through GPU completion and host copy, including
+when there is no ordinary queued source. The capture entry must reject failed
+identity, physical-format, extent, command-status or completion checks; generic
+application readback is not a fallback. Initial contents remain mandatory for
+shader-read-first use and must not be replaced by fabricated produced-pass
+authority. Native layout/shape negatives and real Metal raw-bit A/B/A
+snapshot/restoration tests, including pending-initializer-only setup, are
+required before retrying original-workload qualification. This does not widen
+standalone, managed, multi-mip, cube or volume checkpoint admission.
+
+**R-HARN-REPLAY-9.14** Policy-qualified production input must carry a versioned,
+digest-authenticated witness of the queue's actual tape-exact attachment-action
+profile from construction through the captured interval. The capture binding
+must observe this state and its change revision under the exact capture token,
+epoch and queue identity; the publisher must not infer authority from environment
+variables. An ABA policy change must invalidate stability even if arm and finish
+values match. Revision exhaustion, replacement, stale binding or an unstable
+interval must not produce a qualified witness. Frozen size-query/copy transfer
+must preserve the same witness and transactional publication must bind it to
+the unchanged event, identity and topology components. Missing legacy evidence
+means unknown, not preservation-disabled or policy-neutral. Such inputs may
+remain inspectable and usable by explicitly labelled private diagnostics, but
+must not qualify policy-performance comparison. This witness does not replace
+query, semantic mapping, original-pixel, reset or repetition gates.
+
+**R-HARN-REPLAY-9.15** GPU arm-checkpoint payload admission must reserve retained
+and transient host-byte budgets before allocating the PE destination or calling
+the snapshot bridge. The retained aggregate limit is the normalized capture
+blob-byte limit (at most 1 GiB), independently accounted before deduplication;
+the per-subresource limit is the smaller of that limit and 64 MiB. Additional
+host staging is conservatively reserved as twice the subresource byte count
+against the smaller of twice the retained limit and 128 MiB. Zero, overflow,
+unsupported sizes, allocation failures and exhausted credit must fail only
+capture admission, without fabricating checkpoint bytes or changing app results.
+The retained reservation must follow snapshot, seed and immutable publication
+ownership without double charging or release before the associated bytes are
+destroyed. Shared immutable references retain one charge until the final owner
+releases it. Independent alias snapshots are charged independently; equal
+dimensions or hashes do not establish shared physical backing. Abort/rearm must
+not reset live reservations. The Unix arm-snapshot entry points must reject
+over-limit resource sizes before their own materialization/readback allocations.
+This contract bounds admitted GPU arm payload and explicit staging requests,
+not allocator overhead, driver memory, process RSS, CPU scratch storage or
+Present-oracle storage.
+
+**R-HARN-REPLAY-9.16** A V4 policy candidate may change physical source and
+DrawRun grouping only through a checked correspondence to the unchanged
+canonical event/raw/record/subdraw stream. Correspondence must use actual
+candidate attempts, replay acknowledgments, command origins and completed
+source lifecycles; captured physical indices are not candidate identities.
+Every original effect must map exactly once, with unchanged semantic order,
+state-only/coordinator disposition and qualified query identity/issue history.
+Query END prefixes must cover the same original pre-END work, excluding younger
+work, even when source partitions differ. Generated command expansion requires
+an explicit origin correspondence, not count-only or pixel-only acceptance.
+Recorded publication expectations may remain deferred while a candidate writer
+spans their original cut. Traversal acknowledgment then means only that a bounded
+obligation was registered; success requires every obligation to be discharged
+against actual candidate publications. No artificial flush, fabricated receipt,
+or forced reference partition may discharge it. Unsupported initializer or
+command correspondence must reject explicitly. Exact-source diagnostic mode
+retains its strict original-cut contract. This correspondence alone establishes
+neither query readiness, pixel equality, reset safety nor timing qualification.
+
+**R-HARN-REPLAY-9.17** CPU General replay must use one explicit input admission
+budget across grammar and execution, including body and bootstrap work,
+resource/blob extents and query evidence. Publication capacity and progress
+limits are separate dimensions: event count must not stand in for source count.
+Extended workload profiles must be explicitly selected and bounded before
+effects; default admission must not silently grow. Arithmetic, index and
+budget inconsistencies must reject before tape resource construction or replay.
+Runtime publication accounting must count actual production publications and
+fail explicitly when the admitted capacity/progress envelope is exhausted.
+Admission does not authorize a different input, reduced transcript, renderer
+route substitution or synthetic completion.
+
+**R-HARN-REPLAY-9.18** CPU-only V4 policy execution must authenticate the same
+original event, identity, topology and action-witness components as its paired
+Metal qualification, while reporting a distinct controlled-queue evidence
+domain. A queue-bound, lifetime-qualified test capability must establish
+exclusive CPU-fixture ownership before this domain can be armed. Worker,
+offload, device/root replacement or identity mismatch must invalidate that
+authority. CPU submission and acknowledgment must consume actual published
+sources through the queue lifecycle; neither captured completion watermarks
+nor expected source rows authorize a completion. All raw/record coverage,
+query identity/prefix and semantic correspondence obligations still apply.
+
+Controlled CPU completion must never create Encode invocation/placement rows,
+GPU completion, numeric occlusion results or pixel authority. The production
+V4 finish ABI and Metal qualification must retain their full topology and
+lifecycle gates. CPU provenance-only finalization must have a separately typed
+result, not a caller-selected relaxation of the production finish validator.
+Negative tests must reject cross-domain promotion, stale capability and root,
+missing acknowledgment, uncompleted sources and forged END coverage.
+
+CPU replay may drain genuinely published work only at a proven unlocked
+boundary or through its explicitly controlled consumer. Observer callbacks
+under the queue lock must not reenter the queue. It must not publish merely
+because a raw or original reference cut ended. Admission must bound the work
+between consumer progress opportunities against real queue headroom, so an
+unsupported single-thread progress envelope rejects before effects rather
+than hanging. Setup checkpoints may complete before the arm boundary; they
+must retain CPU-shadow and GPU-checkpoint payload authorities separately and
+must not move interval mutations or readiness events into setup.
+
+The controlled consumer must join before capability revocation, fixture reset
+or wrapper destruction. Failure after dequeue or submission must preserve the
+actual identity and lifecycle phase. Queue-owned quarantined work is not
+completion, retirement or successful cleanup; cleanup evidence must remain
+incomplete until the corresponding owner is genuinely retired or torn down.
+No cleanup path may fabricate an acknowledgment for unsubmitted work.

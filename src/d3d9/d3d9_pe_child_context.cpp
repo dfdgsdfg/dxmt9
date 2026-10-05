@@ -38,6 +38,17 @@ HRESULT D3D9PeStateBlockContext::CaptureStateBlockShadowForChild(
 HRESULT D3D9PeBufferContext::FlushPeRecorderForChild() noexcept {
   return device ? device->FlushPeRecorderForChild() : S_OK;
 }
+void D3D9PeBufferContext::BeginRenderTapeOrderedControlForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+  if (device) device->BeginRenderTapeOrderedControlForChild(identity);
+}
+void D3D9PeBufferContext::BeginRenderTapeResourceMutationForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+  if (device) device->BeginRenderTapeResourceMutationForChild(identity);
+}
+void D3D9PeBufferContext::EndRenderTapeExternalEffectForChild() noexcept {
+  if (device) device->EndRenderTapeExternalEffectForChild();
+}
 HRESULT D3D9PeBufferContext::FlushPeRecorderForBufferHazardForChild(
     const dxmt9::d3d9::pe::BufferRef &buffer) noexcept {
   return device ? device->FlushPeRecorderForBufferHazardForChild(buffer) : S_OK;
@@ -94,6 +105,21 @@ void D3D9PeBufferContext::NotifyRenderTapeOrderedControlForChild(
 
 HRESULT D3D9PeSurfaceTextureContext::FlushPeRecorderForChild() noexcept {
   return device ? device->FlushPeRecorderForChild() : S_OK;
+}
+void D3D9PeSurfaceTextureContext::BeginRenderTapeOrderedControlForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+  if (device) device->BeginRenderTapeOrderedControlForChild(identity);
+}
+void D3D9PeSurfaceTextureContext::BeginRenderTapeResourceMutationForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+  if (device) device->BeginRenderTapeResourceMutationForChild(identity);
+}
+void D3D9PeSurfaceTextureContext::EndRenderTapeExternalEffectForChild() noexcept {
+  if (device) device->EndRenderTapeExternalEffectForChild();
+}
+void D3D9PeSurfaceTextureContext::BeginRenderTapeVolumeUnlockForChild(
+    D9CTexture *texture, std::uint32_t subresource) noexcept {
+  if (device) device->BeginRenderTapeVolumeUnlockForChild(texture, subresource);
 }
 PeRenderTapeChildResult D3D9PeSurfaceTextureContext::GenerateMipmapsForChild(
     const dxmt9::d3d9::pe::TextureRef &texture) noexcept {
@@ -200,6 +226,13 @@ void D3D9PeSurfaceTextureContext::NotifyRenderTapeStandaloneSurfaceForChild(
 
 HRESULT D3D9PeQueryContext::FlushPeRecorderForChild() noexcept {
   return device ? device->FlushPeRecorderForChild() : S_OK;
+}
+void D3D9PeQueryContext::BeginRenderTapeOrderedControlForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+  if (device) device->BeginRenderTapeOrderedControlForChild(identity);
+}
+void D3D9PeQueryContext::EndRenderTapeExternalEffectForChild() noexcept {
+  if (device) device->EndRenderTapeExternalEffectForChild();
 }
 bool D3D9PeQueryContext::IsChunkRecorderEnabledForChild() const noexcept {
   return device && device->IsChunkRecorderEnabledForChild();

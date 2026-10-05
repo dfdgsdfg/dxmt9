@@ -18,12 +18,14 @@
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_render_tape_topology_scope.hpp"
 #include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_render_tape_emission_observer.hpp"
 #include "dxmt9_query_policy.hpp"
 #include "dxmt9_query_poll_observer.hpp"
 #include "dxmt9_query_split_observer.hpp"
@@ -61,6 +63,40 @@
 #endif
 namespace dxmt9 {
 namespace {
+
+template <typename Context, typename Fn>
+decltype(auto) withDirectTapeEmission(Context& context, std::uint64_t queue, Fn&& fn) {
+  if (auto* observer = render::activeTapeEmissionObserver) {
+    const auto& ticket = context.ticket;
+    return observer->withWriter({queue, ticket.id.index, ticket.id.generation,
+        ticket.storage.generation}, 0u, std::forward<Fn>(fn));
+  }
+  return std::forward<Fn>(fn)();
+}
+
+template <typename Context, typename Fn>
+decltype(auto) withArenaTapeEmission(Context& context, std::uint64_t queue, Fn&& fn) {
+  if (auto* observer = render::activeTapeEmissionObserver) {
+    const auto& reservation = context.batchMode
+        ? context.batchReservations[context.activeSource] : context.reservation;
+    std::size_t offset = 0u;
+    // Previous blocks need not be sealed yet. Read actual constructed headers,
+    // not their planned capacity or not-yet-published count cache.
+    for (std::size_t segment = 0u; segment < context.activeSegment; ++segment) {
+      const auto& builder = context.batchMode
+          ? context.batchBuilders[context.activeSource][segment] : context.builders[segment];
+      if (!builder || builder->commandCount() > SIZE_MAX - offset) {
+        observer->fail();
+        break;
+      }
+      offset += builder->commandCount();
+    }
+    const auto& ticket = reservation.ticket;
+    return observer->withWriter({queue, ticket.id.index, ticket.id.generation,
+        ticket.storage.generation}, offset, std::forward<Fn>(fn));
+  }
+  return std::forward<Fn>(fn)();
+}
 
 bool resourceMarkOverlapObserverEnabled() {
   static const bool enabled = [] {
@@ -610,14 +646,11 @@ class PerfScope {
 
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                            bool cpuReadySessionLaneEnabled,
-                           bool renderTapePublisherCaptureEnabled,
+                           bool /*renderTapePublisherCaptureEnabled*/,
                            render::RenderPartitionConfig renderPartitionConfig,
                            render::EncodeExecutionTopology
                                encodeExecutionTopology)
-    : cpuReadyTape_(renderTapePublisherCaptureEnabled
-                        ? core::CpuReadyTapeConfig::queueCaptureStreaming(
-                              kCommandChunkCount)
-                    : cpuReadySessionLaneEnabled
+    : cpuReadyTape_(cpuReadySessionLaneEnabled
                         ? core::CpuReadyTapeConfig::queueSessionStreaming(
                               kCommandChunkCount)
                         : core::CpuReadyTapeConfig::queueCompatibility(
@@ -642,7 +675,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
       shaderArchive_(archive_prewarm::resolveMode() == archive_prewarm::Mode::Full
                          ? shaders::Archive()
                          : shaders::Archive(device, resolveShaderCachePath(device))) {
-  setRenderTapeExactAttachmentPreservation(renderTapeCaptureEnabled());
+  initializeRenderTapeActionProfile(renderTapeCaptureEnabled());
   if (!render::encodeExecutionTopologyValid(encodeExecutionTopology_) ||
       !render::encodeExecutionTopologyImplemented(
           encodeExecutionTopology_)) {
@@ -818,9 +851,26 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                           .id = source.sourceId,
                           .storage = source.storage,
                       };
-                      result = backend_->onSourceReady(
-                          ctx, source.slotIndex, payload, source.seqId,
-                          std::move(options));
+                      if (tapeRuntimeObserverEndpoint_.enabled()) {
+                        const auto lease = acquireTapeRuntimeCapture();
+                        if (payload.commandCount() > UINT32_MAX) {
+                          lease.visit([](render::TapeRuntimeCaptureAttachment& root) noexcept {
+                            root.topology().fail();
+                          });
+                          result = backend_->onSourceReady(ctx, source.slotIndex, payload,
+                              source.seqId, std::move(options));
+                        } else {
+                          const render::TapeTopologySourceRange range{options.partitionSource,
+                              source.seqId, 0u, static_cast<std::uint32_t>(payload.commandCount())};
+                          render::ScopedTapeTopologyInvocation topology(
+                              render::retainTapeTopologyInvocation(lease, std::span(&range, 1u)));
+                          result = backend_->onSourceReady(ctx, source.slotIndex, payload,
+                              source.seqId, std::move(options));
+                        }
+                      } else {
+                        result = backend_->onSourceReady(ctx, source.slotIndex, payload,
+                            source.seqId, std::move(options));
+                      }
                       return;
                     }
                     auto& slot = *const_cast<core::ChunkSlot*>(legacySlot);
@@ -854,8 +904,16 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                       ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBackendBegin,
                                             &queueLifecycle_, source.seqId,
                                             reinterpret_cast<std::uintptr_t>(backend_.get()));
-                    result = backend_->onChunkReady(
-                        ctx, slotIndex, slot, std::move(options));
+                    if (tapeRuntimeObserverEndpoint_.enabled()) {
+                      const render::TapeTopologySourceRange range{options.partitionSource,
+                          source.seqId, 0u, static_cast<std::uint32_t>(slot.commandCount())};
+                      render::ScopedTapeTopologyInvocation topology(
+                          render::retainTapeTopologyInvocation(acquireTapeRuntimeCapture(),
+                              std::span(&range, 1u)));
+                      result = backend_->onChunkReady(ctx, slotIndex, slot, std::move(options));
+                    } else {
+                      result = backend_->onChunkReady(ctx, slotIndex, slot, std::move(options));
+                    }
                     if (::dxmt9::supply::enabled())
                       ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBackendEnd,
                                             &queueLifecycle_, source.seqId);
@@ -890,12 +948,15 @@ CommandQueue::CommandQueue(InertTestQueueTag,
     : cpuReadySessionLaneEnabled_(false),
       queue_(std::move(queue)),
       queueView_(queue_.handle),
-      limits_(limits) {}
+      limits_(limits) {
+  initializeRenderTapeActionProfile(false);
+}
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits,
                            WMT::Reference<WMT::CommandQueue> queue,
-                           render::RenderPartitionConfig renderPartitionConfig)
+                           render::RenderPartitionConfig renderPartitionConfig,
+                           bool exactRenderTapeActionProfile)
     : cpuReadyTape_(renderPartitionConfig.sourceIdentity.resolved ==
                             render::SourceIdentityMode::SegmentSerial
                         ? core::CpuReadyTapeConfig::queueCaptureStreaming(
@@ -905,9 +966,31 @@ CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
       cpuReadySessionLaneEnabled_(false),
       renderPartitionConfig_(renderPartitionConfig),
       queue_(std::move(queue)), queueView_(queue_.handle), limits_(limits) {
+  initializeRenderTapeActionProfile(exactRenderTapeActionProfile);
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
   wsiAdmissionStopped_.store(false, std::memory_order_release);
+}
+
+void CommandQueue::initializeRenderTapeActionProfile(bool exact) noexcept {
+  std::lock_guard lock(renderTapeActionProfileMutex_);
+  (void)renderTapeActionProfileHistory_.initialize(exact);
+  renderTapeExactAttachmentPreservation_.store(
+      renderTapeActionProfileHistory_.snapshot().currentProfile ==
+          kRenderTapeActionProfileExact,
+      std::memory_order_release);
+}
+
+void CommandQueue::setRenderTapeExactAttachmentPreservation(bool enabled) noexcept {
+  std::lock_guard lock(renderTapeActionProfileMutex_);
+  renderTapeActionProfileHistory_.set(enabled);
+  renderTapeExactAttachmentPreservation_.store(enabled, std::memory_order_release);
+}
+
+RenderTapeActionProfileSnapshot
+CommandQueue::renderTapeActionProfileSnapshot() const noexcept {
+  std::lock_guard lock(renderTapeActionProfileMutex_);
+  return renderTapeActionProfileHistory_.snapshot();
 }
 
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
@@ -5367,11 +5450,18 @@ CommandQueue::commitDirectChunkSlotReplay(
       nextSeqId_.load(std::memory_order_relaxed) != ticket.seqId) {
     return failStop();
   }
-  if (hasPendingPresent &&
-      !context->assembler->tryAppendPresent(core::PresentCommandRecord{
+  if (hasPendingPresent) {
+    const auto append = [&] {
+      return context->assembler->tryAppendPresent(core::PresentCommandRecord{
           .present = std::move(context->pendingPresentDesc),
-          .presentSource = context->pendingPresentSource})) {
-    return failStop();
+          .presentSource = context->pendingPresentSource});
+    };
+    const bool appended = render::activeTapeEmissionObserver
+        ? render::activeTapeEmissionObserver->withStagedPresent(
+              {queryQueueIdentity_, ticket.id.index, ticket.id.generation,
+               ticket.storage.generation}, append)
+        : append();
+    if (!appended) return failStop();
   }
   if (hasPendingPresent) {
     noteCurrentSlotCommandAppendStartedUnlocked(*this);
@@ -6246,7 +6336,8 @@ CommandQueue::appendActiveArenaDrawRun(
           .draw = draws[i],
           .payload = drawPayloadAt(payloads, i),
       };
-      if (!assembler || !assembler->tryAppendDirectDraw(input)) {
+      if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+              [&] { return assembler->tryAppendDirectDraw(input); })) {
         return false;
       }
     }
@@ -6265,7 +6356,8 @@ CommandQueue::appendActiveArenaDirectReplayDraw(
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
     const auto commandCount = assembler ? assembler->commandCount() : 0u;
-    if (!assembler || !assembler->tryAppendDirectDraw(input) ||
+    if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+            [&] { return assembler->tryAppendDirectDraw(input); }) ||
         !context.captureDirectDraw(
             assembler->commandCount() != commandCount)) {
       return false;
@@ -6280,7 +6372,8 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaClear(
     const core::ClearDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    if (!assembler || !assembler->tryAppendClear(value)) {
+    if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+            [&] { return assembler->tryAppendClear(value); })) {
       return false;
     }
     if (!context.captureSingleCommand()) {
@@ -6299,7 +6392,8 @@ CommandQueue::appendActiveArenaSurfaceCopy(
     const core::SurfaceCopyDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    if (!assembler || !assembler->tryAppendSurfaceCopy(value)) {
+    if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+            [&] { return assembler->tryAppendSurfaceCopy(value); })) {
       return false;
     }
     if (!context.captureSingleCommand()) {
@@ -6316,7 +6410,8 @@ CommandQueue::appendActiveArenaStretchRect(
     const core::StretchRectDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    if (!assembler || !assembler->tryAppendStretchRect(value)) {
+    if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+            [&] { return assembler->tryAppendStretchRect(value); })) {
       return false;
     }
     if (!context.captureSingleCommand()) {
@@ -6332,7 +6427,8 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaColorFill(
     const core::ColorFillDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    if (!assembler || !assembler->tryAppendColorFill(value)) {
+    if (!assembler || !withArenaTapeEmission(context, queryQueueIdentity_,
+            [&] { return assembler->tryAppendColorFill(value); })) {
       return false;
     }
     if (!context.captureSingleCommand()) {
@@ -6349,7 +6445,8 @@ CommandQueue::appendActiveArenaDepthResolve(
     const core::DepthResolveDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    return assembler && assembler->tryAppendDepthResolve(value) &&
+    return assembler && withArenaTapeEmission(context, queryQueueIdentity_,
+        [&] { return assembler->tryAppendDepthResolve(value); }) &&
            context.captureSingleCommand();
   });
 }
@@ -6359,7 +6456,8 @@ CommandQueue::appendActiveArenaGenerateMipmaps(
     const core::GenerateMipmapsDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
     auto* assembler = context.activeAssembler();
-    return assembler && assembler->tryAppendGenerateMipmaps(value) &&
+    return assembler && withArenaTapeEmission(context, queryQueueIdentity_,
+        [&] { return assembler->tryAppendGenerateMipmaps(value); }) &&
            context.captureSingleCommand();
   });
 }
@@ -6376,7 +6474,8 @@ CommandQueue::appendDirectChunkSlotDrawBorrowed(
     return core::DirectReplayDrawDisposition::AcceptedFailStop;
   }
   auto& assembler = *lease->directAssembler_;
-  if (!assembler.tryAppendDirectDraw(input)) {
+  if (!withDirectTapeEmission(*lease->directContext_, lease->queue_->queryQueueIdentity_,
+          [&] { return assembler.tryAppendDirectDraw(input); })) {
     lease->directContext_->failed = true;
     return core::DirectReplayDrawDisposition::AcceptedFailStop;
   }
@@ -6396,7 +6495,8 @@ CommandQueue::appendActiveDirectChunkSlotDraw(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
         const auto commandCount = assembler.commandCount();
-        if (!assembler.tryAppendDirectDraw(input)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendDirectDraw(input); })) return false;
         context.pendingBackBuffer = input.hot->colorAttachments[0].handle;
         context.updatesBackBuffer = true;
         if (assembler.commandCount() != commandCount) {
@@ -6450,7 +6550,8 @@ CommandQueue::appendActiveDirectChunkSlotClear(
     // rect vector today, so reading it afterwards is currently correct, but a
     // future moved member behind colorAttachments would break that silently.
     const auto colorAttachment = owned.colorAttachments[0].handle;
-    if (!borrowed.assembler->tryAppendClear(std::move(owned))) {
+    if (!withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+            [&] { return borrowed.assembler->tryAppendClear(std::move(owned)); })) {
       borrowed.poison();
       return ActiveArenaAppendResult::Failed;
     }
@@ -6464,7 +6565,8 @@ CommandQueue::appendActiveDirectChunkSlotClear(
       [this, owned = std::move(owned)](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) mutable noexcept {
         const auto colorAttachment = owned.colorAttachments[0].handle;
-        if (!assembler.tryAppendClear(std::move(owned))) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendClear(std::move(owned)); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         if (colorAttachment) {
           context.pendingBackBuffer = colorAttachment;
@@ -6478,7 +6580,8 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotSurfaceCopy(
     const core::SurfaceCopyDesc& value) noexcept {
   if (auto borrowed = borrowedDirectChunkSlotAppend()) {
-    if (!borrowed.assembler->tryAppendSurfaceCopy(value)) {
+    if (!withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+            [&] { return borrowed.assembler->tryAppendSurfaceCopy(value); })) {
       borrowed.poison();
       return ActiveArenaAppendResult::Failed;
     }
@@ -6489,7 +6592,8 @@ CommandQueue::appendActiveDirectChunkSlotSurfaceCopy(
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
-        if (!assembler.tryAppendSurfaceCopy(value)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendSurfaceCopy(value); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         context.pendingBackBuffer = value.destination;
         context.updatesBackBuffer = true;
@@ -6501,7 +6605,8 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotStretchRect(
     const core::StretchRectDesc& value) noexcept {
   if (auto borrowed = borrowedDirectChunkSlotAppend()) {
-    if (!borrowed.assembler->tryAppendStretchRect(value)) {
+    if (!withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+            [&] { return borrowed.assembler->tryAppendStretchRect(value); })) {
       borrowed.poison();
       return ActiveArenaAppendResult::Failed;
     }
@@ -6512,7 +6617,8 @@ CommandQueue::appendActiveDirectChunkSlotStretchRect(
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
-        if (!assembler.tryAppendStretchRect(value)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendStretchRect(value); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         context.pendingBackBuffer = value.destination;
         context.updatesBackBuffer = true;
@@ -6524,7 +6630,8 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotColorFill(
     const core::ColorFillDesc& value) noexcept {
   if (auto borrowed = borrowedDirectChunkSlotAppend()) {
-    if (!borrowed.assembler->tryAppendColorFill(value)) {
+    if (!withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+            [&] { return borrowed.assembler->tryAppendColorFill(value); })) {
       borrowed.poison();
       return ActiveArenaAppendResult::Failed;
     }
@@ -6535,7 +6642,8 @@ CommandQueue::appendActiveDirectChunkSlotColorFill(
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
-        if (!assembler.tryAppendColorFill(value)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendColorFill(value); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         context.pendingBackBuffer = value.destination;
         context.updatesBackBuffer = true;
@@ -6550,14 +6658,16 @@ CommandQueue::appendActiveDirectChunkSlotDepthResolve(
     // The destination is the INTZ depth texture, not the present back buffer,
     // so the pending back buffer is deliberately untouched -- this mirrors
     // CommandQueue::submitDepthResolve.
-    return borrowed.assembler->tryAppendDepthResolve(value)
+    return withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+        [&] { return borrowed.assembler->tryAppendDepthResolve(value); })
                ? ActiveArenaAppendResult::Appended
                : (borrowed.poison(), ActiveArenaAppendResult::Failed);
   }
   return appendActiveDirectChunkSlot(
-      [&](DirectChunkSlotBuildContext&,
+      [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
-        if (!assembler.tryAppendDepthResolve(value)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendDepthResolve(value); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         return true;
       });
@@ -6567,14 +6677,16 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotGenerateMipmaps(
     const core::GenerateMipmapsDesc& value) noexcept {
   if (auto borrowed = borrowedDirectChunkSlotAppend()) {
-    return borrowed.assembler->tryAppendGenerateMipmaps(value)
+    return withDirectTapeEmission(*borrowed.context, queryQueueIdentity_,
+        [&] { return borrowed.assembler->tryAppendGenerateMipmaps(value); })
                ? ActiveArenaAppendResult::Appended
                : (borrowed.poison(), ActiveArenaAppendResult::Failed);
   }
   return appendActiveDirectChunkSlot(
-      [&](DirectChunkSlotBuildContext&,
+      [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
-        if (!assembler.tryAppendGenerateMipmaps(value)) return false;
+        if (!withDirectTapeEmission(context, queryQueueIdentity_,
+                [&] { return assembler.tryAppendGenerateMipmaps(value); })) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         return true;
       });
@@ -6585,7 +6697,7 @@ CommandQueue::appendActiveDirectChunkSlotPresent(
     core::SwapDesc value, BoundaryPolicy boundaryPolicy,
     bool tokenStashed) noexcept {
   return appendActiveDirectChunkSlot(
-      [value = std::move(value), boundaryPolicy,
+      [this, value = std::move(value), boundaryPolicy,
        tokenStashed](DirectChunkSlotBuildContext& context,
                      core::TransactionalChunkSlotAssembler&) mutable noexcept {
         if (context.presentAppended) return false;
@@ -6604,6 +6716,9 @@ CommandQueue::appendActiveDirectChunkSlotPresent(
         context.pendingPresentBoundaryPolicy = boundaryPolicy;
         context.presentAppended = true;
         context.presentTokenStashed = tokenStashed;
+        if (auto* observer = render::activeTapeEmissionObserver)
+          observer->stagePresent({queryQueueIdentity_, context.ticket.id.index,
+              context.ticket.id.generation, context.ticket.storage.generation});
         return true;
       });
 }
@@ -6666,9 +6781,11 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
     context.pendingPresentBoundaryPolicy = boundaryPolicy;
     context.presentAppended = true;
     context.presentTokenStashed = tokenStashed;
-    return builder->tryAppendPresentCommand(core::PresentCommandRecord{
-        .present = std::move(value),
-        .presentSource = sourceHandle,
+    return withArenaTapeEmission(context, queryQueueIdentity_, [&] {
+      return builder->tryAppendPresentCommand(core::PresentCommandRecord{
+          .present = std::move(value),
+          .presentSource = sourceHandle,
+      });
     }) && context.captureSingleCommand();
   });
 }
@@ -6985,6 +7102,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
   }
   control.seqId = ticket.seqId;
   control.state = core::ChunkSlot::State::Pending;
+  if (tapeRuntimeObserver_)
+    observeTapeRuntimePublicationLocked({.id = ticket.id, .storage = ticket.storage});
   if (captureIdentity && capturedValid &&
       encoders::captureColorAttachmentObservationEnabled()) {
     // The queue lock still excludes Ready consumption. Registering after the
@@ -7483,6 +7602,10 @@ CommandQueue::publishCpuReadyArenaBatch(
     auto& control = slots_[controlIndices[i]];
     control.seqId = context->batchReservations[i].ticket.seqId;
     control.state = core::ChunkSlot::State::Pending;
+    if (tapeRuntimeObserver_)
+      observeTapeRuntimePublicationLocked({
+          .id = context->batchReservations[i].id,
+          .storage = context->batchReservations[i].storage});
     if (captureIdentity && capturedValid &&
         encoders::captureColorAttachmentObservationEnabled()) {
       encoders::recordCaptureColorAttachmentSource(
@@ -8908,6 +9031,195 @@ std::uint64_t CommandQueue::allocateQueryQueueIdentity() noexcept {
   return 0;  // Exhaustion fails closed, never wrap into another incarnation.
 }
 
+bool CommandQueue::installTapeRuntimeObserver(
+    render::TapeRuntimeObserverSink sink,
+    render::TapeRuntimeBaseline& baseline) noexcept {
+  baseline = {};
+  if (!sink) return false;
+  try {
+    std::lock_guard lock(mutex_);
+    if (tapeRuntimeObserver_ || stop_ || !queryQueueIdentity_ ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_ || directChunkSlotBuildContext_ ||
+        inflightCount_ || completedSeqIdLocked() != lastCommittedSeqId_ ||
+        (writingSlot_ && (!slots_[*writingSlot_].payload ||
+                         !slots_[*writingSlot_].payload->commandsEmpty())))
+      return false;
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    if (uploads.failed || uploads.published != uploads.completed ||
+        (initializer_ && initializer_->hasPendingUploadsUnlocked())) return false;
+    baseline = {queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
+                uploads.published, uploads.completed, cpuReadySessionLaneEnabled_};
+    if (!tapeRuntimeObserverEndpoint_.attach(sink)) return false;
+    tapeRuntimeObserver_ = sink;
+    return true;
+  } catch (...) { return false; }
+}
+
+std::optional<CommandQueue::RenderTapeArmState>
+CommandQueue::inspectRenderTapeArmState() noexcept {
+  try {
+    std::lock_guard lock(mutex_);
+    const bool quiescent = renderTapeBackbufferSeedBuildQuiescent(
+        arenaAdmissionActive_.load(std::memory_order_relaxed),
+        activeArenaBuild_.load(std::memory_order_relaxed) != nullptr,
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) != nullptr,
+        arenaBuildContext_.has_value(), directChunkSlotBuildContext_.has_value());
+    // Borrowed appenders do not hold mutex_. Do not read a payload until the
+    // same cold-entry predicate used by checkpoint admission excludes them.
+    bool writingEmpty = quiescent && !writingSlot_;
+    if (quiescent && writingSlot_ && *writingSlot_ < slots_.size()) {
+      const auto* payload = slots_[*writingSlot_].payload;
+      writingEmpty = payload && payload->commandsEmpty();
+    }
+    return RenderTapeArmState{
+        .checkpoint = {
+            .nextSequence = nextSeqId_.load(std::memory_order_relaxed),
+            .publishedSequence = lastCommittedSeqId_,
+            .completedSequence = completedSeqIdLocked(),
+            .inflightCount = inflightCount_,
+            .buildQuiescent = quiescent,
+            .writingEmpty = writingEmpty,
+            .initializerPending = initializer_ && initializer_->hasPendingUploadsUnlocked(),
+            .initializerTrackingAvailable = query::asynchronousFencesEnabled(),
+            .terminal = stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+                queryPendingTerminal_.load(std::memory_order_relaxed) ||
+                queueLifecycle_.queryCompletionFailed(),
+        },
+        .initializerPresent = bool(initializer_),
+        .initializerProgressAvailable = !initializer_,
+    };
+  } catch (...) { return std::nullopt; }
+}
+
+bool CommandQueue::installTapeRuntimeCapture(
+    std::shared_ptr<render::TapeRuntimeCaptureAttachment> owner,
+    render::TapeRuntimeBaseline& baseline) noexcept {
+  baseline = {};
+  if (!owner || !owner->edges().active()) return false;
+  const auto sink = owner->sink();
+  if (!sink) return false;
+  try {
+    std::lock_guard lock(mutex_);
+    // Identical arm watermark to the legacy observer, with no publication or
+    // synthetic fence. The retained arm additionally rejects terminal health.
+    if (tapeRuntimeObserver_ || stop_ || !queryQueueIdentity_ ||
+        queryPendingTerminal_.load(std::memory_order_relaxed) ||
+        queueLifecycle_.queryCompletionFailed() ||
+        arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_ || directChunkSlotBuildContext_ ||
+        inflightCount_ || completedSeqIdLocked() != lastCommittedSeqId_)
+      return false;
+    if (writingSlot_ && (*writingSlot_ >= slots_.size() ||
+        !slots_[*writingSlot_].payload ||
+        !slots_[*writingSlot_].payload->commandsEmpty())) return false;
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    if (uploads.failed || uploads.published != uploads.completed ||
+        (initializer_ && initializer_->hasPendingUploadsUnlocked())) return false;
+    if (!tapeRuntimeObserverEndpoint_.attachRetained(owner)) return false;
+    tapeRuntimeObserver_ = sink;
+    baseline = {queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
+                uploads.published, uploads.completed, cpuReadySessionLaneEnabled_};
+    return true;
+  } catch (...) { return false; }
+}
+
+render::TapeRuntimeCaptureLease CommandQueue::acquireTapeRuntimeCapture() noexcept {
+  return tapeRuntimeObserverEndpoint_.acquireCapture();
+}
+
+void CommandQueue::observeTapeRuntimeOrdinaryCoordinatorAdmission(
+    const render::TapeRuntimeCaptureLease& expectedLease,
+    render::TapeOrdinaryCoordinatorAdmission value) noexcept {
+  try {
+    std::lock_guard lock(mutex_);
+    if (cpuReadySessionLaneEnabled_ || !queryQueueIdentity_ || !tapeRuntimeObserver_)
+      return;
+    const auto current = tapeRuntimeObserverEndpoint_.acquireCapture();
+    if (!expectedLease.matches(current)) return;
+    value.queue = queryQueueIdentity_;
+    // A retired raw cannot borrow a replacement arm. The same retained lease
+    // still passes short endpoint admission; lifetime alone grants no access.
+    (void)expectedLease.dispatch({
+        .edge = render::TapeRuntimeEdge::OrdinaryCoordinatorAdmission,
+        .ordinaryAdmission = value});
+  } catch (...) {
+    // Diagnostics never alter the selected route, coordinator result or queue.
+  }
+}
+
+bool CommandQueue::removeTapeRuntimeObserver(
+    render::TapeRuntimeObserverSink sink) noexcept {
+  try {
+    {
+      std::lock_guard lock(mutex_);
+      if (!sink) return false;
+      if (!tapeRuntimeObserver_) return true;
+      if (!render::tapeRuntimeObserverMatches(tapeRuntimeObserver_, sink)) return false;
+      tapeRuntimeObserver_ = {};
+    }
+    // An admitted short visit may still need the queue mutex. Clear producer
+    // selection first, then close admission/join without holding that mutex.
+    if (tapeRuntimeObserverEndpoint_.detach(sink)) return true;
+    {
+      std::lock_guard lock(mutex_);
+      if (!tapeRuntimeObserver_) tapeRuntimeObserver_ = sink;
+    }
+    return false;
+  } catch (...) { return false; }
+}
+
+bool CommandQueue::refreshTapeRuntimeCompletions(
+    render::TapeRuntimeObserverSink sink) noexcept {
+  try {
+    std::lock_guard lock(mutex_);
+    if (!render::tapeRuntimeObserverMatches(tapeRuntimeObserver_, sink) || stop_ ||
+        arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        queueLifecycle_.queryCompletionFailed()) return false;
+    return !initializer_ || initializer_->refreshTapeRuntimeCompletionsUnlocked();
+  } catch (...) { return false; }
+}
+
+void CommandQueue::revokeTapeRuntimeObserver(render::TapeRuntimeObserverSink sink) noexcept {
+  {
+    std::lock_guard lock(mutex_);
+    if (render::tapeRuntimeObserverMatches(tapeRuntimeObserver_, sink))
+      tapeRuntimeObserver_ = {};
+  }
+  tapeRuntimeObserverEndpoint_.revoke(sink);
+}
+
+void CommandQueue::observeTapeRuntimePublicationLocked(
+    core::CpuReadyTape::SourceRef source) noexcept {
+  const auto sink = tapeRuntimeObserver_;
+  if (!sink) return;
+  const auto metadata = cpuReadyTape_.sourceMetadata(
+      source.id, source.storage, core::CpuReadyTape::State::Ready);
+  const auto payload = cpuReadyTape_.resolveSourcePayload(
+      source.id, source.storage, core::CpuReadyTape::State::Ready);
+  std::size_t controlIndex = SIZE_MAX;
+  for (std::size_t index = 0u; index < slots_.size(); ++index)
+    if (slots_[index].sourceId == source.id && slots_[index].storage == source.storage)
+      controlIndex = index;
+  if (!metadata || !payload.valid()) {
+    sink.fn(sink.context, {.edge = render::TapeRuntimeEdge::Failed});
+    return;
+  }
+  sink.fn(sink.context, {
+      .edge = render::TapeRuntimeEdge::Publish,
+      .writer = {queryQueueIdentity_, source.id.index, source.id.generation,
+                 source.storage.generation},
+      .source = source, .metadata = *metadata, .payload = payload,
+      .controlIndex = controlIndex, .sequence = metadata->seqId});
+}
+
 bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
   try {
     std::unique_lock lock(mutex_);
@@ -9004,11 +9316,26 @@ query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
       initializerPrefix = *prefix;
     }
     bool hadCommands = false;
+    std::uint32_t endCursor = 0u;
     if (writingSlot_) {
       if (*writingSlot_ >= slots_.size() || !slots_[*writingSlot_].payload)
         return {};
       hadCommands = !slots_[*writingSlot_].payload->commandsEmpty();
+      if (slots_[*writingSlot_].payload->commandCount() > UINT32_MAX) return {};
+      endCursor = static_cast<std::uint32_t>(
+          slots_[*writingSlot_].payload->commandCount());
     }
+    const auto observeEnd = [&](query::EndReceipt receipt) {
+      if (tapeRuntimeObserver_ && receipt.valid()) {
+        tapeRuntimeObserver_.fn(tapeRuntimeObserver_.context, {
+            .edge = render::TapeRuntimeEdge::QueryEnd,
+            .writer = receipt.marker ? receipt.marker->owner() : query::WriterIdentity{},
+            .sequence = receipt.snapshot().sequence,
+            .initializer = receipt.prefix.initializer,
+            .commandIndex = endCursor});
+      }
+      return receipt;
+    };
     if (hadCommands && query::scopeRangesEnabled() &&
         inflightCount_ < kMaxQueuedChunks) {
       auto& writer = slots_[*writingSlot_];
@@ -9027,7 +9354,7 @@ query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
           query::splitdiag::note(shared ? query::splitdiag::Kind::DeferredShared
                                        : query::splitdiag::Kind::DeferredNew,
                                 queryQueueIdentity_, 0);
-          return receipt.fence();
+          return observeEnd(receipt.fence());
         }
         if (status != render::QueryRangeStatus::Capacity) {
           requestSchedulingStopLocked();
@@ -9055,7 +9382,7 @@ query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
       query::splitdiag::note(shared ? query::splitdiag::Kind::DeferredShared
                                    : query::splitdiag::Kind::DeferredNew,
                             queryQueueIdentity_, 0);
-      return receipt;
+      return observeEnd(std::move(receipt));
     }
     // If Issue meets an inflight admission cap, older parked work must still
     // be allowed to submit. This is a progress request, never fake completion.
@@ -9076,7 +9403,7 @@ query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
     query::splitdiag::note(hadCommands ? query::splitdiag::Kind::EagerEnd
                                       : query::splitdiag::Kind::EmptyEnd,
                           queryQueueIdentity_, lastCommittedSeqId_);
-    return {queryQueueIdentity_, lastCommittedSeqId_, initializerPrefix};
+    return observeEnd({queryQueueIdentity_, lastCommittedSeqId_, initializerPrefix});
   } catch (...) {
     failStopReplaySourceExecution();
     return {};
@@ -9638,6 +9965,12 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
       fenceSeqId > completedSeqIdLocked()) {
     queueLifecycle_.waitForSequence(lock, fenceSeqId);
   }
+  if (!stop_ && tapeRuntimeObserver_) {
+    tapeRuntimeObserver_.fn(tapeRuntimeObserver_.context, {
+        .edge = render::TapeRuntimeEdge::OrderedRelease,
+        .release = posted.snapshot,
+        .releaseWriter = writer});
+  }
   return !stop_;
 }
 
@@ -9860,9 +10193,15 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
             renderPartitionConfig_.resolved;
         arenaOptions.partitionSource = resolved.source;
         lock.unlock();
-        auto arenaSubmission = backend_->onSourceReady(
-            arenaCtx, current.slotIndex, resolved.payload, current.seqId,
-            std::move(arenaOptions));
+        auto arenaSubmission = tapeRuntimeObserverEndpoint_.enabled()
+            ? render::withTapeTopologyInvocation(acquireTapeRuntimeCapture(),
+                {resolved.source, current.seqId, 0u,
+                 static_cast<std::uint32_t>(resolved.payload.commandCount())}, [&] {
+                  return backend_->onSourceReady(arenaCtx, current.slotIndex, resolved.payload,
+                      current.seqId, std::move(arenaOptions));
+                })
+            : backend_->onSourceReady(arenaCtx, current.slotIndex, resolved.payload,
+                current.seqId, std::move(arenaOptions));
         if (arenaSubmission.has_value() &&
             !arenaSubmission->commandBuffer) {
           arenaSubmission.reset();
@@ -9873,6 +10212,10 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
                   *arenaSubmission, current)) {
             abortDceLookaheadPendingFailOpen(
                 "arena completion source retention failed");
+          }
+          if (tapeRuntimeObserverEndpoint_.enabled()) {
+            const auto registered = core::metalqueue::completionSourceForReadySlot(current);
+            render::registerTapeTopologyCompletionSources(acquireTapeRuntimeCapture(), std::span(&registered, 1u));
           }
           if (!queueLifecycle_.submitEncodedSubmission(lock,
                                                        *arenaSubmission)) {
@@ -9948,8 +10291,12 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
         prefixOptions.partitionSource = resolved.source;
         traceEncodeFnStage("before-dce-lookahead-prefix",
                            current.slotIndex, slot);
-        prefixSubmission = backend_->onChunkReady(
-            *ctx, current.slotIndex, slot, std::move(prefixOptions));
+        prefixSubmission = tapeRuntimeObserverEndpoint_.enabled()
+            ? render::withTapeTopologyInvocation(acquireTapeRuntimeCapture(),
+                {resolved.source, current.seqId, 0u, static_cast<std::uint32_t>(slot.commandCount())}, [&] {
+                  return backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(prefixOptions));
+                })
+            : backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(prefixOptions));
         traceEncodeFnStage(prefixSubmission.has_value()
                                ? "after-dce-lookahead-prefix"
                                : "after-dce-lookahead-prefix-null",
@@ -10025,8 +10372,13 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
               try {
                 traceEncodeFnStage("before-backend-onChunkReady",
                                    current.slotIndex, slot);
-                submission = backend_->onChunkReady(
-                    *ctx, current.slotIndex, slot, std::move(options));
+                submission = tapeRuntimeObserverEndpoint_.enabled()
+                    ? render::withTapeTopologyInvocation(acquireTapeRuntimeCapture(),
+                        {selected[0].source, current.seqId, 0u,
+                         static_cast<std::uint32_t>(slot.commandCount())}, [&] {
+                          return backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(options));
+                        })
+                    : backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(options));
                 lock.lock();
                 return true;
               } catch (...) {
@@ -10044,8 +10396,13 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
         lock.unlock();
         traceEncodeFnStage("before-backend-onChunkReady",
                            current.slotIndex, slot);
-        submission = backend_->onChunkReady(
-            *ctx, current.slotIndex, slot, std::move(options));
+        submission = tapeRuntimeObserverEndpoint_.enabled()
+            ? render::withTapeTopologyInvocation(acquireTapeRuntimeCapture(),
+                {selected[0].source, current.seqId, 0u,
+                 static_cast<std::uint32_t>(slot.commandCount())}, [&] {
+                  return backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(options));
+                })
+            : backend_->onChunkReady(*ctx, current.slotIndex, slot, std::move(options));
         lock.lock();
       }
       if (submission.has_value() && !submission->commandBuffer) {
@@ -10087,6 +10444,10 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
               "completion source retention failed");
         }
       }
+      if (tapeRuntimeObserverEndpoint_.enabled()) {
+        const auto registered = core::metalqueue::completionSourceForReadySlot(current);
+        render::registerTapeTopologyCompletionSources(acquireTapeRuntimeCapture(), std::span(&registered, 1u));
+      }
       if (!queueLifecycle_.submitEncodedSubmission(lock, *submission)) {
         abortDceLookaheadPendingFailOpen("submission preflight failed");
       }
@@ -10120,6 +10481,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord>
 CommandQueue::encodeCpuReadySessionSource(
     const core::metalqueue::ResolvedPublishedSource& source,
     encoders::EncodeChunkOptions options) {
+  if (tapeRuntimeObserverEndpoint_.enabled() && !render::activeTapeTopologyInvocation) {
+    const auto lease = acquireTapeRuntimeCapture();
+    if (source.payload.commandCount() > UINT32_MAX) {
+      lease.visit([](render::TapeRuntimeCaptureAttachment& root) noexcept { root.topology().fail(); });
+    } else {
+      const render::TapeTopologySourceRange range{source.source, source.seqId, 0u,
+          static_cast<std::uint32_t>(source.payload.commandCount())};
+      render::ScopedTapeTopologyInvocation topology(render::retainTapeTopologyInvocation(
+          lease, std::span(&range, 1u)));
+      return encodeCpuReadySessionSource(source, std::move(options));
+    }
+  }
   options.partitionExecutionMode = renderPartitionConfig_.resolved;
   std::optional<core::metalqueue::QueueSubmissionRecord> submission;
   if (const auto* legacy = source.payload.legacyPayload()) {
@@ -10187,6 +10560,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .pipelineControlObserver = pipelineLifecycleObserver_
           ? pipelineLifecycleObserver_->productionControlSink()
           : dxmt9::queue::PipelineControlObserverSink{},
+      .tapeRuntimeObserver = &tapeRuntimeObserverEndpoint_,
   });
 }
 

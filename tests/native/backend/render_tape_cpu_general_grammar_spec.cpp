@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -96,11 +97,242 @@ GeneralCpuAdmissionResult admit(const MiniPlan& fixture) {
   return admitGeneralCpuPlan(fixture.plan);
 }
 
+std::vector<std::byte> supportedRecordChunk(std::size_t records, std::size_t draws,
+                                          bool present = false) {
+  const auto stateBytes = test::fullStateChunk(false);
+  const auto drawBytes = test::fullStateChunk(true);
+  const auto presentBytes = test::presentChunk();
+  std::array<ImportedChunkView, 3u> imported;
+  for (std::size_t index = 0u; index < imported.size(); ++index) {
+    const std::array<std::span<const std::byte>, 3u> bytes{
+        stateBytes, drawBytes, presentBytes};
+    check(importPrevalidatedCommandChunk(bytes[index], {.recordCount = 1u}, imported[index]),
+          "supported record fixture imports");
+  }
+  const auto recordOffset = sizeof(D9CCommandChunkWireHeader);
+  const auto arenaOffset = test::alignUp(recordOffset +
+      records * sizeof(D9CCommandChunkWireRecordHeader), alignof(std::uint32_t));
+  std::vector<std::byte> bytes(arenaOffset);
+  for (std::size_t index = 0u; index < records; ++index) {
+    const auto& source = imported[present && index + 1u == records ? 2u :
+                                 index < draws ? 1u : 0u];
+    auto record = source.records.front();
+    const auto payload = source.record(0u).payload;
+    record.payloadOffset = static_cast<std::uint32_t>(bytes.size() - arenaOffset);
+    std::memcpy(bytes.data() + recordOffset + index * sizeof(record), &record, sizeof(record));
+    bytes.insert(bytes.end(), payload.begin(), payload.end());
+  }
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = static_cast<std::uint32_t>(recordOffset),
+      .recordCount = static_cast<std::uint32_t>(records),
+      .handleTableOffset = static_cast<std::uint32_t>(arenaOffset),
+      .payloadArenaOffset = static_cast<std::uint32_t>(arenaOffset),
+      .payloadArenaSize = static_cast<std::uint32_t>(bytes.size() - arenaOffset)};
+  std::memcpy(bytes.data(), &header, sizeof(header));
+  return bytes;
+}
+
+// Input admission uses authenticated metadata and does not allocate captured
+// blob bytes. This fixture exercises capture 29's dimensions with supported
+// records and synthetic, immutable metadata; it is not execution evidence.
+struct CaptureSizedPlan : MiniPlan {
+  std::vector<std::vector<std::byte>> chunks;
+  D9CBufferDesc bufferDescriptor{.size = 128u * 1024u};
+
+  CaptureSizedPlan() {
+    plan.events.clear();
+    plan.events.push_back({.type = RenderTapeEventType::BootstrapState,
+                           .count = 1u});
+    plan.definitions.reserve(738u);
+    for (std::size_t index = 1u; index < 738u; ++index) {
+      plan.definitions.push_back({
+          .fixed = {.identity = {.kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                 .generation = 1u, .objectId = index + 1u},
+                    .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+                    .descriptorBytes = sizeof(bufferDescriptor)},
+          .descriptor = std::as_bytes(std::span(&bufferDescriptor, 1u))});
+    }
+    for (std::uint32_t index = 0u; index < plan.definitions.size(); ++index)
+      plan.events.push_back({.type = RenderTapeEventType::ObjectDefine, .index = index});
+    plan.mutations.resize(4902u);
+    for (std::uint32_t index = 0u; index < plan.mutations.size(); ++index)
+      plan.events.push_back({.type = RenderTapeEventType::ResourceMutation, .index = index});
+    plan.catalogue.blobs.resize(4644u);
+    for (auto& blob : plan.catalogue.blobs) blob.size = 1u;
+    plan.catalogue.blobs.back().size = 432080204ull - 4643u;
+    plan.commandChunks.clear();
+    chunks.reserve(87u);
+    std::size_t remainingRecords = 3513u;
+    std::size_t remainingDraws = 2799u;
+    for (std::uint32_t index = 0u; index < 87u; ++index) {
+      const auto records = remainingRecords / (87u - index);
+      const auto draws = remainingDraws < records ? remainingDraws : records;
+      chunks.push_back(supportedRecordChunk(records, draws, index == 86u));
+      plan.commandChunks.push_back({
+          .envelope = {.recordCount = static_cast<std::uint32_t>(records)},
+          .bytes = chunks.back()});
+      plan.events.push_back({.type = RenderTapeEventType::CommandChunk, .index = index});
+      remainingRecords -= records;
+      remainingDraws -= draws;
+    }
+    plan.destroys.push_back({.identity = plan.definitions[1].fixed.identity});
+    plan.events.push_back({.type = RenderTapeEventType::ObjectDestroy});
+    plan.events.push_back({.type = RenderTapeEventType::PresentComplete});
+    for (std::uint32_t index = 0u; index < plan.events.size(); ++index)
+      plan.events[index].eventIndex = index;
+  }
+};
+
+void explicitProfileAdmitsCaptureSizedInput() {
+  constexpr GeneralCpuAdmissionCaps defaults{};
+  static_assert(defaults.maxEvents == 2048u && defaults.maxObjects == 512u &&
+                defaults.maxMutations == 1024u && defaults.maxChunks == 128u &&
+                defaults.maxRecords == 4096u && defaults.maxRecordsPerChunk == 64u &&
+                defaults.maxBlobBytes == 256ull * 1024ull * 1024ull);
+  const CaptureSizedPlan fixture;
+  const auto legacy = admitGeneralCpuPlan(fixture.plan);
+  check(legacy.reason == GeneralCpuAdmissionReason::EventLimit,
+        "default profile still rejects capture-sized input");
+  const auto caps = generalCpuExtendedInputCaps();
+  const auto result = admitGeneralCpuPlan(fixture.plan, caps);
+  check(result.accepted() && result.inputCaps == caps &&
+            result.counts.events == 5730u && result.counts.objects == 738u &&
+            result.counts.mutations == 4902u && result.counts.blobs == 4644u &&
+            result.counts.blobBytes == 432080204ull && result.counts.chunks == 87u &&
+            result.counts.records == 3513u && result.counts.draws == 2799u,
+        "explicit profile admits all supported capture 29 input dimensions");
+  check(result.inputCaps != legacy.inputCaps,
+        "owned admission evidence exposes a mismatched caller/executor profile");
+}
+
+void captureDimensionsHonorExactBounds() {
+  const CaptureSizedPlan fixture;
+  const auto admitted = admitGeneralCpuPlan(fixture.plan, generalCpuExtendedInputCaps());
+  check(admitted.accepted(), "capture fixture admits before boundary checks");
+  auto exact = generalCpuExtendedInputCaps();
+  exact.maxEvents = admitted.counts.events;
+  exact.maxObjects = admitted.counts.objects;
+  exact.maxMutations = admitted.counts.mutations;
+  exact.maxChunks = admitted.counts.chunks;
+  exact.maxRecords = admitted.counts.records;
+  exact.maxBlobBytes = admitted.counts.blobBytes;
+  exact.maxRecordsPerChunk = 41u;
+  exact.maxDraws = admitted.counts.draws;
+  exact.maxBlobs = admitted.counts.blobs;
+  exact.maxQueryDefinitions = exact.maxObjects;
+  exact.maxTotalChunks = admitted.counts.chunks + admitted.counts.bootstrapChunks;
+  exact.maxTotalRecords = admitted.counts.records + admitted.counts.bootstrapRecords;
+  check(admitGeneralCpuPlan(fixture.plan, exact).accepted(),
+        "every capture dimension admits at its exact cap including bootstrap totals");
+  const auto reject = [&](auto member, GeneralCpuAdmissionReason reason) {
+    auto caps = exact;
+    --(caps.*member);
+    check(admitGeneralCpuPlan(fixture.plan, caps).reason == reason,
+          "one over the selected cap rejects before any execution");
+  };
+  reject(&GeneralCpuAdmissionCaps::maxEvents, GeneralCpuAdmissionReason::EventLimit);
+  reject(&GeneralCpuAdmissionCaps::maxObjects, GeneralCpuAdmissionReason::ObjectLimit);
+  reject(&GeneralCpuAdmissionCaps::maxMutations, GeneralCpuAdmissionReason::MutationLimit);
+  reject(&GeneralCpuAdmissionCaps::maxChunks, GeneralCpuAdmissionReason::ChunkLimit);
+  reject(&GeneralCpuAdmissionCaps::maxRecords, GeneralCpuAdmissionReason::RecordLimit);
+  reject(&GeneralCpuAdmissionCaps::maxBlobBytes, GeneralCpuAdmissionReason::BlobBytesLimit);
+  reject(&GeneralCpuAdmissionCaps::maxRecordsPerChunk,
+         GeneralCpuAdmissionReason::PerChunkRecordLimit);
+  reject(&GeneralCpuAdmissionCaps::maxDraws, GeneralCpuAdmissionReason::DrawLimit);
+  reject(&GeneralCpuAdmissionCaps::maxBlobs, GeneralCpuAdmissionReason::BlobCountLimit);
+  reject(&GeneralCpuAdmissionCaps::maxTotalChunks, GeneralCpuAdmissionReason::ChunkLimit);
+  reject(&GeneralCpuAdmissionCaps::maxTotalRecords, GeneralCpuAdmissionReason::RecordLimit);
+}
+
+void legacyBootstrapAndBodyRecordDomainsStayBounded() {
+  MiniPlan fixture;
+  const auto states = supportedRecordChunk(64u, 0u);
+  const auto terminal = supportedRecordChunk(64u, 0u, true);
+  fixture.plan.bootstrapChunks.assign(64u, {
+      .envelope = {.recordCount = 64u}, .bytes = states});
+  fixture.plan.commandChunks.assign(64u, {
+      .envelope = {.recordCount = 64u}, .bytes = states});
+  fixture.plan.commandChunks.back().bytes = terminal;
+  fixture.plan.events = {
+      {.type = RenderTapeEventType::BootstrapState, .count = 64u},
+      {.type = RenderTapeEventType::ObjectDefine, .index = 0u}};
+  for (std::uint32_t index = 0u; index < fixture.plan.commandChunks.size(); ++index)
+    fixture.plan.events.push_back({.type = RenderTapeEventType::CommandChunk, .index = index});
+  fixture.plan.events.push_back({.type = RenderTapeEventType::PresentComplete});
+  for (std::uint32_t index = 0u; index < fixture.plan.events.size(); ++index)
+    fixture.plan.events[index].eventIndex = index;
+  const auto result = admit(fixture);
+  check(result.accepted() && result.counts.bootstrapRecords == 4096u &&
+            result.counts.records == 4096u && result.counts.bootstrapChunks == 64u &&
+            result.counts.chunks == 64u,
+        "default preserves both historical record domains at their exact shared work boundary");
+  auto caps = GeneralCpuAdmissionCaps{};
+  --caps.maxTotalRecords;
+  check(admitGeneralCpuPlan(fixture.plan, caps).reason == GeneralCpuAdmissionReason::RecordLimit,
+        "combined bootstrap plus body record work rejects at one over its explicit total");
+}
+
+void sourceCapacityIsIndependentAndOverflowChecked() {
+  const GeneralCpuSourceCapacity capacity{.maxPublications = 3u, .maxProgressSteps = 7u};
+  GeneralCpuSourceDemand demand;
+  check(addGeneralCpuSourcePublications(3u, demand) &&
+            admitGeneralCpuSourceDemand(demand, capacity) == GeneralCpuSourceAdmission::Accepted,
+        "three publications admit independently of thousands of input events");
+  check(admitGeneralCpuSourceDemand({.publications = 4u, .progressSteps = 4u}, capacity) ==
+            GeneralCpuSourceAdmission::PublicationLimit,
+        "one extra publication rejects before effects");
+  check(admitGeneralCpuSourceDemand({.publications = 3u, .progressSteps = 8u}, capacity) ==
+            GeneralCpuSourceAdmission::ProgressLimit,
+        "progress has an independent exact bound");
+  check(admitGeneralCpuSourceDemand({.publications = 3u, .progressSteps = 2u}, capacity) ==
+            GeneralCpuSourceAdmission::ProgressLimit,
+        "inconsistent progress/publication demand rejects");
+  check(admitGeneralCpuSourceDemand(demand, {.maxPublications = 0u}) ==
+            GeneralCpuSourceAdmission::InvalidCapacity,
+        "zero source capacity is not unbounded execution");
+  check(admitGeneralCpuSourceDemand(demand,
+            {.maxPublications = std::numeric_limits<std::size_t>::max()}) ==
+            GeneralCpuSourceAdmission::InvalidCapacity,
+        "unrepresentable source capacity rejects");
+  const GeneralCpuAdmissionCounts queries{.queryPolls = 1u, .queryCheckpoints = 1u};
+  check(addGeneralCpuQueryProgressDemand(queries, 1u, demand) && demand.progressSteps == 7u &&
+            admitGeneralCpuSourceDemand(demand, capacity) == GeneralCpuSourceAdmission::Accepted,
+        "checkpoint and transcript probes contribute to the exact progress demand");
+  GeneralCpuSourceDemand overflow{
+      .publications = std::numeric_limits<std::size_t>::max(),
+      .progressSteps = std::numeric_limits<std::size_t>::max()};
+  check(!addGeneralCpuSourcePublications(1u, overflow),
+        "checked source addition rejects integer overflow");
+  GeneralCpuSourceDemand queryOverflow;
+  const GeneralCpuAdmissionCounts tooMany{
+      .queryPolls = std::numeric_limits<std::uint32_t>::max() / 64u + 1u};
+  check(!addGeneralCpuQueryProgressDemand(tooMany, 64u, queryOverflow) &&
+            queryOverflow.progressSteps == 0u,
+        "query multiplication rejects before narrowing to uint32 evidence");
+  MiniPlan fixture;
+  auto caps = GeneralCpuAdmissionCaps{};
+  caps.maxEvents = std::numeric_limits<std::size_t>::max();
+  check(admitGeneralCpuPlan(fixture.plan, caps).reason == GeneralCpuAdmissionReason::InvalidBudget,
+        "unrepresentable input budget rejects");
+  caps = {};
+  caps.maxTotalRecords = caps.maxRecords - 1u;
+  check(admitGeneralCpuPlan(fixture.plan, caps).reason == GeneralCpuAdmissionReason::InvalidBudget,
+        "inconsistent domain and total budget rejects");
+  caps = {};
+  caps.maxMutations = 0u;
+  check(admitGeneralCpuPlan(fixture.plan, caps).reason == GeneralCpuAdmissionReason::InvalidBudget,
+        "zero unused dimension does not become an implicit unbounded budget");
+}
+
 void acceptedPlanRetainsGeneralObjectsAndState() {
-  check(detail::generalCpuCommandRecordSupported(
+  check(render_tape_runtime::detail::generalCpuCommandRecordSupported(
             D9C_COMMAND_RECORD_GENERATE_MIPMAPS),
         "canonical mip generation has a CPU logical-operation observer");
-  check(detail::generalCpuCommandRecordSupported(D9C_COMMAND_RECORD_QUERY_ISSUE),
+  check(render_tape_runtime::detail::generalCpuCommandRecordSupported(D9C_COMMAND_RECORD_QUERY_ISSUE),
         "canonical query issue retains the production command-record path");
   const MiniPlan fixture;
   const auto result = admit(fixture);
@@ -154,6 +386,7 @@ void aggregateBoundsAreCheckedWithNamedReasons() {
     MiniPlan fixture;
     auto caps = GeneralCpuAdmissionCaps{};
     caps.maxChunks = 1u;
+    caps.maxTotalChunks = 1u;
     const auto result = admitGeneralCpuPlan(fixture.plan, caps);
     check(result.reason == GeneralCpuAdmissionReason::ChunkLimit,
           "bootstrap and command chunks share the chunk bound");
@@ -243,7 +476,7 @@ void commandGrammarReportsRecordLocator() {
   for (const auto type : {D9C_COMMAND_RECORD_READBACK,
                          D9C_COMMAND_RECORD_STRETCH_RECT,
                          D9C_COMMAND_RECORD_UPDATE_SURFACE}) {
-    check(!detail::generalCpuCommandRecordSupported(type),
+    check(!render_tape_runtime::detail::generalCpuCommandRecordSupported(type),
           "CPU attachment consumers reject before any resource effects");
   }
   MiniPlan fixture;
@@ -304,6 +537,38 @@ void queryGrammarRequiresVersionedTranscript() {
   check(admitted.accepted() && admitted.counts.queryDefinitions == 1u &&
             admitted.counts.queryIssues == 1u && admitted.counts.queryPolls == 1u,
         "versioned query descriptor, canonical issue, and original poll are admitted together");
+
+  {
+    auto plan = fixture.plan;
+    auto caps = GeneralCpuAdmissionCaps{};
+    caps.maxQueryDefinitions = 1u;
+    caps.maxQueryIssues = 1u;
+    caps.maxQueryPolls = 1u;
+    check(admitGeneralCpuPlan(plan, caps).accepted(),
+          "query dimensions accept at their exact caps");
+    plan.definitions.push_back(plan.definitions.back());
+    ++plan.definitions.back().fixed.identity.objectId;
+    plan.commandChunks.push_back(plan.commandChunks.back());
+    plan.controls.push_back(plan.controls.back());
+    plan.controlBytes.push_back(plan.controlBytes.back());
+    plan.events.insert(plan.events.begin() + 5u,
+        {{.type = RenderTapeEventType::ObjectDefine, .index = 2u},
+         {.type = RenderTapeEventType::CommandChunk, .index = 2u},
+         {.type = RenderTapeEventType::OrderedControl, .index = 1u}});
+    for (std::uint32_t event = 0u; event < plan.events.size(); ++event)
+      plan.events[event].eventIndex = event;
+    check(admitGeneralCpuPlan(plan, caps).reason == GeneralCpuAdmissionReason::QueryDefinitionLimit,
+          "one extra query definition rejects before effects");
+    caps.maxQueryDefinitions = 2u;
+    check(admitGeneralCpuPlan(plan, caps).reason == GeneralCpuAdmissionReason::QueryIssueLimit,
+          "one extra query issue rejects before effects");
+    caps.maxQueryIssues = 2u;
+    check(admitGeneralCpuPlan(plan, caps).reason == GeneralCpuAdmissionReason::QueryPollLimit,
+          "one extra query poll rejects before effects");
+    caps.maxQueryPolls = 2u;
+    check(admitGeneralCpuPlan(plan, caps).accepted(),
+          "all query dimensions admit together at the raised exact caps");
+  }
 
   const RenderTapeQueryDescriptor legacy{.type = 8u, .dataBytes = 4u};
   fixture.plan.definitions[1].descriptor = std::as_bytes(std::span(&legacy, 1u));
@@ -386,6 +651,10 @@ int main() {
     commandGrammarReportsRecordLocator();
     queryGrammarRequiresVersionedTranscript();
     presentAndOutputContractsAreEnforced();
+    explicitProfileAdmitsCaptureSizedInput();
+    captureDimensionsHonorExactBounds();
+    legacyBootstrapAndBodyRecordDomainsStayBounded();
+    sourceCapacityIsIndependentAndOverflowChecked();
   } catch (const TestFailure& failure) {
     std::cerr << "render_tape_cpu_general_grammar_spec: " << failure.what()
               << '\n';

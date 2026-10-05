@@ -11,6 +11,18 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-12.9–12.12 / R-VERIF-1.5–1.8: direct uniform binding now includes
+immutable source/segment/state-row identity in addition to fixed payload
+identity. This closes hot-only RS/TSS/viewport invalidation omitted by the
+payload hash. Serial and parallel child paths share the same predicate;
+native bounded cases and slot-3 Metal counterexamples pass alongside fresh
+L0/L3/L64 original-capture paired qualification. The table-binding route is unchanged.
+Recovery after partial uniform upload followed by failed draw encoding is not
+covered by the failure-before-consumption model and remains a separate safety
+gap. Native/x86 focused tests and the 230-configuration TLA regression pass.
+Conservative upload cost and live-workload promotion
+remain open; see [H434](../../docs/perfomance/present-pacing/present-pacing-v4-pass-localization.434.md).
+
 R-CORE-8.2(c), [source-local query ranges](query-scope-ranges.md): default-OFF
 `DXMT9_QUERY_SCOPE_RANGES` now connects the bounded owner to actual compatibility
 DrawRun construction, CpuReadyTape publication, END/FLUSH, immutable polling

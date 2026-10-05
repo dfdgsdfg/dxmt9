@@ -90,10 +90,26 @@ enum class DrawBindingPath : std::uint8_t {
   ArgumentTable,
 };
 
+// Exact identity of the source-owned immutable hot row. fixedFunction below
+// covers only the uniform payload; FFP VS/PS also read viewport, render states,
+// and texture-stage states from this row. Segment-local tables may reuse row
+// indices within one source; the sequence and segment qualify them without
+// hashing inputs or retaining a hot-view pointer. The source remains retained
+// and its published rows immutable for the encoder/session binding lifetime.
+struct DrawBindingHotStateIdentity {
+  std::uint64_t sourceSequence = 0;
+  std::uint32_t segmentIndex = 0;
+  std::uint32_t stateIndex = 0;
+
+  friend constexpr bool operator==(const DrawBindingHotStateIdentity&,
+                                   const DrawBindingHotStateIdentity&) = default;
+};
+
 struct DrawBindingPayloadIdentity {
   std::uint64_t vertexConstants = 0;
   std::uint64_t pixelConstants = 0;
   std::uint64_t fixedFunction = 0;
+  DrawBindingHotStateIdentity hotState{};
 
   friend bool operator==(const DrawBindingPayloadIdentity&,
                          const DrawBindingPayloadIdentity&) = default;
@@ -133,7 +149,8 @@ inline constexpr DrawBindingTransition planDrawBindingTransition(
             }
           : DirectCbufPayloadSourceChange{},
       .fixedFunctionChanged = hasPrevious &&
-          previous.fixedFunction != current.fixedFunction,
+          (previous.fixedFunction != current.fixedFunction ||
+           previous.hotState != current.hotState),
       .psoBindingAbiCompatible = drawBindingAbiMatchesPath(
           psoAbi, bindingPath),
   };

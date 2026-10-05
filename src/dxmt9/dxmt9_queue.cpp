@@ -1,7 +1,9 @@
 #include "dxmt9_queue.hpp"
+#include "dxmt9_render_tape_emission_observer.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "dxmt9_scheduling_progress_watchdog.hpp"
+#include "dxmt9_render_tape_topology_scope.hpp"
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9/query_fence.hpp"
@@ -2571,6 +2573,74 @@ void QueueLifecycleController::setReplaySourcePublicationSink(
   submissionBinding_.replaySourcePublicationSink = sink;
 }
 
+void QueueLifecycleController::observeTapeRuntimeAppend(ChunkSlot& payload,
+    std::uint32_t commandIndex, std::uint32_t firstSubdraw,
+    std::uint32_t subdrawCount) const noexcept {
+  const auto sink = submissionBinding_.tapeRuntimeObserver
+      ? submissionBinding_.tapeRuntimeObserver->proxy()
+      : ::dxmt9::render::TapeRuntimeObserverSink{};
+  if (!sink) return;
+  const auto* writing = submissionBinding_.writingSlot;
+  if (!writing || !*writing || **writing >= submissionBinding_.slots.size()) {
+    sink.fn(sink.context, {.edge = ::dxmt9::render::TapeRuntimeEdge::Failed});
+    return;
+  }
+  const auto& control = submissionBinding_.slots[**writing];
+  if (control.payload != &payload || commandIndex >= payload.commandCount()) {
+    sink.fn(sink.context, {.edge = ::dxmt9::render::TapeRuntimeEdge::Failed});
+    return;
+  }
+  if (auto* emission = ::dxmt9::render::activeTapeEmissionObserver) {
+    const auto command = SourcePayloadView(payload).commandAt(commandIndex).command;
+    emission->append({submissionBinding_.queryQueueIdentity, control.sourceId.index,
+        control.sourceId.generation, control.storage.generation}, commandIndex,
+        command.kind, firstSubdraw, subdrawCount);
+  }
+  sink.fn(sink.context, {
+      .edge = ::dxmt9::render::TapeRuntimeEdge::Append,
+      .writer = {submissionBinding_.queryQueueIdentity, control.sourceId.index,
+          control.sourceId.generation, control.storage.generation},
+      .source = {.id = control.sourceId, .storage = control.storage},
+      .payload = SourcePayloadView(payload),
+      .commandIndex = commandIndex,
+      .firstSubdraw = firstSubdraw,
+      .subdrawCount = subdrawCount});
+}
+
+void QueueLifecycleController::observeTapeRuntimeNewCommands(ChunkSlot& payload,
+    std::size_t firstCommand, std::size_t priorTailDraws) const noexcept {
+  if (!submissionBinding_.tapeRuntimeObserver ||
+      !submissionBinding_.tapeRuntimeObserver->enabled()) return;
+  const auto fail = [&] {
+    const auto sink = submissionBinding_.tapeRuntimeObserver->proxy();
+    if (sink) sink.fn(sink.context, {.edge = ::dxmt9::render::TapeRuntimeEdge::Failed});
+  };
+  if (firstCommand > payload.commandCount()) { fail(); return; }
+  // A compatible batch can extend the existing physical tail without adding
+  // a command header. Observe only its actual new subdraw suffix, once.
+  if (firstCommand && priorTailDraws) {
+    const auto tail = SourcePayloadView(payload).commandAt(firstCommand - 1u).command;
+    if (tail.kind != MetalCommandKind::DrawRun || tail.drawParams.size() < priorTailDraws ||
+        tail.drawParams.size() > UINT32_MAX || firstCommand - 1u > UINT32_MAX) {
+      fail(); return;
+    }
+    if (tail.drawParams.size() != priorTailDraws)
+      observeTapeRuntimeAppend(payload, static_cast<std::uint32_t>(firstCommand - 1u),
+          static_cast<std::uint32_t>(priorTailDraws),
+          static_cast<std::uint32_t>(tail.drawParams.size() - priorTailDraws));
+  }
+  for (std::size_t index = firstCommand; index < payload.commandCount(); ++index) {
+    const auto command = SourcePayloadView(payload).commandAt(index).command;
+    const bool draw = command.kind == MetalCommandKind::DrawRun;
+    if (index > UINT32_MAX || (draw && (!command.drawParams.size() ||
+                                      command.drawParams.size() > UINT32_MAX))) {
+      fail(); return;
+    }
+    observeTapeRuntimeAppend(payload, static_cast<std::uint32_t>(index), 0u,
+        draw ? static_cast<std::uint32_t>(command.drawParams.size()) : 0u);
+  }
+}
+
 bool QueueLifecycleController::retainPoisonedCompatibilityOwner(
     DetachedCompatibilityOwnerToken&& token) noexcept {
   if (!token.valid()) return false;
@@ -3814,6 +3884,24 @@ bool QueueLifecycleController::commitCurrentChunk(
     // the control slot becomes visible to the encode worker. The nullable
     // check is publication-scoped; no receipt storage or metadata lookup is
     // touched when the capture seam is disconnected.
+    const auto tapeSink = submissionBinding_.tapeRuntimeObserver
+        ? submissionBinding_.tapeRuntimeObserver->proxy()
+        : ::dxmt9::render::TapeRuntimeObserverSink{};
+    if (tapeSink) {
+      const auto source = CpuReadyTape::SourceRef{
+          .id = slot.sourceId, .storage = slot.storage};
+      tapeSink.fn(tapeSink.context, {
+          .edge = ::dxmt9::render::TapeRuntimeEdge::Publish,
+          .writer = {submissionBinding_.queryQueueIdentity, slot.sourceId.index,
+              slot.sourceId.generation, slot.storage.generation},
+          .source = source,
+          .metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
+              source.id, source.storage, CpuReadyTape::State::Ready)
+                  .value_or(CpuReadySourceMetadata{}),
+          .payload = SourcePayloadView(*writingPayload),
+          .controlIndex = publishedSlotIndex,
+          .sequence = slot.seqId});
+    }
     const auto replaySourceSink =
         submissionBinding_.replaySourcePublicationSink;
     if (replaySourceSink.fn) {
@@ -4644,6 +4732,11 @@ bool QueueLifecycleController::runEncodeIteration(
         return false;
       }
     }
+    if (submissionBinding_.tapeRuntimeObserver && submissionBinding_.tapeRuntimeObserver->enabled()) {
+      const auto completionSource = completionSourceForReadySlot(source);
+      ::dxmt9::render::registerTapeTopologyCompletionSources(
+          submissionBinding_.tapeRuntimeObserver->acquireCapture(), std::span(&completionSource, 1u));
+    }
     if (!enqueueSubmission(*submission)) {
       dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/submit",
                                             qmxEnabled, qmxSegStart);
@@ -4836,6 +4929,10 @@ bool QueueLifecycleController::completeInlineChunk(
     if (!completedInline) {
       poisonTapeFailureLocked();
       return;
+    }
+    if (submissionBinding_.tapeRuntimeObserver && submissionBinding_.tapeRuntimeObserver->enabled()) {
+      ::dxmt9::render::observeTapeTopologyInlineTerminal(
+          submissionBinding_.tapeRuntimeObserver->acquireCapture(), {source, seqId, 0u, 0u});
     }
     if (directLifecycleProjectionEnabled) {
       observeDirectLifecycleForSourceLocked(
@@ -6337,9 +6434,22 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   }
   if (!record.commandBuffer) {
     // The null-CB path is admitted only by the explicit native test fixture.
-    std::lock_guard lock(pendingCompletionMutex_);
-    querySubmittedPrefixSeqId_ = std::max(querySubmittedPrefixSeqId_,
-                                         completionSources.back().seqId);
+    {
+      std::lock_guard lock(pendingCompletionMutex_);
+      querySubmittedPrefixSeqId_ = std::max(querySubmittedPrefixSeqId_,
+                                           completionSources.back().seqId);
+    }
+    const auto tapeSubmitSink = submissionBinding_.tapeRuntimeObserver
+        ? submissionBinding_.tapeRuntimeObserver->proxy()
+        : ::dxmt9::render::TapeRuntimeObserverSink{};
+    if (tapeSubmitSink) {
+      for (const auto& source : completionSources) {
+        tapeSubmitSink.fn(tapeSubmitSink.context, {
+            .edge = ::dxmt9::render::TapeRuntimeEdge::Submit,
+            .source = source.source,
+            .sequence = source.seqId});
+      }
+    }
     return true;
   }
 
@@ -6414,6 +6524,17 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   // the same Metal queue.
   recordNoEnqueueWaitGapToCommandBufferCommit();
   commitCommandBuffer();
+  const auto tapeSubmitSink = binding.tapeRuntimeObserver
+      ? binding.tapeRuntimeObserver->proxy()
+      : ::dxmt9::render::TapeRuntimeObserverSink{};
+  if (tapeSubmitSink) {
+    for (const auto& source : completionSources) {
+      tapeSubmitSink.fn(tapeSubmitSink.context, {
+          .edge = ::dxmt9::render::TapeRuntimeEdge::Submit,
+          .source = source.source,
+          .sequence = source.seqId});
+    }
+  }
   if (binding.schedulingProgressWatchdog) {
     for (const auto& source : completionSources) {
       binding.schedulingProgressWatchdog->noteSubmitted(
@@ -6865,6 +6986,20 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     // Waterline/Tape completion has settled successfully at this point. Keep
     // the timeline edge after all validation and settlement so it cannot turn
     // a status sample or an early callback into GPU completion evidence.
+    const auto tapeCompletionSink = binding.tapeRuntimeObserver
+        ? binding.tapeRuntimeObserver->proxy()
+        : ::dxmt9::render::TapeRuntimeObserverSink{};
+    if (tapeCompletionSink) {
+      for (const auto& source : completionSources) {
+        tapeCompletionSink.fn(tapeCompletionSink.context, {
+            .edge = completionSucceeded
+                ? ::dxmt9::render::TapeRuntimeEdge::Complete
+                : ::dxmt9::render::TapeRuntimeEdge::Failed,
+            .source = source.source,
+            .sequence = source.seqId,
+            .completedSequence = completionSources.back().seqId});
+      }
+    }
     if (query::timeline_diag::enabled()) {
       for (const auto& source : completionSources) {
         query::timeline_diag::completion(

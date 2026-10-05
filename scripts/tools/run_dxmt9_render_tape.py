@@ -32,10 +32,19 @@ EVENTS_NAME = "events.bin"
 IDENTITY_NAME = "identity.bin"
 IDENTITY_SCHEMA = "dxmt9.render_tape.identity.v2"
 IDENTITY_V3_SCHEMA = "dxmt9.render_tape.identity.v3"
-IDENTITY_SCHEMAS = {2: IDENTITY_SCHEMA, 3: IDENTITY_V3_SCHEMA}
+IDENTITY_V4_SCHEMA = "dxmt9.render_tape.identity.v4"
+IDENTITY_SCHEMAS = {2: IDENTITY_SCHEMA, 3: IDENTITY_V3_SCHEMA, 4: IDENTITY_V4_SCHEMA}
+EXECUTION_TOPOLOGY_NAME = "execution_topology.bin"
+EXECUTION_TOPOLOGY_SCHEMA = "dxmt9.render_tape.execution_topology.v1"
+ACTION_PROFILE_NAME = "action_profile.bin"
+ACTION_PROFILE_SCHEMA = "dxmt9.render_tape.action_profile.v1"
+ACTION_PROFILE_MAGIC = b"DXMTRAP1"
+ACTION_PROFILE_HEADER = struct.Struct("<8sII6I5Q3Q32s32s32s")
+IDENTITY_V4_BINDING_PREFIX = struct.Struct("<Q24xQ32xIIQQ")
+IDENTITY_V4_COORDINATOR_BYTES = 208
 IDENTITY_MAGIC = 0x31444954544D5844
-# Only the schema-independent dispatch prefix is decoded here. The native
-# validator owns all table extents, record grammar and authenticated evidence.
+# Dispatch and optional action-profile key joins decode bounded header prefixes
+# only. The native validator owns table extents, record grammar and row evidence.
 IDENTITY_DISPATCH_PREFIX = struct.Struct("<Q64xII")
 MAX_REPLAY_RUNS = 64
 PARALLEL_VERIFY_RUNS = 2
@@ -98,7 +107,13 @@ def identity_binary_schema(identity: pathlib.Path) -> str:
 
 
 def require_execution_identity(identity: pathlib.Path) -> None:
-    if identity_binary_schema(identity) != IDENTITY_SCHEMA:
+    schema = identity_binary_schema(identity)
+    if schema == IDENTITY_V4_SCHEMA:
+        raise SystemExit(
+            "identity v4 is inspection-only; execution and policy transforms "
+            "require an implemented V4 executor"
+        )
+    if schema != IDENTITY_SCHEMA:
         raise SystemExit(
             "identity v3 is inspection-only; execution and policy transforms "
             "require identity v2"
@@ -130,6 +145,8 @@ def guard_execution_bundle_before_staging(bundle: pathlib.Path) -> None:
     if not isinstance(component, dict):
         return
     if component.get("schema") != IDENTITY_SCHEMA:
+        if component.get("schema") == IDENTITY_V4_SCHEMA:
+            raise SystemExit("identity v4 is inspection-only; V4 execution is not enabled")
         raise SystemExit(
             "execution and policy transforms require identity v2; "
             "identity v3 is inspection-only"
@@ -367,9 +384,16 @@ def run_identity_validator(
     events: pathlib.Path,
     identity: pathlib.Path,
     blob_refs: list[str],
+    *, execution_topology: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     schema = identity_binary_schema(identity)
+    if schema == IDENTITY_V4_SCHEMA and execution_topology is None:
+        raise SystemExit("render tape identity v4 requires execution topology companion")
+    if schema != IDENTITY_V4_SCHEMA and execution_topology is not None:
+        raise SystemExit("render tape orphan execution topology requires identity v4")
     arguments = [str(validator), "identity", str(events), str(identity)]
+    if execution_topology is not None:
+        arguments.extend(("--execution-topology", str(execution_topology)))
     for reference in blob_refs:
         arguments.extend(("--verified-blob", reference))
     completed = subprocess.run(arguments, check=False, text=True, capture_output=True)
@@ -384,12 +408,74 @@ def run_identity_validator(
         raise SystemExit("render tape identity validator schema does not match binary")
     if result.get("valid") is not True:
         raise SystemExit("render tape identity validator did not authenticate identity")
-    if schema == IDENTITY_V3_SCHEMA and (
+    if schema in (IDENTITY_V3_SCHEMA, IDENTITY_V4_SCHEMA) and (
         result.get("inspection_only") is not True
         or result.get("execution_supported") is not False
         or result.get("production_qualified") is not False
     ):
-        raise SystemExit("render tape identity v3 validator returned unsafe scope")
+        version = 4 if schema == IDENTITY_V4_SCHEMA else 3
+        raise SystemExit(f"render tape identity v{version} validator returned unsafe scope")
+    if schema == IDENTITY_V4_SCHEMA:
+        header = result.get("header")
+        topology = result.get("execution_topology")
+        topology_header = topology.get("header") if isinstance(topology, dict) else None
+        if (result.get("pair_valid") is not True
+                or not isinstance(header, dict)
+                or not isinstance(topology, dict)
+                or topology.get("schema") != EXECUTION_TOPOLOGY_SCHEMA
+                or topology.get("valid") is not True
+                or not isinstance(topology_header, dict)
+                or header.get("version") != 4
+                or header.get("required_execution_topology_version") != 1
+                or topology_header.get("version") != 1):
+            raise SystemExit("render tape identity v4 validator did not authenticate the complete pair")
+        expected_binding = {
+            "identity_bytes": str(identity.stat().st_size),
+            "events_bytes": str(events.stat().st_size),
+            "identity_digest": digest(identity),
+            "events_digest": digest(events),
+        }
+        if (any(topology_header.get(key) != value for key, value in expected_binding.items())
+                or header.get("events_bytes") != expected_binding["events_bytes"]
+                or header.get("events_digest") != expected_binding["events_digest"]):
+            raise SystemExit("render tape identity v4 validator pair binding mismatch")
+        for key in ("capture_token", "capture_epoch", "queue"):
+            value = header.get(key)
+            if (not isinstance(value, str) or re.fullmatch(r"[1-9][0-9]*", value) is None
+                    or len(value) > 20 or int(value) > 0xffffffffffffffff
+                    or topology_header.get(key) != value):
+                raise SystemExit("render tape identity v4 validator capture binding mismatch")
+        # V4's authority is explicit evidence, not V3 release fields with a new
+        # interpretation. The native validator owns its semantic admission;
+        # require its typed inspection contract rather than accepting an old
+        # flat/unversioned response during paired packing.
+        coordinator_table = header.get("coordinators")
+        coordinators = result.get("coordinators")
+        if (header.get("header_size") != 264
+                or type(header.get("coordinator_domain")) is not int
+                or header["coordinator_domain"] not in (1, 2)
+                or type(header.get("reserved4")) is not int
+                or header["reserved4"] != 0
+                or not isinstance(coordinator_table, dict)
+                or coordinator_table.get("entry_size") != IDENTITY_V4_COORDINATOR_BYTES
+                or not isinstance(coordinators, list)
+                or coordinator_table.get("count") != len(coordinators)):
+            raise SystemExit("render tape identity v4 validator omitted typed coordinator evidence")
+        for row in coordinators:
+            if (not isinstance(row, dict)
+                    or set(row) != {"provenance", "admission_edge", "authority", "reserved0"}
+                    or not isinstance(row.get("provenance"), dict)
+                    or type(row.get("authority")) is not int
+                    or row["authority"] != header["coordinator_domain"]
+                    or type(row.get("reserved0")) is not int
+                    or row["reserved0"] != 0):
+                raise SystemExit("render tape identity v4 validator omitted typed coordinator evidence")
+            edge = row.get("admission_edge")
+            if (not isinstance(edge, str) or re.fullmatch(r"0|[1-9][0-9]*", edge) is None
+                    or len(edge) > 20 or int(edge) > 0xffffffffffffffff
+                    or (row["authority"] == 1 and edge != "0")
+                    or (row["authority"] == 2 and edge == "0")):
+                raise SystemExit("render tape identity v4 validator omitted typed coordinator evidence")
     return result
 
 
@@ -719,6 +805,10 @@ def producer_revision() -> str:
 def pack(args: argparse.Namespace) -> int:
     events = args.events.resolve()
     identity_source = args.identity.resolve() if args.identity else None
+    topology_input = getattr(args, "execution_topology", None)
+    topology_source = topology_input.resolve() if topology_input else None
+    if topology_source is not None and identity_source is None:
+        raise SystemExit("render tape orphan execution topology requires identity v4")
     output_source = args.output_rgba.resolve() if args.output_rgba else None
     source_oracle_source = (
         args.source_rgba.resolve() if args.source_rgba else None
@@ -742,7 +832,8 @@ def pack(args: argparse.Namespace) -> int:
     identity_schema = None
     if identity_source is not None:
         identity_result = run_identity_validator(
-            args.validator, events, identity_source, blob_refs
+            args.validator, events, identity_source, blob_refs,
+            execution_topology=topology_source,
         )
         identity_schema = identity_result["schema"]
     if output_source is not None:
@@ -808,12 +899,23 @@ def pack(args: argparse.Namespace) -> int:
         if identity_source is not None:
             identity_target = staging / IDENTITY_NAME
             copy_flushed(identity_source, identity_target)
-            if identity_schema == IDENTITY_V3_SCHEMA:
+            topology_target = None
+            if topology_source is not None:
+                topology_target = staging / EXECUTION_TOPOLOGY_NAME
+                copy_flushed(topology_source, topology_target)
+            if identity_schema in (IDENTITY_V3_SCHEMA, IDENTITY_V4_SCHEMA):
                 # The inspection-only component is still authenticated: a
                 # producer changing either input during copy cannot publish a
                 # sidecar validated against different event bytes.
+                if identity_schema == IDENTITY_V4_SCHEMA:
+                    for component in blob_components:
+                        copied_blob = staging / component["path"]
+                        if (copied_blob.stat().st_size != component["bytes"]
+                                or digest(copied_blob) != component["sha256"]):
+                            raise SystemExit("render tape blob changed during paired packing")
                 staged_identity = run_identity_validator(
-                    args.validator, destination, identity_target, blob_refs
+                    args.validator, destination, identity_target, blob_refs,
+                    execution_topology=topology_target,
                 )
                 if staged_identity["schema"] != identity_schema:
                     raise SystemExit("render tape identity schema changed during packing")
@@ -823,6 +925,13 @@ def pack(args: argparse.Namespace) -> int:
                 "bytes": identity_target.stat().st_size,
                 "sha256": digest(identity_target),
             }
+            if topology_target is not None:
+                manifest["components"]["execution_topology"] = {
+                    "path": EXECUTION_TOPOLOGY_NAME,
+                    "schema": EXECUTION_TOPOLOGY_SCHEMA,
+                    "bytes": topology_target.stat().st_size,
+                    "sha256": digest(topology_target),
+                }
         if output_source is not None:
             output_target = staging / "output.rgba"
             copy_flushed(output_source, output_target)
@@ -848,9 +957,102 @@ def pack(args: argparse.Namespace) -> int:
     return 0
 
 
+def load_action_profile(bundle: pathlib.Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Authenticate observed queue evidence without upgrading execution scope."""
+    components = manifest["components"]
+    present = "action_profile" in components
+    result: dict[str, Any] = {
+        "present": present, "evidence": "legacy-unknown", "stable_exact": False, "witness": None,
+    }
+    if present:
+        identity_component = components.get("identity")
+        topology_component = components.get("execution_topology")
+        if (not isinstance(identity_component, dict)
+                or identity_component.get("schema") != IDENTITY_V4_SCHEMA
+                or not isinstance(topology_component, dict)):
+            raise SystemExit("render tape orphan action profile requires identity v4 and execution topology")
+        component = components["action_profile"]
+        if not isinstance(component, dict):
+            raise SystemExit("render tape components.action_profile must be an object")
+        if component.get("path") != ACTION_PROFILE_NAME:
+            raise SystemExit("render tape action profile path must be canonical: action_profile.bin")
+        if component.get("schema") != ACTION_PROFILE_SCHEMA:
+            raise SystemExit("render tape action profile schema is unsupported")
+        root = bundle.resolve()
+        path = root / ACTION_PROFILE_NAME
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit("render tape action profile component is missing or not a plain file")
+        if (type(component.get("bytes")) is not int
+                or component["bytes"] != ACTION_PROFILE_HEADER.size
+                or path.stat().st_size != ACTION_PROFILE_HEADER.size):
+            raise SystemExit("render tape action profile size mismatch; exact 200-byte header required")
+        with path.open("rb") as stream:
+            raw = stream.read(ACTION_PROFILE_HEADER.size + 1)
+        if len(raw) != ACTION_PROFILE_HEADER.size:
+            raise SystemExit("render tape action profile size changed during authentication")
+        claimed_digest = component.get("sha256")
+        if (not isinstance(claimed_digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", claimed_digest) is None
+                or hashlib.sha256(raw).hexdigest() != claimed_digest):
+            raise SystemExit("render tape action profile digest mismatch")
+        (magic, version, header_size, witness_version, evidence, construction_profile,
+         arm_profile, freeze_profile, reserved, token, epoch, queue, arm_revision,
+         freeze_revision, events_bytes, identity_bytes, topology_bytes,
+         events_digest, identity_digest, topology_digest) = ACTION_PROFILE_HEADER.unpack(raw)
+        if magic != ACTION_PROFILE_MAGIC or version != 1 or header_size != ACTION_PROFILE_HEADER.size:
+            raise SystemExit("render tape action profile header is unsupported")
+        if not events_bytes or not identity_bytes or not topology_bytes:
+            raise SystemExit("render tape action profile component sizes must be nonzero")
+        if (witness_version != 1 or evidence != 1 or reserved != 0 or not token or not epoch or not queue
+                or construction_profile not in (0, 1) or arm_profile not in (0, 1)
+                or freeze_profile not in (0, 1) or freeze_revision < arm_revision
+                or (construction_profile ^ arm_profile) != (arm_revision & 1)
+                or (construction_profile ^ freeze_profile) != (freeze_revision & 1)
+                or (freeze_revision == arm_revision and arm_profile != freeze_profile)
+                or (arm_revision == 0 and construction_profile != arm_profile)):
+            raise SystemExit("render tape action profile witness is inconsistent or lacks queue-observed binding")
+        identity_path = root / IDENTITY_NAME
+        with identity_path.open("rb") as stream:
+            identity_prefix = stream.read(IDENTITY_V4_BINDING_PREFIX.size)
+        if len(identity_prefix) != IDENTITY_V4_BINDING_PREFIX.size:
+            raise SystemExit("render tape action profile identity binding header is truncated")
+        identity_magic, identity_token, identity_version, identity_header_size, identity_epoch, identity_queue = \
+            IDENTITY_V4_BINDING_PREFIX.unpack(identity_prefix)
+        if (identity_magic != IDENTITY_MAGIC or identity_version != 4 or identity_header_size != 264
+                or (token, epoch, queue) != (identity_token, identity_epoch, identity_queue)):
+            raise SystemExit("render tape action profile capture binding mismatch")
+        for name, filename, size, bound_digest in (
+            ("events", EVENTS_NAME, events_bytes, events_digest),
+            ("identity", IDENTITY_NAME, identity_bytes, identity_digest),
+            ("execution_topology", EXECUTION_TOPOLOGY_NAME, topology_bytes, topology_digest),
+        ):
+            bound_path = root / filename
+            if bound_path.stat().st_size != size or digest(bound_path) != bound_digest.hex():
+                raise SystemExit(f"render tape action profile {name} binding mismatch")
+        result.update(evidence="queue-observed", stable_exact=(
+            construction_profile == arm_profile == freeze_profile == 1
+            and arm_revision == freeze_revision == 0), witness={
+                "version": witness_version, "evidence": evidence,
+                "construction_profile": construction_profile, "arm_profile": arm_profile,
+                "freeze_profile": freeze_profile, "reserved": reserved,
+                "capture_token": str(token), "capture_epoch": str(epoch), "queue": str(queue),
+                "arm_revision": str(arm_revision), "freeze_revision": str(freeze_revision),
+            })
+    scope = manifest.get("scope", {})
+    if not isinstance(scope, dict):
+        raise SystemExit("render tape action profile scope must be an object")
+    for field, expected in (("capture_action_profile", result["evidence"]),
+                            ("action_profile_stable_exact", result["stable_exact"])):
+        if present and field not in scope:
+            raise SystemExit(f"render tape action profile requires scope.{field}")
+        if field in scope and (type(scope[field]) is not type(expected) or scope[field] != expected):
+            raise SystemExit(f"render tape action profile contradicts scope.{field}")
+    return result
+
+
 def load_bundle(
     bundle: pathlib.Path,
-    *, allow_identity_v3: bool = False,
+    *, allow_identity_v3: bool = False, allow_identity_v4: bool = False,
 ) -> tuple[
     dict[str, Any], pathlib.Path, list[str], list[pathlib.Path],
     Optional[pathlib.Path], Optional[pathlib.Path]
@@ -864,6 +1066,14 @@ def load_bundle(
         raise SystemExit(f"unsupported render tape bundle schema: {manifest.get('schema')}")
     if manifest.get("profile") not in ("frame-tape", "sequence-tape"):
         raise SystemExit(f"unsupported render tape profile: {manifest.get('profile')}")
+    components = manifest.get("components")
+    if not isinstance(components, dict):
+        raise SystemExit("render tape components must be an object")
+    unknown_components = set(components) - {
+        "events", "blobs", "identity", "execution_topology", "action_profile", "output_oracle", "source_oracle",
+    }
+    if unknown_components:
+        raise SystemExit(f"render tape unknown components: {sorted(unknown_components)}")
     component = manifest.get("components", {}).get("events")
     if not isinstance(component, dict) or component.get("path") != EVENTS_NAME:
         raise SystemExit("render tape bundle must declare components.events.path=events.bin")
@@ -1013,6 +1223,8 @@ def load_bundle(
                 "identity v3 is inspection-only; execution and policy transforms "
                 "require identity v2"
             )
+        if schema == IDENTITY_V4_SCHEMA and not allow_identity_v4:
+            raise SystemExit("identity v4 is inspection-only; V4 execution is not enabled")
         claimed_digest = identity.get("sha256")
         if (
             not isinstance(claimed_digest, str)
@@ -1030,6 +1242,30 @@ def load_bundle(
             raise SystemExit("render tape identity digest mismatch")
         if identity_binary_schema(identity_path) != schema:
             raise SystemExit("render tape identity manifest schema does not match binary")
+    topology = components.get("execution_topology")
+    identity_is_v4 = isinstance(identity, dict) and identity.get("schema") == IDENTITY_V4_SCHEMA
+    if identity_is_v4 and topology is None:
+        raise SystemExit("render tape identity v4 requires execution topology companion")
+    if not identity_is_v4 and "execution_topology" in components:
+        raise SystemExit("render tape orphan execution topology requires identity v4")
+    if topology is not None:
+        if not isinstance(topology, dict):
+            raise SystemExit("render tape components.execution_topology must be an object")
+        if topology.get("path") != EXECUTION_TOPOLOGY_NAME:
+            raise SystemExit("render tape execution topology path must be canonical: execution_topology.bin")
+        if topology.get("schema") != EXECUTION_TOPOLOGY_SCHEMA:
+            raise SystemExit("render tape execution topology schema is unsupported")
+        topology_path = manifest_path.parent / EXECUTION_TOPOLOGY_NAME
+        if not topology_path.is_file():
+            raise SystemExit(f"render tape execution topology component is missing: {topology_path}")
+        if topology.get("bytes") != topology_path.stat().st_size:
+            raise SystemExit("render tape execution topology size mismatch")
+        claimed_digest = topology.get("sha256")
+        if (not isinstance(claimed_digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", claimed_digest) is None
+                or digest(topology_path) != claimed_digest):
+            raise SystemExit("render tape execution topology digest mismatch")
+    load_action_profile(manifest_path.parent, manifest)
     allowed = {"manifest.json", EVENTS_NAME}
     if blobs_directory.exists():
         allowed.add("blobs")
@@ -1039,6 +1275,10 @@ def load_bundle(
         allowed.add("source.rgba")
     if identity_path is not None:
         allowed.add(IDENTITY_NAME)
+    if topology is not None:
+        allowed.add(EXECUTION_TOPOLOGY_NAME)
+    if "action_profile" in components:
+        allowed.add(ACTION_PROFILE_NAME)
     actual = {path.name for path in manifest_path.parent.iterdir()}
     if actual != allowed:
         raise SystemExit(
@@ -1179,18 +1419,21 @@ def inspect_bundle_commands(
 
 def validate_or_inspect(args: argparse.Namespace) -> int:
     manifest, events, blob_refs, _, identity, _source = load_bundle(
-        args.bundle, allow_identity_v3=True
+        args.bundle, allow_identity_v3=True, allow_identity_v4=True
     )
     identity_result = None
     if identity is not None:
         identity_result = run_identity_validator(
-            args.validator, events, identity, blob_refs
+            args.validator, events, identity, blob_refs,
+            execution_topology=(events.parent / EXECUTION_TOPOLOGY_NAME
+                if manifest["components"]["identity"]["schema"] == IDENTITY_V4_SCHEMA else None),
         )
     result = run_validator(args.validator, args.command, events, blob_refs)
     result["bundle_schema"] = manifest["schema"]
     result["events_sha256"] = manifest["components"]["events"]["sha256"]
     result["scope"] = manifest.get("scope", {})
-    if identity_result is not None and identity_result["schema"] == IDENTITY_V3_SCHEMA:
+    result["action_profile_validation"] = load_action_profile(events.parent, manifest)
+    if identity_result is not None and identity_result["schema"] in (IDENTITY_V3_SCHEMA, IDENTITY_V4_SCHEMA):
         result["identity_validation"] = identity_result
     print(json.dumps(result, sort_keys=True))
     return 0
@@ -4997,14 +5240,63 @@ def bisect_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def v4_paired_qualify(args: argparse.Namespace) -> int:
+    import render_tape_v4_paired
+    return render_tape_v4_paired.paired_qualification(args, sys.modules.get(__name__))
+
+
+def v4_experiment(args: argparse.Namespace) -> int:
+    import render_tape_v4_experiment
+    return render_tape_v4_experiment.experiment(args, sys.modules.get(__name__))
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Pack and inspect dxmt9 Render Tape bundles")
     subparsers = value.add_subparsers(dest="command", required=True)
+    paired = subparsers.add_parser(
+        "v4-paired-qualify", help="qualify same-input V4 CPU streams and original GPU outputs",
+    )
+    paired.add_argument("--bundle", type=pathlib.Path, required=True)
+    paired.add_argument("--output-dir", type=pathlib.Path, required=True)
+    paired.add_argument("--cpu-diagnostic", type=pathlib.Path,
+                        default=pathlib.Path("build/tests/native/backend/dxmt9-cpu-ready-production-routing-spec"))
+    paired.add_argument("--gpu-diagnostic", type=pathlib.Path,
+                        default=pathlib.Path("build/tests/native/bridge/dxmt9-render-tape-v4-capture-diagnostic"))
+    paired.add_argument("--producer-contract", required=True, choices=["pe-present-reservation-v1"])
+    paired.add_argument("--buffer-preservation-contract", required=True,
+                        choices=["candidate-legal-nooverwrite-closed-writers-v1"])
+    paired.add_argument("--timeout-seconds", type=float, default=1200.0)
+    paired.add_argument("--slot-headroom-bytes", type=int,
+                        help="ProductionSlot candidate retained capacity; requires aggregate ceiling")
+    paired.add_argument("--aggregate-headroom-bytes", type=int,
+                        help="ProductionSlot candidate aggregate retained-capacity ceiling")
+    paired.add_argument("--draw-command-limit", type=int, default=0,
+                        help="Compatibility grouping candidate: 0 or 3..64 physical commands")
+    paired.set_defaults(function=v4_paired_qualify)
+    measured = subparsers.add_parser(
+        "v4-experiment", help="repeat qualified V4 controlled CPU execution without semantic observers",
+    )
+    measured.add_argument("--qualification-dir", type=pathlib.Path, required=True)
+    measured.add_argument("--output-dir", type=pathlib.Path, required=True)
+    measured.add_argument("--diagnostic", type=pathlib.Path,
+                          help="must match the qualified CPU executable; defaults to its recorded path")
+    measured.add_argument("--warmup", type=int, default=2)
+    measured.add_argument("--repeat", type=int, default=16)
+    measured.add_argument("--order", default="compatibility,production-slot",
+                          choices=["compatibility,production-slot", "production-slot,compatibility",
+                                   "compatibility,compatibility", "production-slot,production-slot"])
+    measured.add_argument("--timeout-seconds", type=float, default=3600.0)
+    measured.add_argument("--producer-contract", required=True, choices=["pe-present-reservation-v1"])
+    measured.add_argument("--buffer-preservation-contract", required=True,
+                          choices=["candidate-legal-nooverwrite-closed-writers-v1"])
+    measured.set_defaults(function=v4_experiment)
     pack_parser = subparsers.add_parser("pack", help="pack a validated v2 event tape")
     pack_parser.add_argument("--events", type=pathlib.Path, required=True)
     pack_parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     pack_parser.add_argument("--blob", type=pathlib.Path, action="append", default=[])
     pack_parser.add_argument("--identity", type=pathlib.Path)
+    pack_parser.add_argument("--execution-topology", type=pathlib.Path,
+                             help="required authenticated companion for inspection-only identity v4")
     pack_parser.add_argument("--output-rgba", type=pathlib.Path)
     pack_parser.add_argument("--source-rgba", type=pathlib.Path)
     pack_parser.add_argument(

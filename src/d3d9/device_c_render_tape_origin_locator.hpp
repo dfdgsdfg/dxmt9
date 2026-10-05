@@ -65,6 +65,12 @@ RenderTapeOriginLocator renderTapeLocateOrigin(
     const ImportedChunkView& chunk, std::uint32_t handleIndex,
     const D9CWireObjectIdentity& resolvedIdentity) noexcept;
 
+// R7.36 checks every occurrence, not the diagnostic locator's first match.
+// Descriptor/alias authority is independently established by the caller.
+bool renderTapeNullRtUsesAdmitted(const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& parentTexture = {}) noexcept;
+
 const char* renderTapeCommandRoleName(RenderTapeCommandRole role) noexcept;
 RenderTapeStorageRole renderTapeStorageRoleForCommandRole(
     RenderTapeCommandRole role) noexcept;

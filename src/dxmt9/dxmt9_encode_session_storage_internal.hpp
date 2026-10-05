@@ -84,6 +84,17 @@ struct StreamIbStagingCache {
     for (std::size_t i = 0; i < count; ++i) {
       const auto& entry = entries[i];
       if (entry.sourceHandle == sourceHandle && entry.buffer) {
+        if (auto* recorder = ctx.drawRecorder;
+            recorder && recorder->observeBufferSlice) {
+          const auto kind = indexBuffer
+              ? EncodeDrawBufferObservationKind::StagedIndexReuse
+              : EncodeDrawBufferObservationKind::StagedVertexReuse;
+          const auto reason = indexBuffer
+              ? static_cast<std::uint8_t>(ActiveEncoderBreakdown::TransientIndexSource::StagedIb)
+              : static_cast<std::uint8_t>(ActiveEncoderBreakdown::TransientVertexSource::StagedStream);
+          recorder->observeBufferSlice(recorder->userdata, kind, reason, sourceHandle,
+              std::span<const u8>{}, entry.buffer, entry.offset, static_cast<u64>(entry.size));
+        }
         return CommandQueue::TransientBufferSlice{
             .buffer = entry.buffer,
             .offset = entry.offset,
@@ -136,6 +147,17 @@ struct StreamIbStagingCache {
         .offset = slice.offset,
         .size = slice.size,
     };
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->observeBufferSlice) {
+      const auto kind = indexBuffer
+          ? EncodeDrawBufferObservationKind::StagedIndexUpload
+          : EncodeDrawBufferObservationKind::StagedVertexUpload;
+      const auto reason = indexBuffer
+          ? static_cast<std::uint8_t>(ActiveEncoderBreakdown::TransientIndexSource::StagedIb)
+          : static_cast<std::uint8_t>(ActiveEncoderBreakdown::TransientVertexSource::StagedStream);
+      recorder->observeBufferSlice(recorder->userdata, kind, reason, sourceHandle,
+          sourceBytes, slice.buffer, slice.offset, static_cast<u64>(slice.size));
+    }
     if (encoderBreakdown) {
       if (indexBuffer) {
         encoderBreakdown->addTransientIndexBytes(

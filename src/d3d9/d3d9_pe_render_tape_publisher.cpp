@@ -1,9 +1,14 @@
 #include "d3d9_pe_render_tape_publisher.hpp"
+#include "device_c_render_tape_action_profile_component.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_identity_v3.hpp"
+#include "device_c_render_tape_execution_topology_v1.hpp"
 
 #include "util/config/config.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdarg>
@@ -155,6 +160,7 @@ bool syncDirectory(const std::filesystem::path& path) noexcept {
 
 std::string hexDigest(const RenderTapeDigest& digest) {
   std::ostringstream stream;
+  stream.exceptions(std::ios::badbit | std::ios::failbit);
   stream << std::hex << std::setfill('0');
   for (const auto value : digest) {
     stream << std::setw(2)
@@ -191,7 +197,7 @@ std::string_view profilePrefix(std::uint32_t profile) noexcept {
 }
 
 bool writeBytes(const std::filesystem::path& path,
-                std::span<const std::byte> bytes) noexcept {
+                std::span<const std::byte> bytes) {
   std::ofstream stream(path, std::ios::binary | std::ios::out | std::ios::trunc);
   if (!stream) {
     return false;
@@ -204,7 +210,7 @@ bool writeBytes(const std::filesystem::path& path,
 }
 
 bool writeText(const std::filesystem::path& path,
-               std::string_view text) noexcept {
+               std::string_view text) {
   std::ofstream stream(path, std::ios::binary | std::ios::out | std::ios::trunc);
   if (!stream) {
     return false;
@@ -213,14 +219,39 @@ bool writeText(const std::filesystem::path& path,
   return flushAndCloseFile(path, stream);
 }
 
+bool writePayload(const std::filesystem::path& path,
+                  const dxmt9::d3d9::RenderTapeImmutablePayload& payload) {
+  std::ofstream stream(path, std::ios::binary | std::ios::out | std::ios::trunc);
+  if (!stream) return false;
+  std::array<std::byte, 64u * 1024u> window;
+  std::uint64_t offset = 0u;
+  while (offset < payload.size()) {
+    const auto count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(window.size(), payload.size() - offset));
+    const auto bytes = std::span(window).first(count);
+    if (!payload.readAt(offset, bytes)) return false;
+    stream.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    if (!stream) return false;
+    offset += count;
+  }
+  return flushAndCloseFile(path, stream);
+}
+
 std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view eventDigest,
                         std::span<const std::string> blobDigests,
                         std::string_view identityDigest,
+                        std::string_view executionTopologyDigest,
+                        std::string_view actionProfileDigest,
                         std::string_view outputOracleDigest,
-                        std::string_view sourceOracleDigest) {
+                        std::string_view sourceOracleDigest,
+                        std::string_view identitySchema) {
   const auto profile = sealedProfile(bundle.events);
   std::ostringstream manifest;
+  // Formatted insertion can swallow allocation failure into badbit. A partial
+  // string is not a manifest: propagate failure to the staging rollback.
+  manifest.exceptions(std::ios::badbit | std::ios::failbit);
   manifest << "{\n"
            << "  \"schema\":\"" << kBundleSchema << "\",\n"
            << "  \"profile\":\"" << profileName(profile) << "\",\n"
@@ -246,9 +277,21 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
   manifest << ']';
   if (!bundle.identity.empty()) {
     manifest << ",\n    \"identity\":{\"path\":\"identity.bin\","
-                "\"schema\":\"dxmt9.render_tape.identity.v2\",\"bytes\":"
+                "\"schema\":\"" << identitySchema << "\",\"bytes\":"
              << bundle.identity.size() << ",\"sha256\":\""
              << identityDigest << "\"}";
+  }
+  if (!bundle.executionTopology.empty()) {
+    manifest << ",\n    \"execution_topology\":{\"path\":\"execution_topology.bin\","
+                "\"schema\":\"" << dxmt9::d3d9::kRenderTapeExecutionTopologyV1Schema
+             << "\",\"bytes\":" << bundle.executionTopology.size() << ",\"sha256\":\""
+             << executionTopologyDigest << "\"}";
+  }
+  if (!actionProfileDigest.empty()) {
+    manifest << ",\n    \"action_profile\":{\"path\":\"action_profile.bin\","
+                "\"schema\":\"" << dxmt9::d3d9::kRenderTapeActionProfileV1Schema
+             << "\",\"bytes\":" << dxmt9::d3d9::kRenderTapeActionProfileV1Bytes
+             << ",\"sha256\":\"" << actionProfileDigest << "\"}";
   }
   if (!bundle.outputOracle.empty()) {
     manifest << ",\n    \"output_oracle\":{\"path\":\"output.rgba\",\"bytes\":"
@@ -263,7 +306,14 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
   manifest << "\n  },\n"
            << "  \"scope\":{\"production_capture\":true,"
               "\"production_provider_replay\":false,"
-              "\"output_oracle\":"
+              "\"capture_action_profile\":\""
+           << (bundle.actionWitness.evidence == static_cast<std::uint32_t>(
+                   dxmt9::d3d9::RenderTapeActionWitnessEvidenceV1::QueueObserved)
+                   ? "queue-observed" : "legacy-unknown")
+           << "\",\"action_profile_stable_exact\":"
+           << (dxmt9::d3d9::renderTapeActionWitnessV1StableExact(bundle.actionWitness)
+                   ? "true" : "false")
+           << ",\"output_oracle\":"
            << (!bundle.outputOracle.empty() ? "true" : "false")
            << ",\"source_oracle\":"
            << (!bundle.sourceOracle.empty() ? "true" : "false") << "}\n"
@@ -272,6 +322,25 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
 }
 
 std::atomic<std::uint64_t> nextTapeId{1u};
+
+// Armed only after an exclusive staging-directory creation. Exceptions in
+// manifest/path allocation must not leave a claimable half-written pair; an
+// existing collision or successfully renamed final directory is never owned.
+class PublicationStagingGuard {
+public:
+  explicit PublicationStagingGuard(const std::filesystem::path& path) noexcept : path_(path) {}
+  ~PublicationStagingGuard() noexcept {
+    if (!active_) return;
+    try {
+      std::error_code error;
+      std::filesystem::remove_all(path_, error);
+    } catch (...) {}
+  }
+  void committed() noexcept { active_ = false; }
+private:
+  const std::filesystem::path& path_;
+  bool active_ = true;
+};
 
 bool publishDefault(const RenderTapePublicationBundle& bundle) noexcept {
   const auto root = outputRoot();
@@ -316,6 +385,10 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
         sealedProfile(bundle.events) == 0u) {
       return reject("input");
     }
+    if (!dxmt9::d3d9::renderTapeActionWitnessV1Valid(bundle.actionWitness))
+      return reject("action_witness_shape");
+    const bool observedAction = bundle.actionWitness.evidence == static_cast<std::uint32_t>(
+        dxmt9::d3d9::RenderTapeActionWitnessEvidenceV1::QueueObserved);
 
     std::error_code error;
     if (!existingPathIsSafeDirectory(root)) {
@@ -338,17 +411,93 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
       }
       blobDigests.push_back(actualDigest);
     }
-    const auto eventDigest =
-        hexDigest(RenderTapeCaptureSession::sha256(bundle.events));
+    const auto eventSha256 = RenderTapeCaptureSession::sha256(bundle.events);
+    const auto identitySha256 = bundle.identity.empty()
+        ? RenderTapeDigest{} : RenderTapeCaptureSession::sha256(bundle.identity);
+    const auto executionTopologySha256 = bundle.executionTopology.empty()
+        ? RenderTapeDigest{} : RenderTapeCaptureSession::sha256(bundle.executionTopology);
+    const auto eventDigest = hexDigest(eventSha256);
     const auto identityDigest = bundle.identity.empty()
         ? std::string{}
-        : hexDigest(RenderTapeCaptureSession::sha256(bundle.identity));
+        : hexDigest(identitySha256);
+    const auto executionTopologyDigest = bundle.executionTopology.empty()
+        ? std::string{}
+        : hexDigest(executionTopologySha256);
     const auto outputOracleDigest = bundle.outputOracle.empty()
         ? std::string{}
         : hexDigest(RenderTapeCaptureSession::sha256(bundle.outputOracle));
     const auto sourceOracleDigest = bundle.sourceOracle.empty()
         ? std::string{}
         : hexDigest(RenderTapeCaptureSession::sha256(bundle.sourceOracle));
+
+    // Dispatch only by the common prefix; the selected complete validator
+    // authenticates all remaining bytes. V4 requires its exact topology pair;
+    // no companion belongs to older or absent identity. These capture proofs
+    // do not qualify provider execution or query/GPU result bytes.
+    std::string_view identitySchema;
+    std::array<std::byte, dxmt9::d3d9::kRenderTapeActionProfileV1Bytes> actionProfileBytes{};
+    if (bundle.identity.empty() && !bundle.executionTopology.empty())
+      return reject("orphan_execution_topology");
+    if (!bundle.identity.empty()) {
+      using namespace dxmt9::d3d9;
+      constexpr auto versionOffset = offsetof(RenderTapeIdentityV3Header, version);
+      static_assert(versionOffset == offsetof(RenderTapeIdentityHeader, version));
+      static_assert(versionOffset == offsetof(RenderTapeIdentityV4Header, version));
+      if (bundle.identity.size() < versionOffset + sizeof(std::uint32_t))
+        return reject("identity_header");
+      std::uint32_t version = 0u;
+      std::memcpy(&version, bundle.identity.data() + versionOffset, sizeof(version));
+      RenderTapeBlobCatalogue catalogue;
+      for (const auto& blob : bundle.blobs)
+        catalogue.blobs.push_back({.digest = blob.digest,
+            .size = blob.bytes.size(), .verified = 1u});
+      if (version == kRenderTapeIdentityV4Version) {
+        if (bundle.executionTopology.empty()) return reject("missing_execution_topology");
+        RenderTapeIdentityV4View view;
+        if (validateRenderTapeIdentityV4(bundle.events, catalogue, bundle.identity,
+                &view, true) != RenderTapeIdentityV4Status::Valid)
+          return reject("identity_v4_validation");
+        if (validateRenderTapeExecutionTopologyV1(bundle.events, catalogue,
+                bundle.identity, bundle.executionTopology) != RenderTapeExecutionTopologyV1Status::Valid)
+          return reject("execution_topology_v1_validation");
+        identitySchema = kRenderTapeIdentityV4Schema;
+        if (observedAction) {
+          const RenderTapeActionProfileV1ComponentHeader actionProfile{
+              .witness = bundle.actionWitness,
+              .eventsBytes = bundle.events.size(),
+              .identityBytes = bundle.identity.size(),
+              .executionTopologyBytes = bundle.executionTopology.size(),
+              .eventsDigest = eventSha256,
+              .identityDigest = identitySha256,
+              .executionTopologyDigest = executionTopologySha256};
+          if (!renderTapeActionProfileV1ComponentMatchesBinding(actionProfile,
+                  view.header.captureToken, view.header.captureEpoch, view.header.queue,
+                  bundle.events.size(), bundle.identity.size(), bundle.executionTopology.size(),
+                  eventSha256, identitySha256, executionTopologySha256) ||
+              !encodeRenderTapeActionProfileV1Component(actionProfile, actionProfileBytes))
+            return reject("action_witness_binding");
+        }
+      } else if (version == kRenderTapeIdentityV3Version) {
+        if (!bundle.executionTopology.empty()) return reject("orphan_execution_topology");
+        RenderTapeIdentityV3View view;
+        if (validateRenderTapeIdentityV3(bundle.events, catalogue,
+                bundle.identity, &view, true) != RenderTapeIdentityV3Status::Valid)
+          return reject("identity_v3_validation");
+        identitySchema = kRenderTapeIdentityV3Schema;
+      } else if (version == kRenderTapeIdentityVersion) {
+        if (!bundle.executionTopology.empty()) return reject("orphan_execution_topology");
+        if (!validateRenderTapeIdentity(bundle.events, catalogue,
+                                        bundle.identity).valid())
+          return reject("identity_v2_validation");
+        identitySchema = "dxmt9.render_tape.identity.v2";
+      } else {
+        return reject("identity_version");
+      }
+    }
+    if (observedAction && identitySchema != dxmt9::d3d9::kRenderTapeIdentityV4Schema)
+      return reject("orphan_action_witness");
+    const auto actionProfileDigest = observedAction
+        ? hexDigest(RenderTapeCaptureSession::sha256(actionProfileBytes)) : std::string{};
 
     const auto finalPath = root / std::filesystem::path(std::string(frameName));
     if (!existingPathIsSafeDirectory(finalPath)) {
@@ -361,6 +510,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     if (!std::filesystem::create_directory(stagingPath, error) || error) {
       return reject("staging_create");
     }
+    PublicationStagingGuard stagingGuard(stagingPath);
 
     const auto fail = [&](const char *reason) noexcept {
       publisherInfoLog(
@@ -380,7 +530,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     }
     for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
       const auto blobPath = blobsPath / (blobDigests[i] + ".bin");
-      if (!writeBytes(blobPath, bundle.blobs[i].bytes.readBytes())) {
+      if (!writePayload(blobPath, bundle.blobs[i].bytes)) {
         return fail("blob_write_or_sync");
       }
     }
@@ -393,23 +543,21 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
       return fail("source_oracle_write_or_sync");
     }
     if (!bundle.identity.empty()) {
-      dxmt9::d3d9::RenderTapeBlobCatalogue catalogue;
-      for (std::size_t i = 0u; i < bundle.blobs.size(); ++i) {
-        catalogue.blobs.push_back(dxmt9::d3d9::RenderTapeBlob{
-            .digest = bundle.blobs[i].digest,
-            .size = bundle.blobs[i].bytes.size(),
-            .verified = 1u,
-        });
-      }
-      if (!dxmt9::d3d9::validateRenderTapeIdentity(
-               bundle.events, catalogue, bundle.identity).valid() ||
-          !writeBytes(stagingPath / "identity.bin", bundle.identity)) {
+      if (!writeBytes(stagingPath / "identity.bin", bundle.identity)) {
         return fail("identity_validate_write_or_sync");
       }
     }
+    if (!bundle.executionTopology.empty() &&
+        !writeBytes(stagingPath / "execution_topology.bin", bundle.executionTopology)) {
+      return fail("execution_topology_validate_write_or_sync");
+    }
+    if (observedAction && !writeBytes(stagingPath / "action_profile.bin", actionProfileBytes)) {
+      return fail("action_profile_write_or_sync");
+    }
     const auto manifest = manifestFor(
-        bundle, eventDigest, blobDigests, identityDigest, outputOracleDigest,
-        sourceOracleDigest);
+        bundle, eventDigest, blobDigests, identityDigest, executionTopologyDigest,
+        actionProfileDigest, outputOracleDigest,
+        sourceOracleDigest, identitySchema);
     if (!writeText(stagingPath / "manifest.json", manifest)) {
       return fail("manifest_write_or_sync");
     }
@@ -426,6 +574,7 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     if (error) {
       return fail("final_rename");
     }
+    stagingGuard.committed();
     // The final directory is complete and claimable. Parent-directory fsync is
     // best effort on filesystems/platforms that do not expose it; do not
     // report failure after the atomic rename has made the artifact visible.

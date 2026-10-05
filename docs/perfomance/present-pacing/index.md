@@ -11,6 +11,73 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H443](present-pacing-v4-final-grouping.443.md) closes current-image grouping:
+L0/L3/L64 paired original CPU/GPU gates and 180 balanced observer-light CPU
+executions pass. L3 costs about 9.85% more CPU; L64 costs about 2.7% less but
+increases actual GPU encode chunks. Capacity plus grouping now cover 360 final
+CPU executions; this completes the bounded cold experiment task, not FPS or
+default-policy promotion.
+
+[H442](present-pacing-v4-final-capacity.442.md) refreshes the capacity matrix on
+the final image: exact/1 MiB/5 MiB paired original CPU/GPU gates and 180 cold
+execution-only children pass. The 1 MiB CPU difference is about -0.5% in both
+orders; 5 MiB has no consistent benefit and all retained-capacity reuse is zero.
+No production policy or FPS advantage is established.
+
+[H441](present-pacing-v4-immutable-preparation.441.md) implements eager immutable
+V4 preparation and fresh execution-local state. Both-route paired validation
+and 54 original-pixel/EVENT repetitions pass. Full calls are 291/266/258 ms;
+about 280 ms of preparation is now paid once. This amortizes harness work,
+not production FPS; resource setup and exclusive encode attribution remain open.
+
+[H440](present-pacing-v4-provider-call-timing.440.md) adds a full caller-side
+provider clock including local destruction. All 54 original-pixel/EVENT runs
+pass; full-call medians are 569/544/538 ms for L0/L3/L64, with about 280 ms in
+outer immutable preparation. This is the pre-H441 baseline. These diagnostic
+elapsed values are not a game-FPS claim.
+
+[H439](present-pacing-v4-single-admission.439.md) removes the second prepared
+V4 admission using stable result ownership and one bound pre-arm claim.
+Native finite-state checks, 230 TLA settings, both-route paired qualification
+and 54 GPU repetitions pass. Explicit count/consumption proves the path;
+shifted destruction scope prevents claiming the whole wall-time decrease as
+full-provider throughput. Outer V4 preparation remains uncached.
+
+[H438](present-pacing-v4-admission-timing.438.md) prices outer prepared V4
+plan/admission at about 282 ms and the second in-replay admission at 69 ms.
+All 54 actual executions preserve original pixels/EVENT readiness. The work
+is costly but policy-invariant, so it does not explain the grouping gap.
+The subsequent H439 implements single-admission ownership.
+
+[H437](present-pacing-v4-query-timing.437.md) exports existing query clocks.
+All 54 actual-Metal executions pass original pixels/EVENT readiness; checkpoint
+setup is about 7.3–7.7 ms and captured GetData about 0.0024 ms. These scopes do
+not explain the 23–30 ms grouping replay-wall gap. Admission, pre-arm checkpoint
+and final semantic verification were then unpriced; H438 adds those scopes.
+
+[H436](present-pacing-v4-inprocess-repetitions.436.md) reuses one prepared input
+for fresh-device repetitions. All 54 L0/L3/L64 executions preserve original
+pixels and EVENT readiness. L3 increases inclusive encode time while reducing
+provider replay wall; the scopes cannot substitute for one another. Fixed
+order and uncontrolled caches keep these results diagnostic-only.
+
+[H435](present-pacing-v4-metal-timing.435.md) exports existing actual-Metal
+service-cost clocks with explicit inclusive scopes. Four original-pixel/EVENT
+smokes pass, but identical L0 encodeChunk falls from 684 to 12 ms on repetition.
+First-run pipeline costs and 4.3-second input preparation require an explicit
+warm/reset experiment policy before comparing grouping or encoding throughput.
+
+[H434](present-pacing-v4-pass-localization.434.md) narrows the L3 GPU mismatch
+to hot-row uniform invalidation inside a 144-draw common RT0 interval.
+Source/segment/row-qualified invalidation restores original L3 pixels;
+fresh L0/L3/L64 paired CPU/query/GPU qualification passes. On the corrected
+image, 180 controlled CPU executions show L3 costs 9–11% more replay CPU and
+L64 costs about 2.5–2.8% less than L0. This is not Metal encode time or FPS.
+
+[H433](present-pacing-v4-grouping-comparison.433.md) qualifies L0/L64 on the
+same STALKER V4 input and preserves a deterministic L3 GPU-pixel counterexample.
+Cold CPU grouping comparisons are separate from Metal encode time and FPS.
+
 [H348](present-pacing-shared-pass-indices.348.md) replaces per-child copied
 identity sets with synchronous exact indices over the sealed pass table.
 Read metadata falls from 2056 to 48 bytes per child on the native build;

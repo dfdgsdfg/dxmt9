@@ -1,6 +1,7 @@
 #include "fg_multi_source_planner.hpp"
 
 #include "fg_optimizer.hpp"
+#include "../dxmt9_render_tape_topology_scope.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1073,6 +1074,20 @@ MultiSourceReplayPlan planMultiSourcePassCoalesceReplay(
   }
   result.disposition = MultiSourceReplayDisposition::Planned;
   result.diagnostics.outcome = MultiSourcePlannerOutcome::Planned;
+  if (render::activeTapeTopologyInvocation) {
+    try {
+      std::vector<u32> actualOrder;
+      actualOrder.reserve(result.commands.size());
+      for (const auto locator : result.commands) {
+        u32 physical = locator.commandIndex;
+        for (u32 source = 0u; source < locator.retainedSourceIndex; ++source)
+          physical += static_cast<u32>(sources[source].payload.commandCount());
+        actualOrder.push_back(physical);
+      }
+      render::activeTapeTopologyInvocation->stageSelectedDag(
+          d3d9::RenderTapeExecutionTopologyV1FallbackReason::None, combined, actualOrder);
+    } catch (...) { render::activeTapeTopologyInvocation->fail(); }
+  }
   return result;
 }
 

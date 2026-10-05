@@ -40,6 +40,47 @@ inline std::uint64_t dxmt9PeRenderTapeMaxBlobBytesFromText(
   return std::min(parsed, dxmt9::d3d9::kRenderTapeHardMaxBlobBytes);
 }
 
+inline std::uint32_t dxmt9PeRenderTapeBoundedCountFromText(
+    std::string_view value, std::uint32_t defaultCount,
+    std::uint32_t hardMaxCount) noexcept {
+  if (value.empty()) return defaultCount;
+  std::uint64_t parsed = 0u;
+  const auto result = std::from_chars(
+      value.data(), value.data() + value.size(), parsed, 10);
+  if (result.ec != std::errc{} || result.ptr != value.data() + value.size() ||
+      parsed == 0u) return defaultCount;
+  return static_cast<std::uint32_t>(
+      std::min(parsed, static_cast<std::uint64_t>(hardMaxCount)));
+}
+
+inline std::uint32_t dxmt9PeRenderTapeMaxEventsFromText(
+    std::string_view value) noexcept {
+  return dxmt9PeRenderTapeBoundedCountFromText(value,
+      dxmt9::d3d9::kRenderTapeDefaultMaxEvents,
+      dxmt9::d3d9::kRenderTapeHardMaxEvents);
+}
+
+inline std::uint32_t dxmt9PeRenderTapeMaxBlobEntriesFromText(
+    std::string_view value) noexcept {
+  return dxmt9PeRenderTapeBoundedCountFromText(value,
+      dxmt9::d3d9::kRenderTapeDefaultMaxBlobEntries,
+      dxmt9::d3d9::kRenderTapeHardMaxBlobEntries);
+}
+
+// Capture storage only: disabled capture keeps defaults regardless of text.
+// No cardinality override selects a renderer route or filters journal events.
+inline dxmt9::d3d9::RenderTapeCaptureLimits dxmt9PeRenderTapeCaptureLimitsFromText(
+    bool captureEnabled, std::string_view maxEvents = {},
+    std::string_view maxBlobEntries = {}, std::string_view maxBlobBytes = {}) noexcept {
+  dxmt9::d3d9::RenderTapeCaptureLimits limits{};
+  if (captureEnabled) {
+    limits.maxEvents = dxmt9PeRenderTapeMaxEventsFromText(maxEvents);
+    limits.maxBlobEntries = dxmt9PeRenderTapeMaxBlobEntriesFromText(maxBlobEntries);
+    limits.maxBlobBytes = dxmt9PeRenderTapeMaxBlobBytesFromText(maxBlobBytes);
+  }
+  return limits;
+}
+
 // These are opt-in PE-local test/publication seams. Production bootstrap state
 // comes from the device-owned PE shadow; a non-null producer explicitly
 // overrides that owner for native/PE tests. Neither callback is part of

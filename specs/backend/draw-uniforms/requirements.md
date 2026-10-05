@@ -124,6 +124,13 @@ responsible only for recording the D3D9 state change. No new bridge call is
 introduced; the existing record schema already carries the necessary
 information.
 
+When encoding immutable replay snapshots, dirty derivation must cover both
+uniform payload inputs and hot render-state, texture-stage-state and viewport
+inputs. Equal payload hashes alone must not authorize reuse of an FFP binding
+whose hot inputs changed. Source/segment-qualified immutable row identity may
+conservatively invalidate the affected category sets; a reusable view address
+or an unqualified segment-local index must not serve as identity.
+
 ### 3.3 Range counters on shader-constant set records (`R-BACK-12.10`)
 
 When the importer applies a constant-set record from the chunk
@@ -138,8 +145,11 @@ full register file.
 
 After the encoder completes the slab build and `setVertexBuffer` /
 `setFragmentBuffer` for a category, it must clear the matching dirty bit.
-Subsequent draws that do not change the category must reuse the existing
-binding without re-uploading.
+Subsequent draws with unchanged authoritative category input identities must
+reuse the existing binding without re-uploading. A changed immutable input
+identity may conservatively require refresh even when some projected values
+are equal; such conservative refresh is a cost to measure, not permission to
+omit an input dependency.
 
 ### 3.5 All-dirty on encoder reinit (`R-BACK-12.12`)
 

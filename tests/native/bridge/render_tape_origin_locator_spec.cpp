@@ -540,6 +540,57 @@ void testCanonicalMalformedSectionGeometryStillRejects() {
         "malformed handle-bearing element geometry remains rejected");
 }
 
+void testNullRtAllUsesNotFirstOrigin() {
+  const auto alias = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 7u, 99u);
+  const auto parent = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 8u, 100u);
+  auto rt = sparseFixture(D9C_COMMAND_RECORD_APPLY_STATE,
+      D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u);
+  rt.handles[0].kind = alias.kind;
+  check(renderTapeNullRtUsesAdmitted(rt.view(), alias, parent),
+      "NULL alias binding-only RT use needs no fabricated terminal clear");
+  auto draw = rt;
+  draw.record.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  check(renderTapeNullRtUsesAdmitted(draw.view(), alias, parent),
+      "NULL alias explicit RT draw binding remains in the write-only domain");
+  const std::array specs{
+      SparseSectionSpec{D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u},
+      SparseSectionSpec{D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 0u, 0u}};
+  auto mixed = sparseSectionsFixture(D9C_COMMAND_RECORD_APPLY_STATE, specs);
+  mixed.handles[0].kind = alias.kind;
+  check(renderTapeLocateOrigin(mixed.view(), 0u, parent).role ==
+            RenderTapeCommandRole::RenderTargetBinding &&
+      !renderTapeNullRtUsesAdmitted(mixed.view(), alias, parent),
+      "later forbidden section rejects even though the first diagnostic origin is an RT binding");
+  auto sampler = sparseSectionsFixture(D9C_COMMAND_RECORD_APPLY_STATE,
+      std::array{SparseSectionSpec{D9C_COMMAND_CHUNK_SECTION_TEXTURE, 1u, 0u}});
+  sampler.handles[0] = rt.handles[0];
+  check(!renderTapeNullRtUsesAdmitted(sampler.view(), alias, parent) &&
+      !renderTapeNullRtUsesAdmitted(sampler.view(), parent),
+      "parent sampler APPLY_STATE binding rejects before any inherited later draw");
+  const auto secondOffset = (rt.payload.size() + 3u) & ~std::size_t{3u};
+  auto payload = rt.payload;
+  payload.resize(secondOffset);
+  payload.insert(payload.end(), sampler.payload.begin(), sampler.payload.end());
+  std::array records{rt.record, sampler.record};
+  records[1].payloadOffset = static_cast<std::uint32_t>(secondOffset);
+  records[1].firstHandle = 1u;
+  records[1].handleCount = 1u;
+  const ImportedChunkView repeated{
+      .records = records, .handles = sampler.handles, .payloadArena = payload};
+  check(renderTapeLocateOrigin(repeated, 0u, parent).role ==
+            RenderTapeCommandRole::RenderTargetBinding &&
+      !renderTapeNullRtUsesAdmitted(repeated, alias, parent),
+      "later record in the same chunk cannot hide a parent sampler behind its first RT origin");
+  for (const auto type : {D9C_COMMAND_RECORD_STRETCH_RECT, D9C_COMMAND_RECORD_COLOR_FILL,
+           D9C_COMMAND_RECORD_UPDATE_SURFACE, D9C_COMMAND_RECORD_READBACK,
+           D9C_COMMAND_RECORD_PRESENT}) {
+    auto forbidden = rt;
+    forbidden.record.type = type;
+    check(!renderTapeNullRtUsesAdmitted(forbidden.view(), alias, parent),
+        "NULL marker cannot become copy/fill/readback/Present contents");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -549,6 +600,7 @@ int main() {
     testMalformedAndAliasPreservation();
     testCanonicalInlineConstantOrigins();
     testCanonicalMalformedSectionGeometryStillRejects();
+    testNullRtAllUsesNotFirstOrigin();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

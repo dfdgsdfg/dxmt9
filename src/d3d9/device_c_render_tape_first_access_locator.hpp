@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_chunk_validate.hpp"
+#include "device_c_render_tape_descriptors.hpp"
 
 #include <array>
 #include <cstdint>
@@ -103,6 +104,11 @@ enum class RenderTapeProducedProofStatus : std::uint32_t {
   OriginIdentityMismatch,
   ResolvedIdentityMismatch,
   ObservedIdentityMismatch,
+  UnsupportedTextureDescriptor,
+  TextureAliasDescriptorMismatch,
+  WrongAttachmentBinding,
+  UnsupportedClearFlags,
+  InvalidTextureIdentity,
 };
 
 struct RenderTapeProducedProofResult {
@@ -119,6 +125,17 @@ RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
     const ImportedChunkView& chunk,
     const D9CWireObjectIdentity& originIdentity,
     const D9CWireObjectIdentity& resolvedIdentity) noexcept;
+
+// Canonical texture counterpart: preserves the existing color proof and adds
+// only exact DF24 depth-only storage with a matching live surface descriptor.
+// DF24 requires the first terminal access to be a Z-only whole-attachment
+// Clear through DEPTH_STENCIL; a later Clear never repairs a rejected access.
+RenderTapeProducedProofResult renderTapeClassifyProducedTextureByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity,
+    std::span<const std::byte> textureDescriptor,
+    const RenderTapeSurfaceDescriptorV2& alias) noexcept;
 
 // Exact direct-surface counterpart used for a bounded standalone attachment
 // obligation.  The descriptor restricts the proof to supported RT/D24X8

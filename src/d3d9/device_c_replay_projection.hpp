@@ -1,5 +1,6 @@
 #pragma once
 
+#include "device_c_render_tape_replay_observer.hpp"
 #include "dxmt9/core_snapshots.hpp"
 
 #include <algorithm>
@@ -407,6 +408,7 @@ class ReplayTransaction final {
     journal_.clear();
     progress_.reset();
     if (device) progress_ = device->replayProgressCheckpoint();
+    if (replayTransactionObserverEnabled()) observeReplayTransactionBegin(*this);
   }
 
   const ReplayTransactionState& state() const noexcept { return state_; }

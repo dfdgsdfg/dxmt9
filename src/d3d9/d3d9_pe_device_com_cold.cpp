@@ -976,6 +976,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         return D3DERR_DEVICELOST;
     }
     releaseRecordedStateBlockRefs();
+    if (peCaptureState_)
+        BeginRenderTapeOrderedControlForChild({});
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
         dxmt9PeReleaseWsiBindingAfterQuiescence(oldBinding);
@@ -1142,6 +1144,8 @@ void    STDMETHODCALLTYPE D3D9DeviceImpl::SetGammaRamp(UINT swapChain, DWORD fla
             abortRenderTapeCapture("gamma_ramp_barrier");
         }
     }
+    if (captureGamma)
+        BeginRenderTapeOrderedControlForChild({});
     // Byte-copy: D3DGAMMARAMP is a POD (3 * 256 * WORD). sizeof
     // is the safe shape regardless of any future struct growth.
     std::memcpy(&gammaRamp_, ramp, sizeof(D3DGAMMARAMP));
@@ -2929,6 +2933,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::WaitForVBlank(UINT sc) noexcept {
     notePeDeviceCallAfterPresent("WaitForVBlank");
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (peCaptureState_)
+        BeginRenderTapeOrderedControlForChild({});
     const HRESULT hr = hr32(dxmt9c_device_wait_for_vblank(dev_, sc));
     const dxmt9::d3d9::RenderTapeFlushWaitControl payload{.waitedSeqId = 0u};
     NotifyRenderTapeOrderedControlForChild(
@@ -3089,6 +3095,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         return D3DERR_DEVICELOST;
     }
     releaseRecordedStateBlockRefs();
+    if (peCaptureState_)
+        BeginRenderTapeOrderedControlForChild({});
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));
     if (SUCCEEDED(hr)) {

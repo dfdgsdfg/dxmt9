@@ -246,12 +246,11 @@ inline std::uint32_t dxmt9PeRenderTapeCaptureSkipPresents() {
 
 inline dxmt9::d3d9::RenderTapeCaptureLimits
 dxmt9PeRenderTapeCaptureLimits(bool captureEnabled) {
-    dxmt9::d3d9::RenderTapeCaptureLimits limits{};
-    if (captureEnabled) {
-        limits.maxBlobBytes = dxmt9PeRenderTapeMaxBlobBytesFromText(
-            dxmt9::util::getenvString("DXMT9_RENDER_TAPE_MAX_BLOB_BYTES"));
-    }
-    return limits;
+    if (!captureEnabled) return {};
+    return dxmt9PeRenderTapeCaptureLimitsFromText(true,
+        dxmt9::util::getenvString("DXMT9_RENDER_TAPE_MAX_EVENTS"),
+        dxmt9::util::getenvString("DXMT9_RENDER_TAPE_MAX_BLOB_ENTRIES"),
+        dxmt9::util::getenvString("DXMT9_RENDER_TAPE_MAX_BLOB_BYTES"));
 }
 
 inline std::atomic<D3D9PeRenderTapeBootstrapProducer>
@@ -2024,6 +2023,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             {}) noexcept;
 
     void abortRenderTapeCapture(const char *reason) noexcept;
+    bool beginRenderTapeIdentityCaptureV4() noexcept;
+    bool finishRenderTapeIdentityCaptureV4(
+        std::uint64_t presentOrdinal) noexcept;
+    void cancelRenderTapeIdentityCaptureV4() noexcept;
+    bool beginRenderTapeJournalV4(std::uint64_t &ordinal) noexcept;
+    bool endRenderTapeJournalV4(std::uint64_t ordinal) noexcept;
 
     RenderTapeObjectRegistration registerRenderTapeObject(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
@@ -2128,6 +2133,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     void removeRenderTapeObjectAdmitted(
         const D9CWireObjectIdentity &identity) noexcept;
 
+    bool renderTapeNullRtReferenceAdmitted(
+        const D9CWireObjectIdentity &identity,
+        const dxmt9::d3d9::RenderTapeOriginLocator *originLocator,
+        const dxmt9::d3d9::ImportedChunkView *chunk) const noexcept;
     bool materializeRenderTapeObjectForReference(
         const D9CWireObjectIdentity &identity,
         std::uint32_t handleIndex =
@@ -2574,6 +2583,13 @@ public:
         std::span<const std::byte> immutablePayload = {}) noexcept;
     bool IsRenderTapeCaptureActiveForChild() const noexcept;
     bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
+    void BeginRenderTapeOrderedControlForChild(
+        const D9CWireObjectIdentity &identity) noexcept;
+    void BeginRenderTapeResourceMutationForChild(
+        const D9CWireObjectIdentity &identity) noexcept;
+    void EndRenderTapeExternalEffectForChild() noexcept;
+    void BeginRenderTapeVolumeUnlockForChild(
+        D9CTexture *texture, std::uint32_t subresource) noexcept;
     void AbortRenderTapeCaptureForChild(
         const char *origin = __builtin_FUNCTION(),
         unsigned originLine = __builtin_LINE()) noexcept;

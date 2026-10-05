@@ -5,6 +5,7 @@
 // DrawVolatile bytes, and command ordering at the draw-issue boundary.
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_draw_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
@@ -26,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -86,8 +88,25 @@ struct RecordedCommand {
   std::array<float, 4> color{};
 };
 
+// Numeric/POD copies only. No borrowed context/snapshot pointer or declaration
+// wrapper is retained, and the callback never invokes a native byte reader on
+// this fixture's fake Metal handles or interprets contentsAddress as authority.
+struct RecordedBindingContext {
+  std::uint64_t calls = 0u;
+  std::size_t commandCountAtObservation = 0u;
+  dxmt9::core::Handle stream0{}, indexBuffer{};
+  u32 streamMask = 0u, streamOffset = 0u, streamStride = 0u;
+  u32 layoutOffset = 0u, layoutStride = 0u, fvf = 0u;
+  dxmt9::core::ShaderRef::Kind vertexShaderKind = dxmt9::core::ShaderRef::Kind::None;
+  dxmt9::core::DrawParam param{};
+  bool hasStreamSnapshot = false, hasIndexSnapshot = false;
+  dxmt9::core::DrawBufferBindingSnapshot streamSnapshot{}, indexSnapshot{};
+};
+static_assert(std::is_trivially_copyable_v<RecordedBindingContext>);
+
 struct Capture {
   std::vector<RecordedCommand> commands;
+  RecordedBindingContext bindingContext{};
 };
 
 struct TestFailure : std::runtime_error {
@@ -343,6 +362,32 @@ void recordDrawIndexedPrimitives(void* userdata,
   command.baseVertex = baseVertex;
   command.baseInstance = baseInstance;
   capture->commands.push_back(command);
+}
+
+void recordDrawBindingContext(void* userdata,
+    const dxmt9::core::FlatDrawStateRecord& hot,
+    const dxmt9::core::DrawShaderLayoutContext& layout,
+    const dxmt9::core::DrawParam& param,
+    const dxmt9::core::DrawBufferBindingSnapshot* streamSnapshot,
+    const dxmt9::core::DrawBufferBindingSnapshot* indexSnapshot) noexcept {
+  auto& capture = *static_cast<Capture*>(userdata);
+  auto& observed = capture.bindingContext;
+  ++observed.calls;
+  observed.commandCountAtObservation = capture.commands.size();
+  observed.stream0 = hot.streamBuffers[0];
+  observed.indexBuffer = hot.indexBuffer;
+  observed.streamMask = hot.streamMask;
+  observed.streamOffset = hot.streamOffsets[0];
+  observed.streamStride = hot.streamStrides[0];
+  observed.layoutOffset = layout.vertexDecl.streams[0].offset;
+  observed.layoutStride = layout.vertexDecl.streams[0].stride;
+  observed.fvf = layout.vertexDecl.fvf;
+  observed.vertexShaderKind = layout.vertexShader.kind;
+  observed.param = param;
+  observed.hasStreamSnapshot = streamSnapshot != nullptr;
+  observed.hasIndexSnapshot = indexSnapshot != nullptr;
+  observed.streamSnapshot = streamSnapshot ? *streamSnapshot : dxmt9::core::DrawBufferBindingSnapshot{};
+  observed.indexSnapshot = indexSnapshot ? *indexSnapshot : dxmt9::core::DrawBufferBindingSnapshot{};
 }
 
 EncodeDrawRecorder makeRecorder(Capture& capture) {
@@ -3198,6 +3243,181 @@ void testPreUploadedNonIndexedUserVertexFoldsStartVertex() {
       5u);
 }
 
+void testBindingContextObservesEffectiveOverrideAndParamAddressing() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+  recorder.observeDrawBindingContext = recordDrawBindingContext;
+
+  auto state = makeProgrammableState(12u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(0xa001u, 4096u);
+  state.hot.indexBuffer = harness.createBoundBuffer(0xa002u, 4096u);
+  state.debug.primitiveType = PrimitiveType::PointList;
+  state.debug.primitiveCount = 99u;
+  state.debug.startVertex = 91u;
+  state.debug.baseVertexIndex = -7;
+  state.debug.startIndex = 81u;
+  const auto originalStream = state.hot.streamBuffers[0];
+
+  dxmt9::core::DrawBindingOverride binding{};
+  binding.streamMask = 1u;
+  binding.streams[0].buffer = harness.createBoundBuffer(0xa003u, 8192u);
+  binding.streams[0].offset = 64u;
+  binding.streams[0].stride = 28u;
+  binding.indexBufferValid = true;
+  binding.indexBuffer = harness.createBoundBuffer(0xa004u, 8192u);
+  binding.indexType = IndexType::UInt32;
+  dxmt9::encoders::applyDrawBindingOverride(state.hot, &state.shaderLayout, binding);
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 2u;
+  param.startVertex = 11u;
+  param.baseVertexIndex = 4;
+  param.startIndex = 3u;
+  param.indexType = IndexType::UInt32;
+  param.indexed = true;
+  param.bindingOverrideRange = {4u, static_cast<u32>(sizeof(binding))};
+  param.uniformHandle = {.index = 9u, .generation = 7u, .hash = 11u};
+  std::array<std::uint8_t, sizeof(binding) + 8u> arena{};
+  std::memcpy(arena.data() + 4u, &binding, sizeof(binding));
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                true, false, nullptr, nullptr, &binding);
+
+  const auto& observed = capture.bindingContext;
+  checkEq(observed.calls, std::uint64_t{1}, "one synchronous binding-context observation");
+  checkEq(observed.commandCountAtObservation, std::size_t{0},
+          "source context is observed before geometry binds and issue");
+  check(observed.stream0 == binding.streams[0].buffer && observed.stream0 != originalStream &&
+            observed.indexBuffer == binding.indexBuffer,
+        "context uses effective logical bindings instead of the original shared state");
+  checkEq(observed.streamMask, 1u, "effective stream mask");
+  checkEq(observed.streamOffset, 64u, "effective hot stream offset");
+  checkEq(observed.streamStride, 28u, "effective hot stream stride");
+  checkEq(observed.layoutOffset, 64u, "effective declaration stream offset");
+  checkEq(observed.layoutStride, 28u, "effective declaration stream stride");
+  check(observed.vertexShaderKind == dxmt9::core::ShaderRef::Kind::Bytecode &&
+            observed.param.primitiveType == param.primitiveType &&
+            observed.param.primitiveCount == param.primitiveCount &&
+            observed.param.startVertex == param.startVertex &&
+            observed.param.baseVertexIndex == param.baseVertexIndex &&
+            observed.param.startIndex == param.startIndex &&
+            observed.param.indexType == param.indexType && observed.param.indexed &&
+            observed.param.instanceCount == param.instanceCount,
+        "address metadata comes from the effective ParamView, not stale debug parameters");
+  check(observed.param.bindingOverrideRange.offset == param.bindingOverrideRange.offset &&
+            observed.param.bindingOverrideRange.size == param.bindingOverrideRange.size &&
+            observed.param.uniformHandle == param.uniformHandle,
+        "original payload ranges and uniform handle survive cold parameter reconstruction");
+  check(!observed.hasStreamSnapshot && !observed.hasIndexSnapshot,
+        "absent selected snapshots remain explicitly absent");
+  checkEq(firstVertexBufferBind(capture, 1u, "missing overridden VB bind").bufferHandle,
+          obj_handle_t{0xa003u}, "context joins the actual effective vertex binding");
+  const auto& issued = firstIndexedDraw(capture, "missing overridden indexed issue");
+  checkEq(issued.bufferHandle, obj_handle_t{0xa004u}, "context joins the actual effective index binding");
+  checkEq(issued.offset, std::uint64_t{12}, "observed UInt32 start index matches actual issue offset");
+  check(recorder.suppressMetalCalls, "fake fixture never authorizes native byte reads or Metal calls");
+}
+
+void testBindingContextCopiesSelectedSnapshotsWithoutPointerAuthority() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+  recorder.observeDrawBindingContext = recordDrawBindingContext;
+  auto state = makeProgrammableState(20u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(0xb001u, 4096u);
+  state.hot.indexBuffer = harness.createBoundBuffer(0xb002u, 4096u);
+  state.hot.streamOffsets[0] = 32u;
+  state.shaderLayout.vertexDecl.streams[0].offset = 32u;
+
+  dxmt9::core::DrawBindingSnapshot binding{};
+  binding.streamMask = 1u;
+  binding.streams[0].buffer = state.hot.streamBuffers[0];
+  binding.streams[0].offset = 32u;
+  binding.streams[0].stride = 20u;
+  binding.streams[0].snapshot = {.metalHandle = 0xb003u, .contentsAddress = 0u,
+      .byteSize = 4096u, .contentRevision = 3u};
+  binding.indexBuffer = state.hot.indexBuffer;
+  binding.indexType = IndexType::UInt16;
+  binding.indexSnapshotValid = true;
+  binding.indexSnapshot = {.metalHandle = 0xb004u, .contentsAddress = 0u,
+      .byteSize = 4096u, .contentRevision = 5u};
+  dxmt9::core::DrawParam param{};
+  param.primitiveCount = 1u;
+  param.startIndex = 2u;
+  param.baseVertexIndex = 4;
+  param.indexed = true;
+  param.bindingSnapshotRange = {8u, static_cast<u32>(sizeof(binding))};
+  std::array<std::uint8_t, sizeof(binding) + 8u> arena{};
+  std::memcpy(arena.data() + 8u, &binding, sizeof(binding));
+  PreUploadedDrawData preUploaded{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                true, false, nullptr, &binding);
+
+  const auto& observed = capture.bindingContext;
+  check(observed.hasStreamSnapshot && observed.hasIndexSnapshot,
+        "actual selected captured VB and IB snapshots are observed");
+  checkEq(observed.streamSnapshot.metalHandle, std::uint64_t{0xb003u}, "selected vertex snapshot");
+  checkEq(observed.indexSnapshot.metalHandle, std::uint64_t{0xb004u}, "selected index snapshot");
+  checkEq(observed.streamSnapshot.contentRevision, std::uint64_t{3}, "captured vertex revision metadata");
+  checkEq(observed.indexSnapshot.contentRevision, std::uint64_t{5}, "captured index revision metadata");
+  check(!observed.streamSnapshot.contentsAddress && !observed.indexSnapshot.contentsAddress,
+        "selected snapshot metadata does not invent readable contents for fake handles");
+  check(observed.param.bindingSnapshotRange.offset == 8u &&
+            observed.param.bindingSnapshotRange.size == sizeof(binding),
+        "source snapshot payload range survives reconstruction");
+  checkEq(firstVertexBufferBind(capture, 1u, "missing captured VB bind").bufferHandle,
+          obj_handle_t{0xb003u}, "actual vertex bind uses the observed selected snapshot");
+  checkEq(firstIndexedDraw(capture, "missing captured IB issue").bufferHandle,
+          obj_handle_t{0xb004u}, "actual index issue uses the observed selected snapshot");
+
+  binding.streams[0].snapshot = {};
+  binding.indexSnapshot = {};
+  param.startIndex = 99u;
+  state.hot.streamOffsets[0] = 900u;
+  state.shaderLayout.vertexDecl.streams[0].stride = 88u;
+  check(observed.streamSnapshot.metalHandle == 0xb003u &&
+            observed.indexSnapshot.contentRevision == 5u && observed.param.startIndex == 2u &&
+            observed.streamOffset == 32u && observed.layoutStride == 20u,
+        "numeric/POD observations remain copied facts, not retained call-local references or authority");
+}
+
+void testBindingContextReportsMaskedAndInvalidSnapshotsAsAbsent() {
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+  recorder.observeDrawBindingContext = recordDrawBindingContext;
+  auto state = makeProgrammableState(16u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(0xc001u, 4096u);
+  dxmt9::core::DrawParam param{};
+  param.primitiveCount = 1u;
+  param.startVertex = 3u;
+  PreUploadedDrawData preUploaded{};
+  std::array<std::uint8_t, 1> arena{};
+  dxmt9::core::DrawBindingSnapshot binding{};
+  binding.streams[0].snapshot = {.metalHandle = 0xc002u, .contentsAddress = 0u,
+      .byteSize = 4096u, .contentRevision = 7u};
+  binding.indexSnapshot = {.metalHandle = 0xc003u, .contentsAddress = 0u,
+      .byteSize = 4096u, .contentRevision = 9u};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                true, false, nullptr, &binding);
+  check(!capture.bindingContext.hasStreamSnapshot && !capture.bindingContext.hasIndexSnapshot,
+        "populated but masked-out snapshot fields are not reported as selected");
+
+  binding.streamMask = 1u;
+  binding.indexSnapshotValid = true;
+  binding.streams[0].snapshot.metalHandle = 0u;
+  binding.indexSnapshot.metalHandle = 0u;
+  runEncodeDraw(harness, recorder, state, param, preUploaded, arena,
+                true, false, nullptr, &binding);
+  checkEq(capture.bindingContext.calls, std::uint64_t{2}, "context observation repeats per draw");
+  check(!capture.bindingContext.hasStreamSnapshot && !capture.bindingContext.hasIndexSnapshot &&
+            !capture.bindingContext.streamSnapshot.metalHandle &&
+            !capture.bindingContext.indexSnapshot.metalHandle,
+        "invalid snapshots remain absent rather than exposing unselected contents metadata");
+}
+
 void testStreamSnapshotOverridesLiveBufferHandle() {
   Harness harness;
   Capture capture;
@@ -3555,6 +3775,9 @@ int main() {
     testUserVertexAndUserIndexOrdering();
     testPreUploadedIndexedUserVertexIgnoresStartVertex();
     testPreUploadedNonIndexedUserVertexFoldsStartVertex();
+    testBindingContextObservesEffectiveOverrideAndParamAddressing();
+    testBindingContextCopiesSelectedSnapshotsWithoutPointerAuthority();
+    testBindingContextReportsMaskedAndInvalidSnapshotsAsAbsent();
     testStreamSnapshotOverridesLiveBufferHandle();
     testIndexSnapshotOverridesLiveBufferHandle();
     testSnapshotBufferBytesUnavailableIsNotLiveFallthrough();

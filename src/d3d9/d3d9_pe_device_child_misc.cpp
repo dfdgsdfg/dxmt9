@@ -271,6 +271,8 @@ public:
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return flushHr;
+    if (tapeTracking_)
+      context_->BeginRenderTapeOrderedControlForChild(wireObject_.identity);
     const HRESULT hr = hr32(dxmt9c_query_get_data(q_, pData, size, flags));
     if (tapeTracking_) {
       const auto disposition =
@@ -297,6 +299,7 @@ public:
               .resultCode = static_cast<std::int32_t>(hr),
               .controlBytes = sizeof(payload)},
           std::as_bytes(std::span(&payload, 1u)));
+      context_->EndRenderTapeExternalEffectForChild();
     }
     return hr;
   }

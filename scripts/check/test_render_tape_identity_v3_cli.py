@@ -122,7 +122,8 @@ def pack(runner, tool: pathlib.Path, events: pathlib.Path,
 
 
 def inspection_only_guards(runner, tool: pathlib.Path, bundle: pathlib.Path,
-                           root: pathlib.Path) -> None:
+                           root: pathlib.Path, *,
+                           public_bundle_rejection: str = "inspection-only") -> None:
     identity = bundle / "identity.bin"
     events = bundle / "events.bin"
     missing_provider = root / "must-never-run"
@@ -136,6 +137,14 @@ def inspection_only_guards(runner, tool: pathlib.Path, bundle: pathlib.Path,
             1, 0, 1), "inspection-only")
         child.assert_not_called()
     assert not (root / "never-materialized.bin").exists()
+    for command in ("provider-replay", "parallel-verify", "policy-explore"):
+        arguments = [command, str(bundle), "--validator", str(tool)]
+        if command != "policy-explore":
+            arguments += ["--provider", str(missing_provider)]
+        args = runner.parser().parse_args(arguments)
+        with mock.patch.object(runner.subprocess, "run") as child:
+            reject(lambda: args.function(args), public_bundle_rejection)
+            child.assert_not_called()
     for command in ("experiment", "cpu-experiment", "cpu-compare", "cpu-source-project"):
         output = root / f"never-staged-{command}"
         args = runner.parser().parse_args([
@@ -229,6 +238,16 @@ def assert_v2_unchanged(runner, tool: pathlib.Path, bundle_tool: pathlib.Path,
     result = json.loads(run(sys.executable, bundle_tool, "inspect", bundle,
                             "--validator", tool).stdout)
     assert "identity_validation" not in result
+    orphan = root / "v2-orphan-topology"
+    shutil.copytree(bundle, orphan)
+    (orphan / "execution_topology.bin").write_bytes(b"legacy identities have no companion")
+    rewrite_manifest(orphan, lambda value: value["components"].update(execution_topology={
+        "path": "execution_topology.bin", "schema": runner.EXECUTION_TOPOLOGY_SCHEMA,
+    }))
+    reject(lambda: runner.load_bundle(orphan), "orphan execution topology")
+    native = run(tool, "identity", events, identity, "--execution-topology",
+                 orphan / "execution_topology.bin", check=False)
+    assert native.returncode != 0 and "orphan execution topology" in native.stderr
 
 
 def main() -> int:
@@ -267,6 +286,17 @@ def main() -> int:
             assert result["scope"] == manifest["scope"]
         inspection_only_guards(runner, tool, bundle, root)
 
+        orphan = root / "v3-orphan-topology"
+        shutil.copytree(bundle, orphan)
+        (orphan / "execution_topology.bin").write_bytes(b"legacy identities have no companion")
+        rewrite_manifest(orphan, lambda value: value["components"].update(execution_topology={
+            "path": "execution_topology.bin", "schema": runner.EXECUTION_TOPOLOGY_SCHEMA,
+        }))
+        reject(lambda: runner.load_bundle(orphan, allow_identity_v3=True), "orphan execution topology")
+        native = run(tool, "identity", events, identity, "--execution-topology",
+                     orphan / "execution_topology.bin", check=False)
+        assert native.returncode != 0 and "orphan execution topology" in native.stderr
+
         # Metadata remains source data; inspection cannot silently change
         # authority or qualify/downgrade a future capture's declared scope.
         rewrite_manifest(bundle, lambda value: value["scope"].update(
@@ -283,7 +313,8 @@ def main() -> int:
             schema=runner.IDENTITY_SCHEMA))
         reject(lambda: runner.load_bundle(mismatched, allow_identity_v3=True),
                "manifest schema does not match binary")
-        inspection_only_guards(runner, tool, mismatched, root)
+        inspection_only_guards(runner, tool, mismatched, root,
+                               public_bundle_rejection="manifest schema does not match binary")
 
         retired = root / "retired-v1.bin"
         retired_bytes = bytearray(identity.read_bytes())

@@ -462,18 +462,24 @@ bool ReplayTransaction::stage(ReplayStagedEmission emission) noexcept {
 }
 
 bool ReplayTransaction::startIrreversibleEffect() noexcept {
-  return advance(ReplayTransactionEvent::StartIrreversibleEffect);
+  if (!advance(ReplayTransactionEvent::StartIrreversibleEffect)) return false;
+  if (replayTransactionObserverEnabled()) observeReplayTransactionEffect(*this);
+  return true;
 }
 
 bool ReplayTransaction::receiveDestination(
     ReplayDestinationReceipt receipt) noexcept {
-  return advance(ReplayTransactionEvent::ReceiveDestination, {}, {}, receipt);
+  if (!advance(ReplayTransactionEvent::ReceiveDestination, {}, {}, receipt)) return false;
+  if (replayTransactionObserverEnabled()) observeReplayTransactionDestination(*this);
+  return true;
 }
 
 bool ReplayTransaction::commit() noexcept {
   if (!advance(ReplayTransactionEvent::Commit)) return false;
   journal_.clear();
   progress_.reset();
+  if (replayTransactionObserverEnabled())
+    observeReplayTransactionTerminal(*this, ReplayTransactionObservationKind::Committed);
   return true;
 }
 
@@ -483,6 +489,8 @@ bool ReplayTransaction::rollback(core::Device& device) noexcept {
   journal_.clear();
   if (progress_) device.restoreReplayProgress(*progress_);
   progress_.reset();
+  if (replayTransactionObserverEnabled())
+    observeReplayTransactionTerminal(*this, ReplayTransactionObservationKind::RolledBack);
   return true;
 }
 
@@ -490,6 +498,8 @@ bool ReplayTransaction::failStop() noexcept {
   if (!advance(ReplayTransactionEvent::FailStop)) return false;
   journal_.clear();
   progress_.reset();
+  if (replayTransactionObserverEnabled())
+    observeReplayTransactionTerminal(*this, ReplayTransactionObservationKind::FailedStop);
   return true;
 }
 

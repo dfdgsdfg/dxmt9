@@ -298,6 +298,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk_segmented(
   return dxmt9p_device_commit_chunk_segmented(arg0, transport);
 }
 
+extern "C" int32_t dxmt9c_device_classify_render_tape_primary_backbuffer(
+    D9CDevice* arg0, const D9CWireObjectIdentity* identity,
+    uint32_t* outIsPrimary) {
+  if (!outIsPrimary) return dxmt9::core::D3DERR_INVALIDCALL;
+  *outIsPrimary = 0u;
+  DXMT9_TERMINAL_OR_RETURN(arg0);
+  // Classification reads retained host metadata only. It must not settle a
+  // replay prefix or introduce an initializer/source publication boundary.
+  return dxmt9p_device_classify_render_tape_primary_backbuffer(
+      arg0, identity, outIsPrimary);
+}
+
 extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
     D9CDevice* arg0) {
   DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_reserve_render_tape_present_capture");

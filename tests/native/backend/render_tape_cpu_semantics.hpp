@@ -19,6 +19,27 @@
 #include <utility>
 
 namespace dxmt9::test {
+
+enum class CpuTapeResourceRoleKind : std::uint8_t {
+  General, RenderTarget, DepthStencil, PresentSource,
+};
+
+// Payload role is a selector into an independently authenticated original
+// context, not wire identity or proof that native aliases are interchangeable.
+struct CpuTapeResourceRole {
+  CpuTapeResourceRoleKind kind = CpuTapeResourceRoleKind::General;
+  std::uint32_t slot = 0u;
+  friend constexpr bool operator==(const CpuTapeResourceRole&, const CpuTapeResourceRole&) = default;
+};
+
+enum class CpuTapeBufferRevisionSource : std::uint8_t {
+  BindingSnapshot, LiveBinding,
+};
+
+enum class CpuTapeSemanticProjection : std::uint8_t {
+  Legacy, LogicalV4,
+};
+
 namespace detail {
 
 inline constexpr std::uint64_t kCpuTapeFnvOffset = 1469598103934665603ull;
@@ -93,6 +114,32 @@ inline void cpuTapeDigestStateSet(
   }
 }
 
+inline void cpuTapeDigestRenderStates(
+    std::uint64_t& digest, const core::FlatRenderStateSet& set,
+    CpuTapeSemanticProjection projection) noexcept {
+  if (projection != CpuTapeSemanticProjection::LogicalV4) {
+    cpuTapeDigestStateSet(digest, set);
+    return;
+  }
+  const auto count = set.count <= set.entries.size() ? set.count : set.entries.size();
+  auto retainedCount = set.count;
+  for (std::size_t index = 0u; index < count; ++index) {
+    if (core::renderStateIsAlphaTestTrio(set.entries[index].state)) --retainedCount;
+  }
+  // FsVolatile already serializes this draw's effective alpha-test state,
+  // including per-draw overrides and absent/default register equivalence.
+  // LogicalV4 retains effective execution state, not the raw trio's presence
+  // or the first draw's shared-run alpha representation. No other register
+  // or overflow signal is projected away.
+  cpuTapeDigestScalar(digest, retainedCount);
+  cpuTapeDigestScalar(digest, set.overflow);
+  for (std::size_t index = 0u; index < count; ++index) {
+    if (core::renderStateIsAlphaTestTrio(set.entries[index].state)) continue;
+    cpuTapeDigestScalar(digest, set.entries[index].state);
+    cpuTapeDigestScalar(digest, set.entries[index].value);
+  }
+}
+
 template <std::size_t Count>
 inline void cpuTapeDigestStateTable(
     std::uint64_t& digest,
@@ -116,13 +163,26 @@ inline void cpuTapeDigestAttachment(std::uint64_t& digest,
 template <typename ResourceFn>
 inline bool cpuTapeResource(ResourceFn& resourceFn, std::uint32_t kind,
                             core::Handle handle, std::uint64_t& digest,
-                            std::string& failure) {
+                            std::string& failure, CpuTapeResourceRole role = {}) {
   if (!handle) {
+    if constexpr (std::is_invocable_r_v<bool, ResourceFn&, std::uint32_t,
+                      core::Handle, std::uint64_t&, CpuTapeResourceRole>) {
+      // A missing role-qualified surface must still be checked against the
+      // original slot; the legacy/general zero marker cannot certify absence.
+      if (role.kind != CpuTapeResourceRoleKind::General) {
+        if (std::invoke(resourceFn, kind, handle, digest, role)) return true;
+        failure = "resource-normalization-failed";
+        return false;
+      }
+    }
     cpuTapeDigestScalar(digest, std::uint64_t{0});
     return true;
   }
-  if (std::invoke(resourceFn, kind, handle, digest)) {
-    return true;
+  if constexpr (std::is_invocable_r_v<bool, ResourceFn&, std::uint32_t,
+                    core::Handle, std::uint64_t&, CpuTapeResourceRole>) {
+    if (std::invoke(resourceFn, kind, handle, digest, role)) return true;
+  } else {
+    if (std::invoke(resourceFn, kind, handle, digest)) return true;
   }
   failure = "resource-normalization-failed";
   return false;
@@ -131,10 +191,11 @@ inline bool cpuTapeResource(ResourceFn& resourceFn, std::uint32_t kind,
 template <typename ResourceFn>
 inline bool cpuTapeAttachment(ResourceFn& resourceFn,
                               const core::RenderTargetAttachment& attachment,
-                              std::uint64_t& digest, std::string& failure) {
+                              std::uint64_t& digest, std::string& failure,
+                              CpuTapeResourceRole role = {}) {
   cpuTapeDigestAttachment(digest, attachment);
   return cpuTapeResource(resourceFn, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                         attachment.handle, digest, failure);
+                         attachment.handle, digest, failure, role);
 }
 
 inline bool cpuTapeDigestBindingSnapshot(
@@ -210,7 +271,9 @@ inline void cpuTapeDigestLight(std::uint64_t& digest,
 }
 
 inline void cpuTapeDigestUniforms(std::uint64_t& digest,
-                                  const core::DrawUniformPayload& uniforms) noexcept {
+                                  const core::DrawUniformPayload& uniforms,
+                                  CpuTapeSemanticProjection projection =
+                                      CpuTapeSemanticProjection::Legacy) noexcept {
   cpuTapeDigestVertexConstants(digest, uniforms.vsConst);
   cpuTapeDigestPixelConstants(digest, uniforms.psConst);
   cpuTapeDigestMatrix(digest, uniforms.worldViewProj);
@@ -235,10 +298,15 @@ inline void cpuTapeDigestUniforms(std::uint64_t& digest,
   for (const auto& plane : uniforms.clipPlanes) {
     cpuTapeDigestScalarArray(digest, plane);
   }
-  cpuTapeDigestScalar(digest, uniforms.vertexConstantsHash);
-  cpuTapeDigestScalar(digest, uniforms.pixelConstantsHash);
-  cpuTapeDigestScalar(digest, uniforms.fixedPayloadHash);
-  cpuTapeDigestScalar(digest, uniforms.hash);
+  // The complete resolved constants and fixed values above are authoritative.
+  // These four cache hashes depend on the incremental/full construction path;
+  // they are redundant metadata, not shader/declaration content identities.
+  if (projection != CpuTapeSemanticProjection::LogicalV4) {
+    cpuTapeDigestScalar(digest, uniforms.vertexConstantsHash);
+    cpuTapeDigestScalar(digest, uniforms.pixelConstantsHash);
+    cpuTapeDigestScalar(digest, uniforms.fixedPayloadHash);
+    cpuTapeDigestScalar(digest, uniforms.hash);
+  }
   cpuTapeDigestScalar(digest, uniforms.vertexFloatConstantCount);
   cpuTapeDigestScalar(digest, uniforms.vertexIntConstantCount);
   cpuTapeDigestScalar(digest, uniforms.vertexBoolConstantCount);
@@ -292,7 +360,9 @@ template <typename ResourceFn>
 inline bool cpuTapeDigestHot(ResourceFn& resourceFn,
                              const core::FlatDrawStateRecord& hot,
                              const core::DrawShaderLayoutContext* layout,
-                             std::uint64_t& digest, std::string& failure) {
+                             std::uint64_t& digest, std::string& failure,
+                             CpuTapeSemanticProjection projection =
+                                 CpuTapeSemanticProjection::Legacy) {
   const auto resource = [&](std::uint32_t kind, core::Handle handle) {
     return cpuTapeResource(resourceFn, kind, handle, digest, failure);
   };
@@ -331,7 +401,7 @@ inline bool cpuTapeDigestHot(ResourceFn& resourceFn,
   for (const auto& texture : hot.textures) {
     if (!resource(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture)) return false;
   }
-  cpuTapeDigestStateSet(digest, hot.renderStates);
+  cpuTapeDigestRenderStates(digest, hot.renderStates, projection);
   for (const auto& states : hot.textureStageStates) {
     cpuTapeDigestStateSet(digest, states);
   }
@@ -340,11 +410,13 @@ inline bool cpuTapeDigestHot(ResourceFn& resourceFn,
   }
 
   cpuTapeDigestScalar(digest, hot.renderTargetMask);
-  for (const auto& attachment : hot.colorAttachments) {
-    if (!cpuTapeAttachment(resourceFn, attachment, digest, failure)) return false;
+  for (std::size_t slot = 0u; slot < hot.colorAttachments.size(); ++slot) {
+    if (!cpuTapeAttachment(resourceFn, hot.colorAttachments[slot], digest, failure,
+            {CpuTapeResourceRoleKind::RenderTarget, static_cast<std::uint32_t>(slot)})) return false;
   }
   cpuTapeDigestAttachment(digest, hot.depthStencil);
-  if (!resource(D9C_CHUNK_HANDLE_KIND_SURFACE, hot.depthStencil.handle)) {
+  if (!cpuTapeResource(resourceFn, D9C_CHUNK_HANDLE_KIND_SURFACE, hot.depthStencil.handle,
+          digest, failure, {CpuTapeResourceRoleKind::DepthStencil, 0u})) {
     return false;
   }
   cpuTapeDigestViewport(digest, hot.viewport.viewport);
@@ -367,12 +439,14 @@ inline bool cpuTapeDigestClear(ResourceFn& resourceFn,
   cpuTapeDigestScalar(digest, clear.depth);
   cpuTapeDigestScalar(digest, clear.stencil);
   if (clear.clearColor) {
-    for (const auto& attachment : clear.colorAttachments) {
-      if (!cpuTapeAttachment(resourceFn, attachment, digest, failure)) return false;
+    for (std::size_t slot = 0u; slot < clear.colorAttachments.size(); ++slot) {
+      if (!cpuTapeAttachment(resourceFn, clear.colorAttachments[slot], digest, failure,
+              {CpuTapeResourceRoleKind::RenderTarget, static_cast<std::uint32_t>(slot)})) return false;
     }
   }
   if (clear.clearDepth || clear.clearStencil) {
-    if (!cpuTapeAttachment(resourceFn, clear.depthStencil, digest, failure)) {
+    if (!cpuTapeAttachment(resourceFn, clear.depthStencil, digest, failure,
+            {CpuTapeResourceRoleKind::DepthStencil, 0u})) {
       return false;
     }
   }
@@ -390,7 +464,7 @@ inline bool cpuTapeDigestPresent(ResourceFn& resourceFn,
                                             : swap.sourceSurface;
   cpuTapeDigestScalar(digest, source ? true : false);
   if (!cpuTapeResource(resourceFn, D9C_CHUNK_HANDLE_KIND_SURFACE, source,
-                       digest, failure)) return false;
+                       digest, failure, {CpuTapeResourceRoleKind::PresentSource, 0u})) return false;
   cpuTapeDigestScalar(digest, swap.width);
   cpuTapeDigestScalar(digest, swap.height);
   cpuTapeDigestScalar(digest, swap.format);
@@ -410,22 +484,72 @@ inline bool cpuTapeDigestPresent(ResourceFn& resourceFn,
 
 }  // namespace detail
 
+inline constexpr std::size_t kCpuTapeNoSubdraw = std::numeric_limits<std::size_t>::max();
+
 // Observe the actual final source payload used by CPU replay. ResourceFn owns
 // native-handle qualification (kind, tape identity, generation, and logical
 // content); DrawFn owns draw ordinal/capacity bookkeeping. Both callbacks run
-// only on this cold diagnostic path.
-template <typename ResourceFn, typename DrawFn, typename SnapshotFn = std::nullptr_t,
-          typename LiveBindingFn = std::nullptr_t>
-bool observeCpuTapePayload(const core::SourcePayloadView& payload,
+// only on this cold diagnostic path. The optional LocationFn selects cold
+// observation context before any digest or semantic callback for an item. It
+// receives (physical command index, actual command kind, exact subdraw index),
+// with kCpuTapeNoSubdraw for non-draw commands. These are only payload positions,
+// not provenance: callers must separately join genuine V4 record origins.
+// Payload only needs checked commandCount()/commandAt() projections; accepting
+// it by reference also supports a scoped, noncopyable source-payload borrow.
+// Optional ContentRevisionFn(buffer, source, physicalRevision, semanticRevision)
+// projects only the final revision scalar. V4 may select its original immutable
+// logical content epoch; the callback grants no physical-byte authority. Custom
+// SnapshotFn/LiveBindingFn must normalize their own bytes/fields independently,
+// rather than prehashing a physical revision they intend to replace here.
+// Optional RoleResourceFn(kind, handle, digest, role) replaces ResourceFn for
+// normalization, after LocationFn selection. RT/DS/Present roles include null
+// handles so original-slot absence must be checked explicitly. General null
+// handles retain the legacy zero marker/no callback. Roles are not new hashed
+// fields. Omitting both seams preserves the legacy field stream and callbacks.
+// SemanticProjection defaults to the exact legacy field stream. LogicalV4
+// omits only the four redundant uniform cache hashes after serializing all
+// resolved uniform values. It also excludes only the redundant raw alpha-test
+// render-state trio and its presence/count, after the effective FsVolatile has
+// been hashed. Shader/declaration content identities and other states remain.
+template <typename Payload, typename ResourceFn, typename DrawFn, typename SnapshotFn = std::nullptr_t,
+          typename LiveBindingFn = std::nullptr_t, typename LocationFn = std::nullptr_t,
+          typename ContentRevisionFn = std::nullptr_t, typename RoleResourceFn = std::nullptr_t>
+bool observeCpuTapePayload(const Payload& payload,
                            std::uint64_t& digest, ResourceFn&& resourceFn,
                            DrawFn&& drawFn, std::string& failure,
                            std::size_t* observedSnapshots = nullptr,
                            SnapshotFn&& snapshotFn = nullptr,
                            std::size_t* observedLiveBindings = nullptr,
                            LiveBindingFn&& liveBindingFn = nullptr,
-                           std::size_t* observedMipmaps = nullptr) {
-  auto&& resource = resourceFn;
+                           std::size_t* observedMipmaps = nullptr,
+                           LocationFn&& locationFn = nullptr,
+                           ContentRevisionFn&& contentRevisionFn = nullptr,
+                           RoleResourceFn&& roleResourceFn = nullptr,
+                           CpuTapeSemanticProjection projection =
+                               CpuTapeSemanticProjection::Legacy) {
+  const auto resource = [&](std::uint32_t kind, core::Handle handle,
+                            std::uint64_t& hash, CpuTapeResourceRole role) {
+    if constexpr (!std::is_same_v<std::remove_cvref_t<RoleResourceFn>, std::nullptr_t>) {
+      return std::invoke(roleResourceFn, kind, handle, hash, role);
+    } else {
+      if (!handle) {
+        detail::cpuTapeDigestScalar(hash, std::uint64_t{0});
+        return true;
+      }
+      return std::invoke(resourceFn, kind, handle, hash);
+    }
+  };
   auto&& draw = drawFn;
+  const auto selectLocation = [&](std::size_t commandIndex,
+                                  core::MetalCommandKind kind, std::size_t subdrawIndex) {
+    if constexpr (!std::is_same_v<std::remove_cvref_t<LocationFn>, std::nullptr_t>) {
+      if (!std::invoke(locationFn, commandIndex, kind, subdrawIndex)) {
+        failure = "payload-location-selection-failed";
+        return false;
+      }
+    }
+    return true;
+  };
   const auto snapshot = [&](core::Handle buffer,
                             const core::DrawBufferBindingSnapshot& value) {
     if constexpr (std::is_same_v<std::remove_cvref_t<SnapshotFn>, std::nullptr_t>) {
@@ -443,9 +567,23 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
     failure = "missing-or-invalid-live-buffer-binding";
     return false;
   };
+  const auto digestRevision = [&](core::Handle buffer, CpuTapeBufferRevisionSource source,
+                                  std::uint64_t physicalRevision) {
+    auto semanticRevision = physicalRevision;
+    if constexpr (!std::is_same_v<std::remove_cvref_t<ContentRevisionFn>, std::nullptr_t>) {
+      if (!std::invoke(contentRevisionFn, buffer, source, physicalRevision, semanticRevision)) {
+        failure = "buffer-content-revision-projection-failed";
+        return false;
+      }
+    }
+    detail::cpuTapeDigestScalar(digest, semanticRevision);
+    return true;
+  };
   for (std::size_t index = 0; index < payload.commandCount(); ++index) {
     const auto source = payload.commandAt(index);
     const auto& command = source.command;
+    if (source.kind() != core::MetalCommandKind::DrawRun &&
+        !selectLocation(index, source.kind(), kCpuTapeNoSubdraw)) return false;
     switch (source.kind()) {
     case core::MetalCommandKind::DrawRun: {
       if (!command.drawState.hot) {
@@ -457,7 +595,33 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
         return false;
       }
       core::FlatDrawStateView stateView = command.drawState;
-      for (const auto& param : command.drawParams) {
+      for (std::size_t subdraw = 0u; subdraw < command.drawParams.size(); ++subdraw) {
+        const auto& param = command.drawParams[subdraw];
+        const auto validRange = [&](core::DrawPayloadRange range) {
+          return !range.size || (range.offset <= command.drawPayloadBytes.size() &&
+              range.size <= command.drawPayloadBytes.size() - range.offset);
+        };
+        // The shared byte accessor returns empty for both absent and invalid
+        // ranges. Reject malformed nonempty input before any item context,
+        // semantic callback or hash can mistake it for an absent/live binding.
+        // Zero size keeps the legacy absent-range meaning regardless of offset.
+        if (!validRange(param.userVertexRange)) {
+          failure = "malformed-user-vertex-range";
+          return false;
+        }
+        if (!validRange(param.userIndexRange)) {
+          failure = "malformed-user-index-range";
+          return false;
+        }
+        if (!validRange(param.bindingOverrideRange)) {
+          failure = "malformed-binding-override-range";
+          return false;
+        }
+        if (!validRange(param.bindingSnapshotRange)) {
+          failure = "malformed-binding-snapshot-range";
+          return false;
+        }
+        if (!selectLocation(index, source.kind(), subdraw)) return false;
         auto hot = *command.drawState.hot;
         std::optional<core::DrawShaderLayoutContext> shaderLayout;
         if (command.drawState.shaderLayout) {
@@ -515,7 +679,7 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
         detail::cpuTapeDigestScalar(digest, indexBytes.size());
         detail::cpuTapeDigestBytes(digest, indexBytes.data(), indexBytes.size());
         if (!detail::cpuTapeDigestHot(resource, hot, stateView.shaderLayout,
-                                      digest, failure)) {
+                                      digest, failure, projection)) {
           return false;
         }
 
@@ -545,6 +709,7 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
           detail::cpuTapeDigestScalar(digest, hot.streamOffsets[stream]);
           detail::cpuTapeDigestScalar(digest, hot.streamStrides[stream]);
           std::uint64_t revision = 0u;
+          auto revisionSource = CpuTapeBufferRevisionSource::LiveBinding;
           if (hasSnapshots && (snapshots.streamMask & (1u << stream))) {
             const auto& item = snapshots.streams[stream];
             if (item.buffer != buffer || item.offset != hot.streamOffsets[stream] ||
@@ -554,12 +719,13 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
             }
             if (!snapshot(buffer, item.snapshot)) return false;
             revision = item.snapshot.contentRevision;
+            revisionSource = CpuTapeBufferRevisionSource::BindingSnapshot;
             if (observedSnapshots) ++*observedSnapshots;
           } else {
             if (!liveBinding(buffer, revision)) return false;
             if (observedLiveBindings) ++*observedLiveBindings;
           }
-          detail::cpuTapeDigestScalar(digest, revision);
+          if (!digestRevision(buffer, revisionSource, revision)) return false;
         }
         detail::cpuTapeDigestScalar(digest, param.indexed);
         if (cpuTapeObservesIndexBuffer(param.indexed, bool(hot.indexBuffer), !indexBytes.empty())) {
@@ -567,6 +733,7 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
                                       hot.indexBuffer, digest, failure)) return false;
           detail::cpuTapeDigestScalar(digest, param.indexType);
           std::uint64_t revision = 0u;
+          auto revisionSource = CpuTapeBufferRevisionSource::LiveBinding;
           if (hasSnapshots && snapshots.indexSnapshotValid) {
             if (snapshots.indexBuffer != hot.indexBuffer || snapshots.indexType != param.indexType) {
               failure = "captured-index-binding-mismatch";
@@ -574,12 +741,13 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
             }
             if (!snapshot(hot.indexBuffer, snapshots.indexSnapshot)) return false;
             revision = snapshots.indexSnapshot.contentRevision;
+            revisionSource = CpuTapeBufferRevisionSource::BindingSnapshot;
             if (observedSnapshots) ++*observedSnapshots;
           } else {
             if (!liveBinding(hot.indexBuffer, revision)) return false;
             if (observedLiveBindings) ++*observedLiveBindings;
           }
-          detail::cpuTapeDigestScalar(digest, revision);
+          if (!digestRevision(hot.indexBuffer, revisionSource, revision)) return false;
         }
 
         core::DrawUniformPayload uniformScratch{};
@@ -589,7 +757,7 @@ bool observeCpuTapePayload(const core::SourcePayloadView& payload,
           failure = "missing-draw-uniforms";
           return false;
         }
-        detail::cpuTapeDigestUniforms(digest, *uniforms);
+        detail::cpuTapeDigestUniforms(digest, *uniforms, projection);
         if (!std::invoke(draw, digest)) {
           failure = "draw-observation-failed";
           return false;

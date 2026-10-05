@@ -9,6 +9,901 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Qualification scope: cold conditional policy experiments
+
+R-HARN-REPLAY-8.3/8.5/8.7/8.9 admit the declared fresh-device domain with
+paired original-keyed effective-field equality, original Metal query/pixel
+qualification and image-bound observer-light CPU measurements. They do not
+require a second raw-state/shader interpreter or same-device warm reuse.
+The explicit candidate-legal-NOOVERWRITE/closed-writers assumption remains
+part of that domain, not a proven property of arbitrary callers.
+
+The stronger missing authorities below must remain false but are not blockers
+for this domain: warm reset, independent complete original scalar/uniform
+reconstruction, numeric occlusion on the EVENT-only input, and unconditional
+future backing preservation. Observer-light CPU costs must not be relabelled
+as exclusive Metal encoding or game FPS. H431--H434 already exercised paired
+CPU experiments; their historical image-bound receipts do not authorize
+changed-image measurements. H441 supplies current exact-fit qualification.
+The subsequent final-image exact/1 MiB/5 MiB CPU/GPU paired gates pass with
+identical input/plan/endpoint/runtime/launcher hashes, and exact-fit CPU A/A
+passes 36 fresh executions (two warm-ups and 16 measured samples per arm).
+The four final capacity comparisons also pass, totaling 180 accepted fresh
+children with A/A, forward and reversed arms. Main revalidated every native
+receipt and final image binding. A prior forward run with concurrent analysis
+is retained but excluded; its clean replacement is used. No material capacity
+advantage or retained-capacity reuse is established. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-final-capacity.442.md`.
+
+Final-image grouping refresh is complete: new L3/L64 paired CPU/GPU gates and
+L0 A/A plus both orders of L0/L3 and L0/L64 pass 180 fresh observer-light CPU
+executions. Native receipt/qualification/input/image revalidation passes for
+every row. H434 remains older-image history; it was not combined with H441
+GPU-only diagnostics to fabricate current CPU qualification. Together with
+capacity this closes the bounded cold matrix on the current image, without
+promoting stronger authorities or runtime defaults. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-final-grouping.443.md`.
+
+### Immutable V4 preparation reuse
+
+Implemented and boundedly qualified: the eager V4 factory owns authenticated
+input and stationary source/setup/execution templates; named replay creates
+fresh query/cursor/completion state. Owner-move, template-isolation, malformed
+input and intercepted pre-effect allocation-failure tests pass. Native 8/8,
+x86 9/9, 230 existing TLA configurations, both-route paired CPU/GPU checks and
+54 fresh-device L0/L3/L64 executions pass original pixels/EVENT readiness.
+Every execution records one immutable preparation and one consumed fresh
+admission. Intercepted allocation tests do not cover every aligned/runtime
+allocation or post-arm OOM interleaving.
+
+About 280 ms of immutable work is now one-off; fresh initialization is about
+0.015 ms. Whole preparation and final owner destruction must not be mistaken
+for free work: final destruction is outside the per-call clock. These are
+harness service costs, not a production FPS claim. Warm reset, full semantic
+oracle, future backing and numeric occlusion remain open. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-immutable-preparation.441.md`.
+
+### Prepared V4 single-admission ownership
+
+Implemented for one invocation: stable caller-owned result and stack executor
+replace two pre-effect admissions with one bound pre-arm claim. The production
+predicate's 1,024-state domain and actual-owner/capacity negatives pass, as do
+five native/six x86 tests and all 230 existing TLA configurations. Final-image
+Compatibility/ProductionSlot paired qualification and 54 Compatibility
+L0/L3/L64 GPU repetitions preserve original pixels/EVENT readiness. Every GPU
+row records admission_count=1 and consumed handoff. The bounded claim proof
+does not establish concurrent public input mutation or warm reset; the paired
+oracle still does not close complete scalar/uniform semantics, future backing
+preservation or numeric occlusion. In that slice outer V4 planning remained uncached;
+changed owner-destruction timing prevents inferring a full-provider speedup
+from replay wall alone. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-single-admission.439.md`.
+
+### V4 in-process reset boundary
+
+Shared-prepared-input fresh-device repetitions are implemented and bounded.
+Capture29 L0/L3/L64 each pass two warm-ups plus 16 actual-Metal executions with
+original pixels and EVENT readiness; omitted-control single execution also
+passes. This closes repeated input preparation, not warm-device qualification
+or exclusive cost attribution. See
+`docs/perfomance/present-pacing/present-pacing-v4-inprocess-repetitions.436.md`.
+
+Prepared V4 execution explicitly rejects `WarmDevice` before effects. Retaining
+the immutable prepared input across fresh-device iterations does not relax
+that gate. Existing `resetPreparedDevice` checks deferred-replay health and an
+empty wire-object registry around Reset; `resetVerified` alone is not a
+complete mutable-state or Pool-pin oracle. Core Reset retains the upper
+queue/cache identity and some effective controls, including gamma and maximum
+latency. Bootstrap gamma restoration is conditional on captured bytes.
+Warm admission therefore needs preserved-control closure and a genuine V4
+changed-state/seeded-resource A-to-B-to-A test with original pixels, queries,
+query epoch and retirement evidence. Existing ordinary Chunk-mode warm Metal
+tests do not discharge that requirement. Terminal queue/offload failure must
+reject the entire experiment, not trigger warm recovery. Policy environment
+selectors are process-cached; mixed-policy repetitions need an explicit tested
+per-queue policy interface, not `setenv` between iterations.
+
+### Actual-Metal diagnostic timing (2026-10-04)
+
+The diagnostic caller now clocks the whole prepared-provider return/assignment
+expression, including provider-local destruction. Native five/x86 six tests
+pass; all 54 fresh-device L0/L3/L64 executions preserve original pixels/EVENT
+readiness with zero GPU errors. Full-call medians are 569/544/538 ms, versus
+about 280 ms outer preparation. This establishes a current inclusive baseline,
+not a prior-version speedup or exclusive CPU attribution. The optional schema
+is strict, nullable and per-execution, with no repeat-root aggregate. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-provider-call-timing.440.md`.
+
+Prepared-only outer/inner admission, pre-arm checkpoint and finish scopes are
+implemented with strict optional diagnostic export. On capture29, outer
+plan/admission is about 282 ms and inner admission about 69 ms across all three
+policies; checkpoint/finish are roughly 1.4/0.5--0.9 ms. All 54 actual executions
+preserve original pixels/EVENT readiness. Duplicate admission is a measured
+harness cost but does not explain the grouping gap. The single-admission
+follow-up above removes the inner pass; H441 subsequently implements immutable
+derived-plan reuse. Pre-change attribution evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-admission-timing.438.md`.
+
+Existing query setup/transcript/oracle clocks now have strict optional native
+and wrapper export, including individually validated repeat rows. Capture29
+L0/L3/L64 pass 54 actual executions with original pixels/EVENT readiness; query
+setup medians of 7.3--7.7 ms and captured GetData near 0.0024 ms do not explain
+the grouping replay-wall gap. Admission, pre-arm checkpoint and final semantic
+verification lacked separate attribution in that slice; the subsequent phase
+measurements above address those scopes. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-query-timing.437.md`.
+
+R-HARN-REPLAY-9.5 is partial: the private diagnostic exports existing prepared
+elapsed phases and inclusive runtime snapshot deltas without adding hot-path
+timers. Missing exclusive planning/encoder/GPU/wait dimensions remain null;
+diagnostic timing does not grant policy or timing eligibility. Native and
+wrapper schema validation preserve original pixel/query gates. Four unchanged
+capture29 L0/L3/L64/L0 executions pass original pixels and EVENT readiness on
+identical images. Identical L0 encodeChunk changes from 683.707 to 11.532 ms;
+first-run pipeline costs prevent policy ranking. Prepared-input setup takes
+4.25--4.30 seconds per invocation. Safe in-process reset/warm-cache qualification
+under R-HARN-REPLAY-8.3, repeated balanced comparisons, exclusive cost attribution
+and live/numeric-occlusion coverage remain open. Evidence:
+`docs/perfomance/present-pacing/present-pacing-v4-metal-timing.435.md`.
+
+### Independent bounded grouping integration (2026-10-03)
+
+R-HARN-REPLAY-8.8 now has a versioned native route/grouping/capacity identity
+bound through CPU/GPU wrappers and both aggregate paths. Native arm64 tests
+pass 5/5, x86_64 tests 6/6, launcher/aggregate targets 6/6 and the full TLA
+inventory 230 configurations. The real grouping-plus-EVENT-END fixture changes
+L0/L64 three sources to L3 four sources while preserving logical/query digests,
+four pre-END records and real retirement under Observe and ExecutionOnly.
+Unchanged capture29 L3 CPU smoke consumes 172 sources and 512 commands while
+preserving 2,799 draws and 2,806 logical items. Fresh final-image original
+CPU/GPU paired qualification passes L0 and L64, with original pixels and EVENT
+readiness in both routes and two fresh GPU executions per route. L3 fails
+original exact pixels twice with the same output digest: 257 of 921,600 pixels
+differ (maximum channel delta 14), despite valid logical mapping, EVENT
+readiness and zero GPU errors. L3 is excluded from performance comparison;
+diagnosis remains open. Qualified L0/L64 comparisons in both orders plus L0
+A/A pass 108 executions, with 2.292%/2.356% lower cold CPU-body time for L64.
+This does not measure Metal encoding or game FPS. See
+`docs/perfomance/present-pacing/present-pacing-v4-grouping-comparison.433.md`.
+The completed cold capacity matrix below does not discharge those gates.
+Evidence: `experiments/output/stkcop-v4-grouping-15/verification.md`.
+
+Natural-pass RT0 diagnostics retain the L3 failure and localize the first
+differing common endpoint to original draw 2741 (event5570/record2), after an
+equal endpoint at draw2597 (event5297/record1). The 144-draw interval spans
+one L0 pass versus 19 L3 passes; RT0 is A8R8G8B8, not RGBA16Float. Earlier
+matching RT0 endpoints do not certify unobserved depth/stencil or MRT content.
+A standalone immutable color-roundtrip fixture passes native arm64 and
+x86_64 with exact RGBA8/RGBA16Float additive/source-over split outputs.
+It uses safe shader math and is not a production-scene proof. L3 remains
+rejected; natural-boundary/state-content diagnosis is open. Evidence:
+`experiments/output/stkcop-v4-grouping-16/verification.md`.
+
+Actual issued shader/PSO lineage identifies three live fog-binding mismatches
+inside that interval. The direct binding predicate lacks canonical hot-state
+invalidation despite FFPPS/FFPVS consuming RS/TSS/viewport inputs outside the
+fixed payload hash. Source/segment/row-qualified invalidation now passes four
+focused native/Metal tests and fresh paired L0/L3/L64 original CPU/query/GPU
+qualification (`experiments/output/stkcop-v4-hot-row-17/verification.md`).
+Original pixels are unchanged. x86 focused tests/audit pass 5/5 and all 230 TLA
+configurations pass. Corrected-image A/A and forward/reverse L3/L64 comparisons
+pass 180 CPU executions. L3 costs 9.207%/10.543% more CPU than L0; L64 costs
+2.820%/2.522% less, versus -0.039% A/A drift. This qualifies only the bounded
+CPU experiment: actual encode-cost impact, live promotion, numeric occlusion
+and broader capture coverage remain open.
+Previous pixel failures and measurements are historical
+evidence, retained unchanged rather than reused as current qualification.
+
+### Capacity identity integration (2026-10-03)
+
+The V4 CPU and GPU native CLIs now share bounded capacity admission and pin
+both existing headroom selectors before device creation. Exact-fit is explicit
+zero/zero; positive capacity is ProductionSlot-only. Native arm64 and x86_64
+builds pass, with admission/policy/ownership checks on arm64 and
+admission/ownership/install-name checks on x86_64 (3 tests each). All five Python
+CPU/GPU/paired/experiment launcher targets pass with route-bound policy and
+actual-stage validation. A capture29 execution-only 5 MiB/64 MiB aggregate smoke
+passes with 648 Direct draws/57 leases plus 2,151 compatibility draws/23 batches,
+three consumed sources and 512 commands. Evidence:
+`experiments/output/stkcop-v4-capacity-14/verification.md`. Fresh same-image
+exact-fit, 1 MiB and 5 MiB paired CPU/original-GPU qualifications now pass,
+including final readback authentication. Direct draws are respectively
+534, 781 and 648 with unchanged 2,799 total draws and zero GPU errors. This
+does not establish a performance ranking. Process-wide reports show one
+provision per positive candidate and no reuse/aggregate denial. The standalone
+cross-qualification comparator passes 11 tests and all five cold comparisons
+(A/A plus exact-fit versus 1/5 MiB in both orders), totaling 180 accepted
+executions with final reauthentication. No material CPU advantage is established.
+Independent bounded grouping identity and changed-partition query/pixel
+qualification remain open under R-HARN-REPLAY-8.8; see the performance record
+`docs/perfomance/present-pacing/present-pacing-v4-capacity-comparison.432.md`.
+No production default
+or generic partition policy has changed. Prior fixed-input measurements below
+remain historical evidence for their recorded binaries, not authority for the
+new native images.
+
+### Public bounded V4 qualification and execution-only lane (2026-10-03)
+
+`v4-paired-qualify` now owns one unchanged V4 input and couples CPU
+Compatibility/ProductionSlot logical comparison with two fresh original
+query/source/output GPU checks per route. Capture29 passes all six execution
+children and final input/script/executable/runtime/readback authentication;
+2,806 ordered logical items match, covering 2,799 draws. Exact original query
+readiness passes, but this capture has no numeric occlusion comparisons.
+Native and wrapper artifacts keep their separate authority domains.
+
+The same native V4 driver now supports `ExecutionOnly`, omitting diagnostic
+contexts/images/canonical copies and per-draw byte/hash observation while
+preserving actual uploads, provenance, query, ACK/join/reset and route coverage.
+Its original capture29 smoke passes with 534 Direct plus 2,265 compatibility
+draws. Native regression passes 192 tests; x86_64 execute/route/executor and
+install-name checks pass 4 tests. Evidence:
+`experiments/output/stkcop-v4-controlled-cpu-13/verification.md`.
+
+The paired command qualifies only its declared fixed-input route comparison,
+not arbitrary policy correctness or timing. `v4-experiment` binds original-work
+counts/provenance and timeout evidence to the qualified pair and reauthenticates
+on completion. Its final 24 mocked regressions pass. Capture29 A/A and
+forward/reverse comparisons accept 108 fresh executions: two warmups and
+16 measured samples per arm per comparison. This closes the current fixed-input
+route measurement gate, not Metal encode timing or game FPS. Actual alternate
+grouping/capacity policy qualification remains outstanding; capacity identity
+must bind both CPU and GPU qualification before sampling. Historical private
+diagnostic gates below remain unchanged for their original evidence scope.
+
+### Private semantic correspondence evidence (2026-10-03)
+
+R-HARN-REPLAY-9.16 now has private SemanticMapping execution and an immutable
+owned many-to-many origin map. All four canonical builds, 154/154 native
+selected tests, 18/18 x86 focused tests, and the existing full TLA inventory
+pass. The production mapper passes 7,381 legal partition pairs and 768 END
+prefix perturbations; these finite checks do not prove arbitrary scheduling.
+
+On unchanged capture29, fresh-process Metal-validated exact ProductionSlot,
+semantic ProductionSlot and semantic compatibility diagnostics pass. Both
+semantic runs match all 3,686,400 bytes of each original source/output oracle,
+independently checked with `cmp`. ProductionSlot executes 534 Direct / 2,265
+compatibility draws; compatibility executes all 2,799 draws in 80 batches,
+with no Direct leases. Both map all 3,513 records, 87 raw ACKs and three source
+obligations, release all 738 objects, and report zero GPU errors. EVENT
+readiness passes; no numeric occlusion comparison is implied.
+
+The actual routes differ, but both produce three sources and 512 commands;
+neither changes command grouping on this input. Actual alternate-partition
+GPU evidence remains missing. Capture28 semantic execution correctly rejects
+before native execution because its historical action witness is absent.
+Public CPU V4 execution, paired repetitions and timing acceptance remain
+closed. Evidence: `experiments/output/stkcop-v4-semantic-mapping-01/verification.md`
+and `experiments/output/stkcop-v4-capture29-mapping-{exact,production,compatibility}-01/`.
+
+### Current V4 original-input evidence (2026-10-03)
+
+Fresh capture29 now closes the production action-witness evidence gate.
+The authenticated 200-byte component reports queue-observed exact
+construction/arm/freeze and zero arm/freeze revisions. The unchanged original
+input also passes one fresh-process private ProductionSlot exact diagnostic
+with Metal validation: source/output each match all 3,686,400 original bytes,
+SHA-256 `2c616e5aa12d5a0d03f4fb2229809ee3f4b360b243f7aae05a5016d4f1a67113`.
+Its 5,730 events / 3,513 records yield 87 raw ACKs, three actual sources,
+512 commands, 534 Direct and 2,265 compatibility draws; all 738 objects are
+released and GPU errors are zero. EVENT readiness passes 1/1; there are no
+occlusion queries or numeric result comparisons. This is not a timing run or
+a policy-qualified candidate, nor an A/B comparison with different capture28.
+Evidence: `experiments/output/stkcop-v4-snapshot-budget-01/verification.md`,
+`experiments/output/stkcop-v4-capture29-snapshot-budget-diagnostic-01/`, and
+`traces/app-d3d9-stkcop-bench-tape-h430-query-volume-29/tape/frame-1158897097572700-1/`.
+
+Capture28 now passes original-input private V4 qualification twice in fresh
+processes with Metal API validation enabled. Both source and output readbacks
+are byte-identical to their respective captured 3,686,400-byte oracles, SHA-256
+`7a1c7f21f430728954c12100390fd3289e726a7017aa4370bcbdf74f1cb091d3`.
+The fixed PE producer explicitly tags bootstrap/final RT0
+`(surface, generation1, objectId4294967297)` and Present source
+`(surface, generation4, objectId4294968987)` as primary-backbuffer aliases.
+Their arm seed is different from the terminal oracle; replay no longer returns
+the untouched arm image. Capture27 is preserved as the missing-alias
+counterexample, not rewritten.
+
+The genuine Sikarugir Day/high/1280x720 run uses skip 1200, no CPU-ready/session
+or route override, no worker/audio tuning, and passes with no runner failures.
+The staged PE32/PE64/Unix hashes and successful ABI handshake are recorded.
+Capture28 has 5,261 events, 4,260 blobs, 81 raw attempts/acknowledgments,
+3,426 records, 472 physical commands and three actual sources with extents
+1/470/1. Both diagnostics pass canonical traversal, raw coverage, actual
+lifecycle/topology and the exact original publication cuts. Each executes
+584 Direct lease draws and 2,165 compatibility draws, releases all 686 created
+objects and reports zero GPU command-buffer errors. EVENT readiness passes
+without substituted results or supplemental polls/drains. The input has two
+EVENT definitions, one END and one poll; it proves no occlusion sample count.
+
+The private `pe-present-reservation-v1` producer contract is explicitly selected
+in both receipts. This is not policy-neutral public execution: `qualified`,
+`source_exact`, `output_exact` and `query_qualified` are true, while
+`policy_qualified` and `timing_eligible` remain false. Same-input policy
+qualification and warmup/repetition gates still require implementation; two
+fresh-process diagnostic passes are not the requested timing experiment.
+
+Capture evidence:
+`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-28/` and
+`traces/app-d3d9-stkcop-bench-tape-h430-query-volume-28/tape/frame-1153494769614600-1/`.
+Qualified readbacks and receipts:
+`experiments/output/stkcop-v4-capture28-exact-diagnostic-01/` and
+`experiments/output/stkcop-v4-capture28-exact-diagnostic-02/`.
+Fifty-one five-second process samples observed peak RSS 2,659,104 KiB;
+first-arm scratch highwater is 754,337,942 bytes. Sampling is not a hard RSS
+bound and scratch/RSS are distinct accounting domains, not additive costs.
+
+The next blocking policy obligations are concrete, not promotion flags:
+
+- R-HARN-REPLAY-9.15 GPU arm payload budgeting is implemented and locally
+  verified: retained credit precedes PE allocation, separate conservative 2N
+  staging credit precedes the bridge, and exact-allocation receipts follow
+  consuming bootstrap/JIT adoption into immutable storage. Move-only arm
+  snapshots and checked capture-input copies prevent implicit leased deep
+  copies; populated assignment retires bytes before returning credit. The
+  provider independently enforces the per-resource ceiling before its own
+  materialization/readback. Four canonical builds, 153/153 native selected
+  tests, 15/15 x86 focused tests and the existing full TLA inventory pass.
+  Exhaustive native reducers and allocation/lifetime fault tests bind the new
+  budget contract. Evidence:
+  `experiments/output/stkcop-v4-snapshot-budget-01/verification.md`.
+  The unchanged capture28 source/output remain byte-exact with zero GPU errors
+  in `experiments/output/stkcop-v4-capture28-snapshot-budget-diagnostic-01/`.
+  This is not a total RSS bound: CPU scratch quotas, late CPU temporaries,
+  Present mirror/oracle storage, allocator overhead and Metal storage remain
+  separate domains. Fresh capture29 also publishes successfully under the new
+  admission contract; successful admission is not a measured peak/RSS bound.
+- R-HARN-REPLAY-9.14 capture-action provenance is implemented and locally
+  verified: the queue owns construction/current profile and monotonic actual
+  change history; the keyed arm/freeze binding freezes one witness and Present
+  ordinal; explicit snapshot transport V3 and the authenticated 200-byte
+  `action_profile.bin` publish it atomically with the V4 pair. ABA, overflow,
+  revision parity, stale keys, frozen retries, allocation rollback and manifest
+  contradictions have native/CLI coverage. All four canonical builds, 149/149
+  native selected tests, 11/11 x86 focused tests and the complete existing TLA
+  inventory pass. Evidence is in
+  `experiments/output/stkcop-v4-action-provenance-01/verification.md`.
+  Fresh production capture29 now carries and authenticates this witness;
+  capture28 has no historical witness and cannot acquire one from a post-hoc
+  manifest edit. Its unchanged original source/output readbacks remain exact
+  after this change in
+  `experiments/output/stkcop-v4-capture28-action-provenance-diagnostic-01/`:
+  81 ACKs, 472 commands, 584 Direct and 2,165 compatibility draws, no GPU errors.
+  Loader evidence is explicitly `legacy-unknown`, and policy/timing gates
+  remain closed.
+- Private V4 SemanticMapping now has an owned canonical origin mapper and
+  deferred publication obligations (R-HARN-REPLAY-9.16). It accepts source and
+  DrawRun splits/merges without forcing original cuts, validates complete real
+  candidate lifecycle/ACK evidence, and checks the whole pre-END semantic
+  prefix. Admission rejects unsupported reference prefixes before effects.
+  Interval initializers and differing coordinator-command expansion remain
+  unsupported. Native integration and private original-input Metal validation
+  pass as recorded above; public policy/timing acceptance remains closed.
+- CPU General grammar and executor now share a value-owned input budget with
+  separate publication/progress capacities (R-HARN-REPLAY-9.17). Explicit
+  extended admission allows 8,192 events, 1,024 objects, 8,192 mutations and
+  512 MiB blob bytes; it does not enable V4 execution or raise source capacity.
+  Defaults preserve historical body/bootstrap record and aggregate chunk
+  bounds, but the new 2,048-blob metadata cap is an explicit additional limit.
+  Large-input fixture acceptance is admission evidence only, not execution.
+- Public V4 CPU/Metal paired qualification and low-observer repetition are not
+  connected. Two warmups plus 32 measured iterations exceed the current CPU
+  wrapper's total-32 bound, even though the Metal total-64 bound admits them.
+  Phase attribution and the independent EVENT/occlusion evidence limits remain.
+- CPU V4 candidate qualification requires the distinct controlled-queue domain
+  in R-HARN-REPLAY-9.18. The existing CPU consumer submits null-command-buffer
+  test records through the queue lifecycle but performs no Encode invocation;
+  it cannot pass the production V4 topology-complete finish. Typed CPU-only
+  finalization and the bounded consumer now have native domain/reducer tests;
+  both targets pass 32 repeated runs. The dedicated wake/exit/join model passes
+  2,316 states and a missing-publication-wake temporal counterexample, within
+  the complete 230-configuration TLC gate. See
+  `experiments/output/stkcop-v4-controlled-cpu-01/verification.md`.
+  Initial setup now passes 496 host ownership/seed checks. The real-queue
+  adapter passes natural publication beyond resident capacity, exact receipt
+  identity, unlocked metadata observation, empty wake/join and failure-phase
+  quarantine tests. A separate authenticated General integration now passes
+  actual setup, V4 arm, observed Compatibility replay, natural Present
+  publication, join and CPU-only finalization (32/32 repetitions). Its two
+  reference source obligations map to one genuine candidate source without
+  forcing a captured cut; missing raw ACK or join acknowledgment rejects.
+  Evidence: `experiments/output/stkcop-v4-controlled-cpu-02/verification.md`.
+  ImmediateFifo explicitly rejects strict SegmentSerial groups requiring joint
+  retirement. Original-input setup and whole-input execution remain open; no unchanged
+  capture29 CPU acceptance or policy timing is claimed. Fabricated topology
+  is not an acceptable bridge to public policy qualification.
+  The dedicated consumer must also obtain immutable state/uniform/resource
+  observations: the legacy CPU digest reads mutable executor tables and cannot
+  simply move onto a concurrent consumer thread. Source identity, command-kind
+  and draw counts alone are insufficient for full CPU semantic qualification.
+  Serial resource normalization now produces an owned identity/alias/receipt/
+  D24S8 observation and a shared exact-field-stream emitter (57 focused checks;
+  selected native regression 159/159). Wrapper and retired-parent qualification
+  remain producer-owned. Canonical record/subdraw context binding, immutable
+  expected buffer versions and publication-qualified origin pulls now pass
+  focused native tests. The unchanged no-later-mutation fixture passes the
+  independent serial digest comparison, actual backing proof after wrapper
+  destruction, five semantic negatives and 32 repeated integration runs. These
+  facts do not qualify concurrent in-place writes or original capture29.
+  Evidence: `experiments/output/stkcop-v4-controlled-cpu-03/verification.md`.
+  Fresh unchanged capture29 inspection in
+  `experiments/output/stkcop-v4-controlled-cpu-03/capture29-admission-summary.json`
+  finds 15 body raws above the existing 64-record CPU profile limit, with a
+  maximum of 256, and 169 NOOVERWRITE buffer unlocks. Original-input admission
+  now passes the distinct V4 raw256 input gate, including its original gamma:
+  `experiments/output/stkcop-v4-controlled-cpu-05/capture29-input-r1.json`
+  records 5,730 events, 3,513 body records, 2,799 draws and 4,644 blobs with the
+  unchanged events hash. Legacy extended64 still rejects event 1695/chunk 2.
+  This is input evidence only; separate source-progress/capacity and actual
+  execution admission remain unproven. The production range upload
+  mutates NOOVERWRITE backing in place; a retained source/backing token does
+  not freeze its entire byte extent. A record-time whole-buffer expected image
+  cannot simply be compared to a later whole backing after legal disjoint
+  writes. The immutable-context hookup must preserve logical stream evidence
+  while separately establishing a sound physical-byte proof for these epochs.
+  The arena-locked per-buffer footprint primitive and shared encoder count/
+  index-extent predicates now pass focused native tests and 32 repetitions
+  each (`experiments/output/stkcop-v4-controlled-cpu-04/verification.md`).
+  They do not derive the actual draw read set or establish cross-buffer atomic
+  observation. Full qualification still requires those contracts and checked
+  fetch addresses; snapshot revision alone cannot cache physical proof.
+  Neither overlapping upload ranges nor a full final-backing timeline alone
+  establish preservation of historical draw reads. Original-input semantic
+  and timing qualification remain open.
+  A cold arena-locked current revision/backing-value API now covers nonversioned
+  buffers. Aggregate immutable expected-byte ownership has a distinct budgeted
+  factory with shared-owner release and allocation rollback tests. Original V4
+  executor now binds those facts with one exact session budget for every
+  version; legacy factories remain per-version only. Neither
+  helper grants provenance, source progress, physical byte or GPU authority.
+  The distinct controlled V4 inventory executor and cold CLI now compile.
+  A grammar-valid 256-record native stress raw, with an explicit natural
+  command-limit policy, passes real-root origin observation/retirement before
+  raw ACK, resident queue pressure, and consumer-failure poison/wake (32/32).
+  This is a progress-domain test, not original-input acceptance or cut parity.
+  Unchanged capture29 prepares all 608 hidden owners and 4,729 seeds.
+  Distinct captured primary-backbuffer identities sharing one native surface
+  are now preserved by an explicit metadata-only inventory purpose, with
+  ambiguous native lookup rejected and strict semantic authority unchanged.
+  Context/ledger tests passed 64 repeated executions; focused integration
+  passed 7/7. The authenticated PE Present preparation now uses the genuine
+  queue flush under a live controlled capability and dedicated consumer;
+  selected/unselected executor cases passed 32 repetitions.
+  Unchanged capture29's fourth attempt completes metadata inventory: 5,730
+  events, 2,799 draws, 87 raw acknowledgements, 3 sources / 512 commands,
+  3,513 immutable record contexts, and all 738 created wrappers released.
+  All sources submit/acknowledge/retire, query transcript traversal completes,
+  and final cleanup/reset succeeds. Expected-buffer high water is 189,950,852
+  bytes under its explicit 512 MiB budget, not process RSS. This is controlled
+  CPU metadata evidence only: physical fetch semantics, actual Encode route
+  coverage, coupled A/B mutation oracle and GPU/policy qualification remain open.
+  Preparation-publication failure now has a targeted native poison/wake case:
+  capacity rejection prevents the original Present, joins the consumer, and
+  reports the unclaimed Ready source as quarantined rather than retired.
+  Immutable versions now own their original optional backing observations.
+  A bounded multi-buffer primitive compares all qualified IB/VB ranges under
+  one arena shared lock; a cold source-row planner shares production scalar
+  count/address formulas. Focused tests pass 9/9 and context/ledger/proof/
+  executor repetition passes 128/128. The source observer now joins original
+  record contexts and actual payload bindings under its genuine synchronous
+  borrow, before submit/ACK. Unchanged capture29 qualifies scoped IB/VB row
+  equality for all 2,799 draws with zero rejection and 26,623,246 aggregate
+  compared bytes; original metadata traversal and cleanup/reset still pass.
+  New helper/executor tests pass 64 repeated executions and focused tests 6/6.
+  Conservative whole-stride rows are not exact shader demand, and instantaneous
+  equality does not prove future Encode/GPU preservation. Actual native draw
+  location must still join successful expansion/staging storage and Metal issue
+  before coupled GPU/policy/timing qualification. Independent current native
+  Metal ProductionSlot and compatibility runs both retain exact original
+  source/output pixels and query results with zero GPU errors; this does not
+  connect their executed transient geometry to CPU row evidence. Evidence:
+  `experiments/output/stkcop-v4-controlled-cpu-08/verification.md`.
+  The optional serial Encode recorder now joins all 2,799 actual draw issues
+  to authenticated original records on both natural ProductionSlot and
+  compatibility executions of unchanged capture29. Original query and exact
+  source/output pixels pass; observer OFF/ON production route counters agree.
+  Actual upload/reuse observations are zero in both routes, so this workload
+  does not exercise the new accepted-Shared-destination comparison. That helper
+  instead has real-buffer mutation/bounds/storage tests. Direct native stream
+  bindings were not covered by the upload-only selection receipts. Serial-only
+  admission rejects cached
+  explicit-parallel policy before recorder attachment. No coupled semantic,
+  policy, timing or future-preservation gate is promoted. Evidence:
+  `experiments/output/stkcop-v4-controlled-cpu-09/verification.md`.
+  The actual serial Encode observer now derives canonical BUFFER images from
+  the authenticated original blobs in that same Metal execution, binds 3,513
+  immutable original-record contexts, and joins selected backing snapshots,
+  actual native VB/IB bindings and slot-5 address constants. Both unchanged
+  capture29 natural routes qualify all 2,799 draw source-row footprints under
+  the existing coherent arena-locked proof: 26,623,246 compared bytes each,
+  zero unsupported/rejected draws. Original query/source/output gates still
+  pass; independently audited original-keyed versions/addresses/statuses agree
+  between routes, and ProductionSlot observation OFF/ON route counters agree.
+  Setup fragments are explicitly outside the armed body; out-of-body draws
+  and missing armed-source origins still reject. Native actual-Shared-buffer
+  wrong-byte/address/stale-backing negatives pass. This closes the selected
+  direct-native instantaneous BUFFER evidence gap, not full shader fetch,
+  future GPU preservation or coupled CPU-A/GPU-B mutation qualification.
+  Public semantic/policy/timing qualification remains open: the controlled
+  session still needs an original-keyed state/uniform/resource logical stream,
+  exact RT/DS/Present alias-role provenance, paired candidate execution and an
+  observer-light measurement path. A bounded cold-device domain may explicitly
+  rely on legal NOOVERWRITE preserving each candidate's unretired readers and
+  exclude external mapped/GPU buffer writers, as permitted by the replay spec.
+  Exact minimal shader-demand extraction and unconditional future preservation
+  are stronger research authorities, not prerequisites for that explicitly
+  conditional domain. Neither conditional admission nor current byte receipts
+  alone qualifies a policy pair or timing result.
+  Evidence: `experiments/output/stkcop-v4-controlled-cpu-10/verification.md`.
+  A separate controlled logical-stream diagnostic now serializes the actual
+  represented state/uniform/resource fields with original record keys, exact
+  canonical RT/DS/Present role attribution and logical BUFFER epochs. It
+  validates observed order without sorting away reorders; metadata inventory
+  authority is unchanged. The versioned projection excludes redundant uniform
+  cache hashes and first-run alpha state while preserving effective values.
+  Native rebatching/value-change/alias/bounds/negative tests and 187 regression
+  tests pass. Two authenticated unchanged capture29 executions produce identical
+  complete receipts: 2,806 original items, 2,799 qualified draw byte checks,
+  3 sources and 512 physical commands. This accepts diagnostic stream coverage
+  only, conditional on explicit candidate-legal-NOOVERWRITE/closed writers;
+  original/cross-policy semantic equality and all GPU/policy/timing authorities
+  remain false in individual collection receipts. Explicit controlled
+  Compatibility and ProductionSlot executions now independently match all
+  2,806 ordered original item fingerprints on the same authenticated capture29
+  and loaded images. Actual body coverage is Compatibility 2,799 draws/80
+  batches versus ProductionSlot 534 Direct draws/54 leases plus 2,265
+  compatibility draws/26 batches. An all-fallback candidate is rejected by
+  the CPU launcher. Native regression passes 188 tests; x86_64 focused and
+  install-name checks pass 8 tests. Public coupled CPU/GPU qualification and
+  low-observer measurement remain unimplemented; metadata mode still performs
+  context and byte observation and is not a timing substitute. Evidence:
+  `experiments/output/stkcop-v4-controlled-cpu-11/verification.md` and
+  `experiments/output/stkcop-v4-controlled-cpu-12/verification.md`.
+  The observed semantic-mapping GPU launcher now also rejects an all-fallback
+  ProductionSlot candidate (22 mocked tests). Fresh real-Metal executions of
+  both routes reproduce exact original source/output bytes and the recorded
+  query readiness obligation, with zero GPU errors. Main independently
+  compared all four readback files; public aggregation still needs automated
+  readback and final input/executable/loaded-image authentication. This capture
+  requires no numeric query result comparisons and does not establish that
+  broader coverage.
+- The CPU-A/GPU-B authority split and 64 KiB scratch-window transactions are
+  implemented under R-HARN-REPLAY-9.12, but a broader peak-memory bound is not
+  established. GPU-B retained and transient staging reservations now precede
+  allocation and follow immutable ownership through release, as recorded above.
+  This does not bound total process RSS, driver memory, CPU replay temporaries
+  or Present mirror/oracle storage. Equality deduplication grants no advance
+  allocation credit.
+  Resource-sized staging is allowed by 9.12, so streaming GPU readback is not
+  itself mandatory. A coupled production A / alias-written GPU B / partial CPU
+  unlock / A-plus-patch test remains stronger missing evidence beyond the
+  existing compositional tests. Capture28's `unique_complete=0` also precludes
+  claiming a complete unique-backing memory ledger.
+
+### Capture27 counterexample and earlier diagnostic history
+
+Capture27 publishes a genuine STALKER Day/high/1280x720 V4 identity and
+execution-topology pair without a route or CPU-ready session override.
+Independent bundle validation passes: 5,850 events, one Present, 84 actual
+attempts and settlements, 560 commands, and three completed sources
+(3103/3104/3105, command counts 1/558/1). One ordinary-domain query END retains
+its actual issue cycle 586 and source prefix 3103. The DF24 Produced proof
+passes final publication under R-HARN-REPLAY-7.37.
+
+Evidence is retained in
+`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-27/` and
+`traces/app-d3d9-stkcop-bench-tape-h430-query-volume-27/tape/frame-1136429092790700-1/`.
+The runner reports pass with no failures; this is capture success, not replay
+qualification. The public V4 gate remains inspection-only. Original-input
+CPU traversal, raw acknowledgments, lifecycle/topology and EVENT readiness now
+pass in diagnostic09 below. Replayed pixels fail: missing captured primary
+backbuffer alias authority leaves the output at its arm seed. Occlusion numeric
+results and same-input policy timings remain unqualified. The alias correction
+requires a genuine recapture, not mutation of capture27. Historical failed
+capture evidence below is not the current publication status.
+
+The private single-run diagnostic and authenticated launcher now build on ARM
+and x86_64. Its six CPU-only launcher tests and four V4 admission/execution/
+public-gate regressions pass. The first x86_64/Metal-validation replay of the
+unchanged capture27 passes canonical, General and paired-plan admission with
+plan digest `f3b4f5efdc09f4dbe6c9a889677e655d125c33a8ea8a89fdd0f615f2b0144a30`.
+It rejects at event 11 with `v4-local-arm-failed`, after eleven setup events,
+two completed EVENT-query checkpoints and before any raw/draw execution.
+Evidence: `experiments/output/stkcop-v4-capture27-exact-diagnostic-01/`.
+There are two EVENT definitions, one END and one polling call in this input,
+not an occlusion-sample workload oracle. Zero GPU errors before this rejection
+does not establish original-input execution or pixels. The exact pre-arm
+initializer/queue rejection predicate remains under investigation; the
+diagnostic must not weaken admission or force publication cuts to pass.
+The second unchanged-input x86_64 run independently identifies a pending
+initializer as a rejecting arm condition: ordinary published/completed 1/1,
+inflight zero, quiescent builders, empty writer and nonterminal queue, but
+`initializer_pending=true`. Arm returns `D3DERR_NOTAVAILABLE`/FAILED. The
+read-only inspection intentionally reports unavailable initializer progress as
+null, not zero completion authority. Evidence:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-02/`.
+The setup prefix contains a 7,372,800-byte texture seed after EVENT checkpoint
+completion. V4 setup must use the existing checked checkpoint before arm;
+original-input execution and pixel gates remain open until rerun.
+V4 now uses that setup-only checkpoint and releases its lock before arm; V3
+and interval replay paths are unchanged. The third identical-input x86_64 run
+confirms `initializer_pending=false` and successful V4 arm. It reaches event
+index 23 (ordinal 24, query END) and rejects with
+`v4-observation-qualification-rejected`: 23 events traversed, one raw/three
+records acknowledged, no draws or pixel readbacks. Actual partial evidence has
+one source, initializer, command and accepted placement, but no coordinator;
+these partial counts are not full lifecycle/query qualification. The retained
+first-failure trace identifies `RenderTapeRuntimeIdentityCore::queryIssue` at
+event ordinal 24/raw 3/attempt 2/record 0/type 26. The no-explicit-cycle branch
+rejects its local ordinal continuity check, not source-cut/topology equality.
+The replay's real pre-arm EVENT checkpoint and the first in-arm query need an
+authenticated baseline/cycle join; captured cycle labels cannot substitute for
+local query completion authority. Evidence:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-03/`.
+ARM and x86_64 full builds pass; all 90 serialized native Tape/query/routing
+regressions pass, including the six launcher cases and new no-publication/
+failed-arm/setup-boundary tests. Existing TLA regression passes; it is not a
+proof of original-input query results or pixels. No public policy/timing gate
+is promoted.
+
+The replay-only authenticated query-baseline join is implemented. Captured
+query labels and local core identity/epoch/ordinal/fence remain separate;
+actual rows are validated against production-derived local record facts,
+without weakening exact publication/topology checks. Both full architecture
+builds pass, as do 90 serialized native Tape/query/routing regressions and six
+x86_64 execution/binding/provider/launcher/install-name checks. Native tests
+cover 1,536 bounded seed/Poll/Issue combinations plus atomic rejection,
+promotion, stale-generation, BEGIN/END, retirement and rollback cases. The
+production comparator accepts captured cycle/ordinal 32/48 mapped to actual
+2/2, and rejects substituted labels and changed source/prefix/command extents.
+These finite tests do not prove unbounded histories, all concurrent retirement
+interleavings or actual GPU completion. Original capture27 query readiness,
+strict source/output pixels and policy/timing qualification remain open; the
+subsequent unchanged-input results are recorded below.
+
+Unchanged-input x86_64 diagnostics 04/05 now admit both authenticated query
+baselines (2/2) and record the first actual query END coordinator with two
+acknowledged raws/five records. The earlier ordinal-continuity rejection is
+resolved; complete query-transcript qualification is still absent. The next
+rejection is `v4-exact-source-publication`, reported while beginning event index
+24 and closing the preceding query command event (ordinal 24). Diagnostic05's
+bounded, reporting-only publication summaries identify the exact mismatch:
+
+| Row | Original capture | Actual replay |
+|---|---|---|
+| Source 0 command count | 1 | 1 |
+| Source 0 publication cut | ordinal 24, AfterRecord(1) | ordinal 19, BeforeEvent(0) |
+| Initializer publications | none | ordinal 19 BeforeEvent(0), ordinal 24 AfterRecord(1) |
+
+This is not a command-count mismatch or evidence of a pixel failure: execution
+stops before draws/readback. Ordinal 19 is the 7,372,800-byte full initial Upload
+for texture `{kind=0,generation=1,id=4294967304}`, defined immediately before it
+as a DEFAULT-pool, RT-usage, 1280x720 A16B16G16R16F 2D `CompleteSeed` resource.
+The PE lazy-definition publisher emits this Upload to materialize initial
+snapshot content; it is not an application mutation. In `replayGeneralPlan`,
+the ordinary ResourceMutation branch treats it as an interval write after prior
+command work and calls `upper->flush()` before `applyGeneralMutation`, publishing
+the held Clear at BeforeEvent(19). Initial snapshot restoration therefore
+perturbs the observed source/initializer timeline. The missing implementation
+is authenticated pre-arm seed preparation with retained ownership and ordered
+logical activation, preserving real interval-write synchronization. Removing
+all mutation drains, enabling an unrelated prestage experiment, or relaxing
+exact source comparison does not close this gap. Evidence:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-04/` and
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-05/`. Existing TLA
+regression passes after the join; the final reporting-only diagnostic addition
+also passes both builds and launcher/install-name checks. Policy and timing
+gates remain closed.
+
+Capture27's late initial closure is not texture-only: 627 owners, 4,807
+subresources and 412,055,888 promised bytes comprise 494 2D textures, four cube
+textures, one volume texture, 86 vertex buffers and 42 index buffers. Every
+late initial owner has an exact contiguous promised Upload block. The 195
+subsequent real buffer mutations (191 vertex, four index) must remain interval
+writes. Two standalone surfaces and one backbuffer are seeded within the
+existing pre-arm prefix; 13 later texture aliases promise no independent
+content. Setup admission must cover this whole authenticated initial
+closure with explicit memory/ownership bounds, not bypass drains for one
+resource ID or only enable the existing texture-prestage audit.
+
+The typed initial-setup owner is now implemented in
+`device_c_render_tape_initial_setup_v4.*` and the private V4 provider. Admission
+authenticates the complete immutable input before reset and bounds late setup
+to 1,024 owners, 8,192 seeds and 512 MiB of promised bytes. Generation-qualified
+metadata, contiguous complete seed blocks and original alias activation are
+retained; no blob payload is copied into the plan. Shared ownership transitions
+bind preparation, activation, ordered consumption and failure release. Actual
+buffer backing/bytes and texture backing are checked. The initializer now
+distinguishes successful immediate writes from failed staging allocation and
+retains failure even before a capture sink exists; an empty pending stream
+cannot qualify a silently dropped seed.
+
+Both full ARM and x86_64 builds pass. All 96 serialized native Tape/query/
+routing/upload regressions and eight x86_64 focused/launcher/install-name checks
+pass, including 6,451 initial-setup checks and actual missing-destination/
+missing-backing upload and zero-init counterexamples. Existing TLA regression
+passes (201.19 seconds). These checks do not prove actual allocator-success
+timing, all concurrent retirement histories or original-input pixels.
+
+Unchanged capture27 diagnostic06 confirms all 627 owners prepared and activated,
+all 4,807 seeds consumed, and 412,055,888 setup bytes. Source 0 now exactly
+matches ordinal 24 / AfterRecord(1), including one Clear and its actual END
+coordinator. Physical conservation is 757 created / 757 released. Replay reaches
+5,847 events, 83 acknowledged raws and 3,642 dispatched records before rejecting
+at event index 5,848 with `v4-exact-source-publication`. The next mismatch is
+source fragmentation: expected three sources, actual partial evidence has 26;
+the first extra cut is ordinal 4,929 / BeforeEvent with 307 commands, whereas
+the original second source has 558 commands and publishes at ordinal 5,848 /
+AfterEvent. One extra initializer appears at ordinal 5,162 / BeforeEvent.
+Actual route counters include 893 Direct-lease draws, 2,046 compatibility draws
+and zero reported GPU errors, but execution stops before output readback.
+There is no pixel-failure verdict and no performance comparison. Complete
+query/source/pixel/policy qualification remains closed; the next task is to
+join genuine interval mutations with their original production submission
+semantics, not weaken the comparator or globally remove mutation drains.
+Evidence, build and regression logs:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-06/`.
+
+The immutable first extra-cut event is now identified: ordinal 4,929 is a
+genuine `CpuUnlock/NoOverwrite` of buffer `{kind=BUFFER,generation=1,
+objectId=4294967300}`, offset 30,408, size 73,728. Its descriptor (ordinal 4,918)
+is a 1,572,864-byte DEFAULT-pool vertex buffer with usage `0x208`
+(DYNAMIC|WRITEONLY); its full initial seed at ordinal 4,919 has already been
+prepared and consumed. All 195 genuine buffer writes in this input have the
+same DEFAULT+DYNAMIC/NoOverwrite classification. `applyGeneralMutation`
+preserves the lock flags, but the provider's generic pre-mutation flush runs
+before production's no-wait/range-upload classification. A future narrow V4
+admission may reuse that production path for exact active generation and
+validated bounds; it must not authorize Managed/Plain/Discard, texture writes,
+destruction or an unrestricted mutation-drain bypass. Ordinal 5,162 is another
+NoOverwrite on the same buffer (offset 39,760, size 112), not a texture upload;
+the initializer published there must be attributed to preceding work.
+The preceding NULLRT definition at ordinal 5,096 is the concrete code-supported
+candidate: DEFAULT-pool RT creation calls `initializeTextureZero`, and
+`NullRt` has four bytes per pixel, so Private backing stages a zero fill.
+The DF24 texture defined at ordinal 5,098 has depth-stencil usage and does not
+take that branch; its alias also does not upload. Bypassing the extra buffer
+flush may relocate this initializer publication but cannot eliminate that
+separate late physical-definition effect. Allocation-only setup must preserve
+original logical activation and produced-content semantics; skipping arbitrary
+zero initialization is not an admitted fix.
+Its immutable identity is texture `{kind=0,generation=1,objectId=4294967320}`:
+2048x2048x1, one mip/subresource, `NullRtDescriptorOnly`, zero promised bytes
+and zero seeds. Alias ordinal 5,097 is surface
+`{kind=1,generation=1,objectId=4294967321}` with that exact parent/subresource
+zero and no independent content. This is descriptor-only, not
+`ProducedByCapturedPass`; a future allocation-only setup owner must explicitly
+support zero-seed lifecycle/accounting without inventing an Upload or moving
+the separate DF24 produced-content operation.
+
+Both narrow refinements are now implemented. The shared V4 mutation predicate
+requires an exact active DEFAULT+DYNAMIC buffer, the original bounded
+NoOverwrite write, and a complete original Upload backed by either the checked
+prefix checkpoint or a consumed checked setup owner. Only the provider's extra
+preflush is omitted; production Lock/Unlock and range upload remain unchanged.
+AllocationOnly NULLRT setup has a separate 64 MiB footprint bound, no seeds or
+content authority, and original definition/alias activation. Its normal physical
+creation and zero initialization complete before arm.
+
+Diagnostic07 on unchanged capture27 confirms 628 prepared/activated owners,
+including one 16,777,216-byte allocation-only owner; 4,807 consumed seeds and
+412,055,888 seed bytes are unchanged. All 195 genuine NoOverwrite writes use
+the proven no-extra-preflush path. There are zero interval mutation preflushes
+and zero captured initializer publications. Physical conservation remains
+757 created / 757 released. However, exact execution still rejects at event
+index 5,848: only the first one-command source has published, whereas the
+second original source must publish 558 commands at ordinal 5,848 / AfterEvent.
+The earlier fragmentation is removed; the missing original publication boundary
+is the next unresolved contract. Readback was not reached, so this is not a
+pixel mismatch or performance verdict. Query readiness locally matches, but
+full query/source/pixel/policy qualification remains closed.
+
+Both full native and x86_64 builds pass. After correcting one malformed-alias
+fixture by retiring its first alias before its replacement, all 97 native
+regressions and all three focused setup/mutation/upload tests pass.
+Nine x86_64 focused/launcher/install-name checks and the existing TLA
+regression (200.22 seconds) also pass. The allocation-only lifecycle and mutation
+admission are checked through shared production predicates; existing TLA checks
+are regression evidence, not proof of original-input pixels.
+Evidence and build/test logs:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-07/`.
+
+The missing boundary is the production capture-Present reservation, not a
+state-only replay operation. `D3D9DeviceImpl::commitPendingCommandChunk` reserves the
+selected mirror before preparing/stamping the Present raw;
+`dxmt9c_device_reserve_render_tape_present_capture` joins software replay and
+flushes the preceding writer. Original edges ACK 335, publication 336,
+completion 339 and next raw attempt 340 establish its location. Present ordinal
+5,849 begins only after this capture-only effect. Generic Tape does not encode
+the reservation reason, so a publication expectation alone cannot authorize a
+flush. The explicit `pe-present-reservation-v1` diagnostic producer contract is
+specified separately; its implementation and original-input qualification must
+preserve this distinction from ordinary D3D9 Present behavior and policy timing.
+
+The explicit adapter is implemented through shared production
+`prepareRenderTapePresentReservation`, an exactly-once digest/event-bound
+executor transition and the private launcher's authenticated producer/scope
+checks. Default NONE performs no preparation. Native tests retain generic
+destroy-to-Present as a negative (no preceding raw ACK), test a genuine
+state-raw-to-Present positive and preserve immutable source actions. Full native
+and x86_64 builds, five focused native tests, nine x86_64 checks, 12 launcher
+tests and existing TLA regression (200.49 seconds) pass.
+
+Diagnostic08 explicitly selects `pe-present-reservation-v1` on the unchanged
+bundle. Preparation completes once at event index 5,848 with HRESULT zero.
+Actual source publications now have the original 1/558/1 command extents and
+ordinal/cut positions 24/AfterRecord(1), 5,848/AfterEvent and
+5,849/AfterRecord(2). All 84 raws and 3,644 records execute; all 560 physical
+commands and zero initializers are observed. Readback finally executes and
+reveals an actual pixel failure: both local source and output contain
+3,686,400 bytes with digest
+`ccc8aa1103a1f9410a77bce7f4f4470935307e6b56fcd4231aec09b88a66a26d`,
+not the captured
+`82f2323f61515b48040f395bfa3b99acc594002620a1186f805db3d60d5b35f9`.
+Output is non-degenerate, reported GPU errors are zero and physical ownership
+remains 757/757. `OutputMismatch` stops PresentComplete before final
+execution/query qualification; matching publication rows are not a complete
+CPU/topology/query certificate. Pixel and policy/timing gates remain closed.
+Evidence: `experiments/output/stkcop-v4-capture27-exact-diagnostic-08/`.
+
+Diagnostic09 separates the final pixel rejection from independent finalization.
+All 5,850 events, 84 raw acknowledgments and 3,644 records complete; canonical
+traversal, raw coverage, actual lifecycle/topology and exact-source diagnostic
+checks are all true. Actual EVENT readiness qualification passes. This input
+contains no occlusion-result oracle, so it provides no sample-count proof.
+Overall provider status remains OutputMismatch and all pixel/policy/timing
+gates remain closed. The local source/output digest exactly repeats diagnostic08.
+
+Both actual 3,686,400-byte readbacks are preserved with exclusive creation in
+the private diagnostic directory. Independent byte/image analysis finds 907,785
+different RGB pixels out of 921,600 (98.50098%); alpha is identical. Mean
+absolute channel differences are R 8.0765, G 9.2564 and B 10.9951 (8-bit values),
+with maxima 112/125/128. This is a broad image discrepancy, not only undefined
+alpha or a few low-bit errors. Side-by-side inspection shows the same scene,
+but does not identify the causal transform/content error. No tolerance change
+or rendering-path promotion is justified.
+
+Final native regression is 97/97; x86_64 focused checks are 9/9; the private
+launcher tests pass. Evidence, readbacks, build/test logs and reproducible image
+comparison script/results:
+`experiments/output/stkcop-v4-capture27-exact-diagnostic-09/`, including
+`pixel-analysis/comparison.json` and
+`pixel-analysis/expected-left-actual-right.png`.
+
+Follow-up diagnosis identifies missing physical-backbuffer alias authority.
+Diagnostic09's source readback is byte-identical to the arm seed blob
+`ccc8aa1103a1f9410a77bce7f4f4470935307e6b56fcd4231aec09b88a66a26d`.
+The bootstrap/final RT0 is surface `(kind=1,generation=1,objectId=4294967297)`,
+serialized as Standalone; the terminal Present source is
+`(kind=1,generation=4,objectId=4294968987)`, serialized as SwapchainBackbuffer.
+Eight final draws target the first identity; no recorded copy or RT binding
+updates the second. Replay therefore correctly follows those descriptors into
+two different physical backings, leaving the Present source at its arm seed.
+`device_c_draw.cpp` / `dxmt9c_device_get_render_target` can create a fresh
+facade around the original primary backbuffer, while PE Present uses a separate
+cached facade; the current capture classification does not preserve that
+relationship for every wrapper. Equal seeds do not authenticate the original
+alias. Capture27 remains immutable counterexample evidence, not a repairable
+pixel-qualified policy input. Provider-authenticated primary-backing
+classification and multiple-wrapper replay admission are implemented. Arm-time
+classification preserves logical identities, uses no content/shape heuristic
+and performs no interval drain or snapshot; late new aliases reject. General
+admission chooses the actual explicit Present source independently of definition
+order and permits only unambiguous handle-less Present. Native regression passes
+100/100; an additional actual-provider ABI test confirms two live facade IDs
+share the primary backing, equal-shaped standalone storage does not, stale and
+retired identities fail with zero output, and releasing one facade preserves
+the other's classification. The PE source-routing audit passes five checks.
+Full native, x86_64 Unix, PE x64 and PE x86 builds pass; the focused x86_64
+regression passes 12/12, including actual provider, V4 setup/execution,
+classification and install-name checks. The first PE x64 regeneration lacked
+`llvm-ar` on PATH; the canonical retry with the installed llvm-mingw bin path
+passes. Evidence logs are preserved in
+`experiments/output/stkcop-v4-primary-backbuffer-alias-01/`.
+At this implementation checkpoint a genuine corrected recapture was still
+required. The subsequent capture28 evidence above closes original-input private
+pixel qualification, not public policy or timing eligibility.
+
 ### Query-aware captured policy loop (2026-10-02)
 
 R-HARN-REPLAY-9.1–9.5 are not yet implemented end-to-end. The current capture
@@ -455,6 +1350,373 @@ stale v2 CLI expectation for the already-existing empty query transcript;
 neither fix weakens validation or removes public evidence. No production
 runtime, wild capture, GPU-pixel or concurrency qualification is inferred
 from these native/CLI gates.
+
+The next runtime integration adds bounded Unix-to-PE snapshot transfer,
+queue-owned revocable observer endpoints, real replay-transaction/ledger
+settlement, and a Compatibility/FreshDevice v3 execution session. A full native
+build passes. Capture, transfer, publisher, pure admission and runtime identity
+tests pass. Integration found and fixed failure-cleanup owner lifetime,
+duplicate/empty DrawRun observations, exact cross-event writer admission, and
+missing accepted Submit observation in the controlled CPU backend. The
+cross-event execution, shared Draw/constant/Draw physical run, stale/foreign
+writer rejection and teardown/re-execution negatives pass. Full native build
+and 28 focused runtime/capture/transfer/publication/query/CLI regression targets
+pass. Strict fixtures were corrected for actual Present ordinals/pass kind,
+V2 query descriptors and canonical per-record handle slices; validation was
+not relaxed. The existing TLA regression passes, but does not establish
+new end-to-end or Metal evidence. ProductionSlot execution remains unsupported, and
+the public v3 execution gate remains closed. PE arm/finish/cancel and original
+external-event cuts are not yet connected to these new APIs.
+The pure execution admission API now reparses exact tape bytes using only the
+admitted owner's authenticated blob catalogue and compares the General preflight
+value tables. The historical preflight and this binding share one grammar
+parser. Explicit field comparisons include reserved values without native
+padding dependence; 38 tampering cases cover mutable derived tables. Full
+native build and all 67 Render Tape regression targets pass. A separate serial
+rerun of the three native depth-snapshot/buffer-lifetime Metal specs passes
+after toolchain validation. These synthetic gates do not enable public
+execution or qualify the original STALKER workload.
+
+The runtime's publication-time source-local FrameGraph reconstruction is not
+evidence of the optimized graph selected by Encode, especially for multi-source
+pass coalescing. Actual committed-plan observation and fallback disposition are
+required before pass membership can qualify a captured policy. Initializer
+completion must likewise come from actual completed command buffers, not solely
+the shared-event counter. These remain integration gates, not reasons to relax
+identity validation or force a different production route during capture.
+R-HARN-REPLAY-7.31 selects identity v4 neutral physical extents plus a required
+execution-topology v1 companion. The new pure schema and cold stage/accept/reject
+observer are implemented. V3 and V4 now share the full canonical-fact,
+coordinator, exact END-prefix and replay-settlement validator; the temporary
+V4 query rejection/reduced parser is removed. Actual QUERY_ISSUE without its
+required coordinator rejects, while valid checkpoint-only polls retain their
+provenance meaning without inventing a captured END. External poll readiness
+still requires a separate live-receipt execution join. The integrated native
+build and all 71 then-existing Render Tape targets passed in a serialized regression run,
+including V3/V4 differential diagnostics and transactional parser budget tests.
+At that checkpoint, fully omitted source lifecycles and production acceptance
+hooks remained unsupported; subsequent integration is described below. V3 is not silently
+reinterpreted to encode natural execution or optimizer omissions. The cold TLS
+observer scope requires a retained queue attachment for its entire backend call;
+callback revocation alone is not evidence that an unlocked Encode scope ended.
+The bounded observer now retains multiple per-invocation candidates and joins
+actual registration acceptance with successful Encode observation in either
+order. Only the chronological prefix with both facts appears as executed
+topology. Repeated prefix refs do not duplicate persistent storage. Native
+coverage includes 6,561 bounded dual-order lifecycle traces and 16 prefix/suffix
+combinations, receipt negatives, no-growth budgets and revoke/fail-stop cases.
+This does not prove production hook interleavings or connect DCE to the observer.
+
+The production partial/direct route can use multiple real transactions per raw.
+Existing capture rejects nonzero span starts, and its single generation per raw
+settlement cannot authenticate that route. V4 needs explicit per-span attempt,
+commit/destination evidence and separate raw-ledger acknowledgment; a synthetic
+whole-raw transaction is not an acceptable replacement. The selected V4 schema
+separates mandatory real-attempt rows from raw acknowledgment and preserves
+publication metadata for receipt joins. Native integration now passes all 73
+Render Tape targets before runtime-hook integration, including V4 split/rollback/receipt/query tests and the
+paired nine-table transport. Direct spans join a stable source with delayed
+publication; Arena joins its real first-ticket publication before commit.
+The retained attachment/edge-clock endpoint passes 625 bounded lifecycle
+traces, concurrent edge allocation, callback retirement/rearm and destructor
+re-entry tests. These tests do not install production topology/partial-replay
+hooks, publish an actual Tape, or qualify original-workload GPU/pixels.
+Queue completion/routing native regressions and the existing TLA suite also
+pass; the latter is not an end-to-end proof of the unconnected V4 runtime.
+Actual STALKER capture and GPU/policy qualification remain unachieved.
+
+Runtime integration is in progress: a shared lifecycle core with separate
+V3/V4 policies, actual transaction transition observations, exact backend
+source locators, and paired PE publication. The four V4 Unix ABI entrypoints
+now implement independently returned arm queue identity, keyed event cuts,
+frozen paired size/copy receipts and cancellation (R-HARN-REPLAY-7.34).
+Retained replay scopes observe real effect/destination rollback boundaries
+and the separate raw-ledger acknowledgment. Endpoint retirement joins admitted
+callbacks outside the queue mutex. The inert-queue ABI spec covers empty-ledger
+admission and receipt transport, not nonempty backend execution or GPU results.
+The integrated native build and 77 Render Tape targets pass after these edits
+(`/tmp/dxmt9-v4-runtime-final-build.log`,
+`/tmp/dxmt9-v4-runtime-final-tape-tests.log`). Queue completion/routing, retained
+binding and the existing TLA regression also pass (4/4,
+`/tmp/dxmt9-v4-runtime-retirement-tla.log`); this is not an end-to-end runtime
+refinement or original-workload proof. Allocation-fault coverage exposed and
+fixed publisher string streams silently accepting truncated digest/manifest
+output; serialization errors now enter whole-staging rollback, and recovered
+success must preserve exact events plus the complete identity/topology pair.
+
+Exact physical append hooks and selected-backend-plan integration are now
+implemented and compile in the native build. Compatibility batching copies
+per-accepted-draw locators through capacity flushes and intervening state
+records; Direct Present retains its locator until the actual physical append.
+Publication verifies these bindings rather than reconstructing them. Retained
+topology scopes surround ordinary, DCE and session backend execution, observing
+the actual selected plan, successful Encode, registration and carrier folds.
+No backend Encode runs inside an admitted attachment callback.
+
+A source whose commands are all ProvenOmitted is admitted only with genuine
+publication, submission and completion plus complete physical placement
+coverage. True inline/no-submit completion remains unsupported; no synthetic
+GPU lifecycle is added. Paired V4 inspection/packing and the owned V4 source
+plan/cursor are implemented. Cursor completion proves ordered traversal only,
+not runtime query readiness or pixels. The initial integrated regression
+passed 79/80 Tape targets; correcting the V3 CLI's expected rejection for a
+forged manifest made both V3/V4 CLI reruns pass. Queue/source-payload/routing
+and existing TLA regressions pass 7/7 (TLA 204.39 seconds). Evidence is in
+`/tmp/dxmt9-v4-hooks-{build,tape-tests,cli-recheck,queue-tla}.log`.
+The subsequent admission build and serialized 84/84 regression pass after the
+route-neutral provider entry, partial-session range correction and lease-gated
+retirement fix (`/tmp/dxmt9-v4-admission-build-recheck.log`,
+`/tmp/dxmt9-v4-admission-tests.log`). This includes 81 Tape targets, production
+routing and both inline/offloaded query receipt tests. Provider callback
+self-cancellation preserves the actual renderer HRESULT and ledger while
+rejecting capture; stale replay callbacks cannot mutate detached frozen rows.
+The final native build and 86/86 serialized regressions pass after permanent
+V4-selection legacy-route cleanup and the shared exact-diagnostic executor
+(`device_c_render_tape_execution_v4.*`). This includes 82 Tape targets,
+production routing, inline/offloaded query receipts and TLA (202.45 seconds).
+Logs: `/tmp/dxmt9-v4-executor-final-build.log` and
+`/tmp/dxmt9-v4-executor-final-tests.log`. They do not qualify an original workload.
+
+Provider execution has a tested route-neutral retained observation entry and
+an exact authenticated General-plan matcher. The shared executor verifies
+original event/record order, genuine raw ACK coverage and actual source/query
+prefix receipts for exact-source diagnostics. It does not force captured
+attempt segmentation or generate missing publication with an extra flush.
+The General provider now has an explicit V4 exact-diagnostic mode, paired
+pre-effect admission, normal-route observed replay, independent evidence and
+cancellation before recovery. An admission-only spec covers both requested
+routes, paired-input/digest errors, wrong exact owner, fresh-only reset and
+competing-audit rejection. Nonempty GPU-backed successful finish, public CLI
+execution, query-readiness and pixel qualification, and cross-policy semantic
+mapping remain open; the latter is explicitly rejected before effects.
+Legacy raw capture token fields must not be populated merely
+to enable provider observation: they also select production routes. PE V4 arm
+is now connected and fails closed instead of publishing a v2 fallback.
+Permanent V4 selection survives cancellation, failure and rearm; legacy
+capture planning/settlement cannot regain authority when its root is absent.
+PE32, PE64 and canonical x86 Unix builds now pass, as does the install-name
+audit. A final warning-only cleanup passes four focused binding/execution/
+observation/routing tests. Actual capture20
+(`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-20`)
+uses Day/high/1280x720, 1,200 skipped Presents and a 1 GiB capture-only blob
+budget. The previous color allocation failure is not reproduced: GPU snapshots
+and V4 arm complete, but the first post-arm journal fails repeatedly at
+`external_event_before_cut`. The game was deliberately terminated after
+collecting that evidence; runner exit failure is not an unexplained crash.
+No bundle was published. Its desktop-only screenshot is not a rendering oracle.
+CPU scratch high-water is 748,576,168 bytes; a separate 5-second process
+sampler reports peak RSS 2,396,348 KiB and VSZ 46,744,392 KiB. These are
+different accounting domains, not additive ownership totals or proof of a
+memory reduction. Precise cut rejection attribution is the next capture gate;
+no actual STALKER V4 Tape, original-workload GPU/pixel oracle or repeated policy
+timing is qualified.
+Cold first-failure/cut-phase attribution now preserves the original rejection
+site and qualified cursor through subsequent failures. The new provider and
+diagnostic tranche passes a native full build and 86/86 serialized Tape,
+production-routing and inline/offloaded query receipt regressions
+(`/tmp/dxmt9-v4-cut-provider-native-rebuild.log`,
+`/tmp/dxmt9-v4-cut-provider-tests.log`). This run does not rerun TLA or prove
+nonempty V4 GPU execution. Existing CPU grammar tests needed explicitly
+qualified `render_tape_runtime::detail` references after the new provider
+header dependency; their tested predicates are unchanged.
+Instrumented capture21 (`app-d3d9-stkcop-bench-tape-h430-query-volume-21`)
+identifies the first rejection at `RenderTapeRuntimeIdentityCore::finishRecord`:
+event 24, QUERY_ISSUE record 0, attempt 2. The subsequent BeforeEvent(25)
+finds a revoked clock. Ordinary compatibility replay can dispatch the query
+without calling the session-release API; that API itself returns without a
+release when the session lane is disabled. The capture core nevertheless
+requires a valid release for every coordinator. R-HARN-REPLAY-7.35 closes this
+representation gap with explicit ordinary-serial versus session-release
+authority. The implementation now records the immutable queue domain and a
+positive same-lease ordinary admission before dispatch, without fabricating
+release evidence or selecting a capture-only session route. The 264-byte V4
+header, 208-byte coordinator and 448-byte paired-transfer header preserve this
+distinction through validation, CLI inspection and source-plan authentication.
+Exact diagnostics reject a known captured/local domain mismatch at arm, even
+without coordinator rows. Native counterexamples cover missing, duplicated,
+late and identity-mismatched admission, stale/replaced leases, session-only
+release obligations, actual whole-raw and mixed Direct/coordinator replay,
+query END source/baseline/initializer joins and topology-edge collisions.
+The native full build and all 87 serialized Tape/routing/query-receipt tests
+pass (`/tmp/dxmt9-v4-ordinary-native-final.log`,
+`/tmp/dxmt9-v4-ordinary-tests-final.log`). Existing TLA models also pass
+(`/tmp/dxmt9-v4-coordinator-tla.log`, 202.33 seconds); this is a production
+model regression, not a new proof of the diagnostic authority sum. Canonical
+PE32, PE64 and x86 Unix builds and the install-name audit pass
+(`/tmp/dxmt9-v4-ordinary-{pe32,pe64,unix,install-audit}.log`). Actual capture22
+no longer reproduces the event-24 query rejection, but does not
+publish a bundle: the PE owner reaches its default 4,096-event limit while
+materializing first-reference resources. The first arm records 643,308 event
+bytes, 3,383 unique blobs / 312,137,476 blob bytes and 460 objects at rejection.
+The original byte ceilings are not the rejecting predicate. Bounded capture-only
+event/blob-entry count overrides now preserve the 4,096 defaults with 65,536
+hard ceilings and unchanged byte budgets. Parser/default/clamp and real
+one-past-boundary admission tests pass, including the full 65,536-event bound;
+native build and all 87 regressions pass again
+(`/tmp/dxmt9-v4-cardinality-native-final.log`,
+`/tmp/dxmt9-v4-cardinality-tests-final.log`). Canonical PE32, PE64 and x86 Unix
+builds and the install-name audit also pass
+(`/tmp/dxmt9-v4-cardinality-{pe32,pe64,unix,install-audit}.log`). Capture23 uses
+both 65,536 count overrides and reaches a different repeated admission failure:
+`command_chunk_produced_pass_preflight`, NULL-format 2048x2048 RT texture and
+its Surface alias, APPLY_STATE binding-only access. Alias/descriptor checks
+pass but expected content is unsupported and produced proof lacks a terminal
+access. R-HARN-REPLAY-7.36 now implements explicit descriptor-only authority for
+the exact single-level NULL Texture2D RT and its generation-qualified Surface
+alias. PE bootstrap/JIT and already-admitted references, canonical validation
+and General provider preadmission check every use; samplers, mutations, copies,
+readbacks and oracle uses reject. Standalone NULL and generic unavailable
+content remain outside this authority. Original factories/routes are unchanged.
+Native full build and all 87 serialized Tape/routing/query-receipt regressions
+pass, including a matched Bootstrap RT-only positive and active-sampler negative
+with exact rejection attribution (`/tmp/dxmt9-v4-null-native-final.log`,
+`/tmp/dxmt9-v4-null-tests-final.log`). Canonical PE32/PE64/x86 Unix builds and
+install-name audit pass (`/tmp/dxmt9-v4-null-{pe32,pe64,unix,install-audit}.log`).
+This cold grammar extension changes no production scheduling/lifetime policy;
+it is not a new concurrency or pixel proof. The original workload remains
+unqualified pending a published bundle and independent GPU/pixel checks. Evidence:
+`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-23/`.
+Capture24 no longer reproduces that NULL binding failure, but stops at the next
+initial-content gap: one-level 1x1 R32F Texture2D DEFAULT render targets first
+referenced as shader inputs at slot 16. Their expected byte layout is accepted,
+but content is incomplete and no arm snapshot exists; produced-pass authority
+correctly rejects read-first access. The existing bounded snapshot shape must
+not be bypassed by zero-fill, descriptor-only authority or an invented clear.
+R-HARN-REPLAY-9.13 specifies exact R32Float arm capture/restoration through the
+exclusive checkpoint lease. Descriptor/layout admission and physical raw
+transfer support now use that existing lease; ordinary readback is unchanged.
+Native shape/receipt/row-copy negatives and the real Metal 1x1/7x5 A/B/A oracle
+pass, including signed zero, subnormal, infinity and NaN payload bits, pending
+initializer-only capture without external flush, wrong physical storage,
+active Direct and terminal rejection. The oracle runs 12 fresh raw-seed audits
+and 12 separate same-device replays; warm results prove reset/route/pixels and
+conservation, not unsupported warm raw-seed audit. Each capture source uses a
+distinct Factory-owned backend so its deliberate terminal negative cannot
+poison the next shape's queue. Native full build and all 88 serialized Tape/
+routing/query-receipt tests pass (`/tmp/dxmt9-v4-r32f-native-final.log`,
+`/tmp/dxmt9-v4-r32f-tests-final.log`, `/tmp/dxmt9-v4-r32f-testlog.txt`).
+Canonical PE32/PE64/x86 Unix rebuilds and install-name audit also pass
+(`/tmp/dxmt9-v4-r32f-{pe32,pe64,unix,install-audit}.log`). This synthetic Metal
+evidence does not qualify the original STALKER input; original capture retry
+and independent original-input GPU/pixel checks remain required.
+Capture25 passes the prior resource-admission failures and reaches Present
+completion, but final canonical validation rejects Texture object 4294967318,
+generation 1, disposition `ProducedByCapturedPass`, expected content 0/0 as
+`invalid-object-define` / `texture-descriptor-disposition` (first arm event
+4132). Its schema/dimension/mip/subresource counts are accepted-looking, but
+the logged detail does not identify the pixel format. Source review finds that
+PE Produced admission accepts matching full-clear topology without checking
+the parent RT usage bit; final validation requires that bit. The first-access
+classifier can report a full depth/stencil clear as well as a color clear, so
+the actual descriptor and accepted clear aspect need runtime attribution before
+choosing a supported Produced policy. The rejection must not be bypassed by
+removing the validator's usage check or weakening terminal-first write proof.
+Capture-only diagnostics now retain the selected Produced proof and log its
+parent/alias identity, actual level-zero descriptor, terminal record/attachment
+section and actual Clear flags. Final rejection details expose level-zero
+fields only after canonical descriptor validation. Native counterexamples
+preserve depth-usage rejection, color-RT admission and the unresolved-write
+obligation; full native build and all 88 regressions pass
+(`/tmp/dxmt9-v4-produced-diag-{native,tests}.log`). Canonical PE32/PE64/x86 Unix
+builds and install-name audit also pass
+(`/tmp/dxmt9-v4-produced-diag-{pe32,pe64,unix,install-audit}.log`). These are
+diagnostic changes only; the Produced contract is not widened.
+Evidence:
+`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-25/`.
+No paired V4 bundle or original-input GPU/pixel qualification was produced.
+Capture26's diagnostic-only retry identifies the exact rejected parent as
+DF24 (875710020), DEFAULT Texture2D, DEPTHSTENCIL usage 2, 2048x2048, one mip/
+subresource and no MSAA, with Surface alias 4294967319/generation 1/subresource
+0. The selected first terminal record is a DEPTH_STENCIL Clear with ZBUFFER
+only (`flags=0x2`, no explicit rectangles). PE's Produced witness is accepted;
+final color-RT-only disposition validation rejects it at the corresponding
+definition (first arm event 3969). Logical/physical DF24 aspects and clear
+coverage must be qualified before any bounded Produced-depth extension.
+R-HARN-REPLAY-7.37 now specifies that extension for exact DF24, usage 2,
+depth-only flags 2 and an exact DEPTH_STENCIL alias witness. The shared policy
+now connects PE bootstrap/JIT admission, canonical disposition and temporal
+validation, and General-provider preflight. DF24 alias-parent comparison is
+generation-qualified independently of the existing logical-slot helper;
+ambiguous aliases, parent/alias mutations and pre-proof CPU reads reject.
+Canonical and first-access native tests pass, including 5,184 descriptor
+combinations, 75 topology combinations and temporal/identity counterexamples
+(`/tmp/dxmt9-v4-df24-pure-fix1.log`). The initial provider oracle fixture exposed
+the existing same-chunk direct-parent ambiguity restriction; it is being split
+into alias-only production and later sampling chunks without weakening that
+restriction; provider preflight now passes
+(`/tmp/dxmt9-v4-df24-focused-fix2.log`). The first Metal oracle failed in its
+constructed missing-RT0 draw case: all 35 depth texels retained the prior
+0.125 value, with one submitted but zero encoded draws and zero draw passes
+(`/tmp/dxmt9-v4-df24-gpu-diag.log`). Backend render-pass admission rejects a
+missing RT0 before load/store setup; this is not a valid matching-merge
+positive. Every admitted nonzero RT0, including NULL, differs from the Z-only
+clear's zero color-handle key. The replacement oracle therefore uses actual
+full-size/smaller color RT0 draws, requires encoded-draw evidence, and selects
+the existing capture/provider exact-attachment-preservation contract for raw
+readback. No ordinary renderer behavior is changed to satisfy the oracle, and
+no valid matching Z-only merge or preservation-OFF proof is claimed. The valid
+RT0 raw oracle reaches provider verification after its whole-image checks.
+The route diagnostic then confirms exact output/source/digest and balanced
+8-object creation/release for three Compatibility replays and the fresh
+ProductionSlot request: the latter naturally takes one
+`BeginLegacyPreEffectFailure`, with three compatibility draws and zero Direct
+draws (`/tmp/dxmt9-v4-df24-gpu-route-diag.log`). No flush or boundary is invented
+to manufacture Direct eligibility. The Metal oracle now passes with 18
+whole-depth A/B/A overwrite checks, 12 actually encoded non-depth-writing
+control draws, and six fresh/warm exact provider pixel replays. All three
+ProductionSlot requests independently exhibit the named natural fallback,
+strict output/source/digest equality, verified warm resets and 8/8 wrapper
+conservation. Native full build and all 89 serialized Tape/routing/query
+regressions pass (`/tmp/dxmt9-v4-df24-native-final2.log`,
+`/tmp/dxmt9-v4-df24-tests-final.log`, `/tmp/dxmt9-v4-df24-testlog.txt`). Final
+canonical PE32/PE64/x86 Unix builds and install-name audit pass
+(`/tmp/dxmt9-v4-df24-{pe32-final,pe64-final,unix-final2,install-audit-final}.log`).
+The raw observer explicitly selects the
+existing capture/provider exact-attachment preservation policy; it does not
+prove ordinary preservation-OFF behavior. Actual DF24 Direct execution and
+original-input qualification remain unproved. Its
+coverage authority is current canonical/backend stream semantics, not D3D9
+viewport/scissor API Clear conformance. Source inspection confirms DF24 has
+physical Depth32Float storage with no stencil aspect. The separate existing
+DF24 sample-component documentation mismatch (prose versus replicated RGB
+implementation) is outside this extension; the depth oracle must use raw
+depth or sampled red only.
+Evidence: `experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-26/`.
+The run was terminated after repeated evidence; no original bundle or pixel/
+performance qualification was produced.
+Evidence: `experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-24/`.
+The run was deliberately terminated after repeated failures; no V4 bundle or
+original-workload GPU/pixel/performance qualification was produced.
+No complete query/source/GPU/pixel qualification follows from
+this partial progress. Evidence:
+`experiments/output/app-d3d9-stkcop-bench-tape-h430-query-volume-22/`.
+Both capture21 and capture22 were deliberately terminated after repeated
+authentic failure evidence, with no published Tape or visual/performance
+qualification.
+
+The previous publisher profile was not route-faithful: capture plus a nonempty
+output root enabled Arena/session replay and a 2,048-page queue before arm,
+including startup raws. Capture18/19 report zero
+DirectSlot raws and span leases, so they cannot qualify the normal default
+DirectSlot route. Capture no longer selects streaming or enlarged queue storage;
+the resolver truth table covers 105 configuration combinations. V4 selection
+also suppresses legacy token-based DirectSlot/query-range demotion while
+preserving snapshot drains, producer exclusion and real completion fences.
+Partial transaction observation is therefore required for route-faithful
+STALKER capture, not just future policy experiments. Exact-attachment
+preservation is a separate rendering-action override and must be declared;
+removing route overrides alone does not make all capture policy unchanged.
+The publication bundle currently carries no authenticated queue-observed
+attachment-preservation setting. A manifest declaration must come from the
+capture binding's actual setting and interval-stability evidence, not a
+publisher inference from environment variables. Legacy artifacts lacking this
+declaration are unknown, not policy-neutral or preservation-disabled.
+
+CPU shadow A now has owner-scoped immutable scratch extents with bounded
+64 KiB I/O, atomic patch/rollback and leased retirement; GPU checkpoint B keeps
+its independent bytes. This does not prove reduced live RSS or successful
+STALKER capture, and it does not eliminate B's allocation pressure. Native
+memory/fault coverage and actual capture evidence must be recorded separately.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
@@ -469,10 +1731,13 @@ R686 info diagnostics identify pre-arm `registry_invalid reason=child_abort`
 with no qualified resource/caller, followed by `present_output_admission`
 rejection. The generic first-abort needs capture-only callsite attribution;
 it does not prove a backbuffer failure or a volume-specific cause.
-General provider Query definitions, QUERY_ISSUE, QueryGetData and volume
-execution are also unsupported by code inspection, independent of this
-capture failure. No STALKER serial/parallel oracle or repeated performance
-sample is qualified. See
+At this checkpoint, General provider query and volume execution were also
+unsupported, independently of the capture failure. Those primitives now exist
+and have synthetic Metal coverage in `render_tape_provider_spec.cpp`
+(`nativeMetalCapturedQueryTapeOracle`, `nativeMetalVolumeMipSliceOracle`). The
+remaining execution gap is their authenticated V4 source/coordinator/topology
+join, not absence of the primitives. No STALKER serial/parallel oracle or
+repeated performance sample is qualified. See
 [H342](../../docs/perfomance/present-pacing/present-pacing-stalker-tape-admission.342.md).
 
 H343 R688 closes first-callsite attribution: the pre-arm rejection originates

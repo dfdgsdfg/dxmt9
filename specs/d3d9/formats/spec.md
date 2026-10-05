@@ -237,7 +237,8 @@ with no color writes — the color attachment is omitted, or present with
 `MTLStoreActionDontCare` and no allocated texture — so the depth/stencil
 attachment is the effective target. This supports the common depth-only
 shadow pass and stencil-shadow-volume pass without wasting color
-bandwidth. Locking or reading back a NULL surface returns
+bandwidth. Per R-FORMAT-12, `LockRect` returns a lockable dummy buffer whose
+contents are discarded on `UnlockRect`; `GetRenderTargetData` returns
 `D3DERR_INVALIDCALL`.
 
 **ATOC alpha-to-coverage.** Alpha-to-coverage is a render-state hack, not

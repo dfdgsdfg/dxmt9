@@ -8,6 +8,9 @@
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/dxmt9_wait_trace.hpp"
 #include "device_c_query_drain_observer.hpp"
+#include "device_c_render_tape_runtime_identity_v3.hpp"
+#include "device_c_render_tape_runtime_binding_v4.hpp"
+#include "device_c_render_tape_runtime_replay_v4.hpp"
 
 #include "device_c_common.hpp"
 // Need the full dxmt9::Device type to call abortPresentOrdinalWaits() on
@@ -1037,6 +1040,20 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       continue;
     }
     auto& chunk = item.chunk;
+    // Acquire once at the actual popped raw boundary and retain through its
+    // ledger ACK. Nested replayRawChunk scopes alias this driver's same raw;
+    // no transaction terminal is manufactured from invokeReplay's result.
+    std::optional<ScopedRenderTapeRuntimeReplayV4> runtimeReplayV4;
+    if (chunk.renderTapeCaptureToken || chunk.renderTapeEventOrdinal) {
+      if (auto owner = acquireRenderTapeRuntimeIdentityV4(device)) {
+        const auto captureUpper = device->dev().upperDevice();
+        runtimeReplayV4.emplace(std::move(owner), ReplayTransactionRawIdentity{
+            chunk.renderTapeCaptureToken, chunk.renderTapeEventOrdinal, chunk.replaySeq, chunk.recordCount},
+            /*requireLedgerAck=*/true, captureUpper
+                ? captureUpper->queue().acquireTapeRuntimeCapture()
+                : render::TapeRuntimeCaptureLease{});
+      }
+    }
     // Completion-gap attribution is anchored to the worker's FIFO replay
     // interval. Start/end are paired even when replay throws or returns a
     // failure. The lifecycle controller owns the outstanding interval so a
@@ -1091,6 +1108,10 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       device->replayDrainLedger.publishFailure();
       failed_.store(true, std::memory_order_release);
       device->replayDrainLedger.poison();
+      if (runtimeReplayV4) (void)runtimeReplayV4->acknowledge(false);
+      if (chunk.renderTapeCaptureToken &&
+          !device->renderTapeRuntimeV4Selected.load(std::memory_order_acquire))
+        observeRenderTapeRuntimeReplaySettlementV3(device, chunk, false);
       queue_.stop();
       if (auto* observer = device->mutationCompositionObserver.get())
         observer->observeGlobalBarrier(
@@ -1150,6 +1171,10 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       }
     }
     device->replayDrainLedger.publishReplayed(chunk);
+    if (runtimeReplayV4) (void)runtimeReplayV4->acknowledge(!device->replayDrainLedger.terminal());
+    if (chunk.renderTapeCaptureToken &&
+        !device->renderTapeRuntimeV4Selected.load(std::memory_order_acquire))
+      observeRenderTapeRuntimeReplaySettlementV3(device, chunk, true);
     // Raw-entry backing leases are needed only until replay has consumed the
     // immutable table. Release them before the worker can idle on its next pop;
     // GPU reuse is protected from here by the normal per-draw seqId marks.

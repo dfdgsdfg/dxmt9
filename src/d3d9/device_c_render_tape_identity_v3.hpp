@@ -176,6 +176,8 @@ struct RenderTapeIdentityV3Disposition {
 struct RenderTapeIdentityV3Coordinator {
   std::uint64_t eventOrdinal = 0u;
   std::uint64_t rawOrdinal = 0u;
+  // Same capture-qualified replay transaction-attempt generation as the
+  // containing raw settlement; never an Arena source-build or FIFO identity.
   std::uint64_t buildGeneration = 0u;
   std::uint64_t dispatchEdge = 0u;
   // Actual ordered-session release acknowledgment, not GPU completion.
@@ -212,6 +214,8 @@ struct RenderTapeIdentityV3Coordinator {
 struct RenderTapeIdentityV3ReplaySettlement {
   std::uint64_t eventOrdinal = 0u;
   std::uint64_t rawOrdinal = 0u;
+  // Capture-qualified generation allocated at actual replay transaction begin;
+  // independent of rawOrdinal and of any Arena source-build generation.
   std::uint64_t buildGeneration = 0u;
   std::uint64_t replayEdge = 0u;
   std::uint32_t recordCount = 0u;
@@ -441,6 +445,18 @@ bool renderTapeIdentityV3ObservationAdmitted(
     std::span<const RenderTapeIdentityV3Initializer> initializers,
     RenderTapeIdentityV3Observation observation) noexcept;
 
+// Live observations precede the final Present binding. They authenticate the
+// capture token/epoch, queue and completed arm baseline, then use exactly the
+// same current-issue and independent render/initializer readiness predicates.
+// This never admits an unfinished context as a serialized identity header.
+bool renderTapeIdentityV3RuntimeObservationAdmitted(
+    const RenderTapeIdentityV3Header& context,
+    const RenderTapeIdentityV3Coordinator& coordinator,
+    const RenderTapeIdentityV3CurrentIssue& current,
+    std::span<const RenderTapeIdentityV3Source> sources,
+    std::span<const RenderTapeIdentityV3Initializer> initializers,
+    RenderTapeIdentityV3Observation observation) noexcept;
+
 struct RenderTapeIdentityV3View {
   RenderTapeIdentityV3Header header{};
   std::vector<RenderTapeIdentityV3Source> sources{};
@@ -517,6 +533,16 @@ struct RenderTapeIdentityV3Limits {
   std::uint32_t maxCoordinators = 4096u;
   std::uint32_t maxSettlements = 4096u;
 };
+
+constexpr bool renderTapeIdentityV3LimitsAdmitted(RenderTapeIdentityV3Limits limits) noexcept {
+  return limits.maxSources <= kRenderTapeIdentityV3MaxRows &&
+      limits.maxInitializers <= kRenderTapeIdentityV3MaxRows &&
+      limits.maxCommands <= kRenderTapeIdentityV3MaxRows &&
+      limits.maxDispositions <= kRenderTapeIdentityV3MaxRows &&
+      limits.maxCoordinators <= kRenderTapeIdentityV3MaxRows &&
+      limits.maxSettlements <= kRenderTapeIdentityV3MaxRows &&
+      std::uint64_t{limits.maxSources} + limits.maxCoordinators <= kRenderTapeIdentityV3MaxRows;
+}
 
 // First-tranche cold, single-owner ledger. Observer integration must invoke
 // publish/submit/complete only AFTER the corresponding successful real edge.

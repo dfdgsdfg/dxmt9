@@ -524,6 +524,53 @@ RenderTapeProducedProofResult renderTapeClassifyProducedByCapturedPass(
           .observation = observation};
 }
 
+RenderTapeProducedProofResult renderTapeClassifyProducedTextureByCapturedPass(
+    const ImportedChunkView& chunk,
+    const D9CWireObjectIdentity& originIdentity,
+    const D9CWireObjectIdentity& resolvedIdentity,
+    std::span<const std::byte> textureDescriptor,
+    const RenderTapeSurfaceDescriptorV2& alias) noexcept {
+  const auto policy = renderTapeProducedTexturePolicy(textureDescriptor);
+  if (policy == RenderTapeProducedTextureContentPolicy::Unsupported)
+    return {.status = RenderTapeProducedProofStatus::UnsupportedTextureDescriptor};
+  if (!renderTapeSurfaceAliasMatchesTextureSubresource(
+          textureDescriptor, resolvedIdentity, alias) ||
+      (policy == RenderTapeProducedTextureContentPolicy::Df24DepthOnly &&
+       !sameIdentity(alias.parentTexture, resolvedIdentity)))
+    return {.status = RenderTapeProducedProofStatus::TextureAliasDescriptorMismatch};
+  auto result = renderTapeClassifyProducedByCapturedPass(
+      chunk, originIdentity, resolvedIdentity);
+  if (!result.accepted() ||
+      policy == RenderTapeProducedTextureContentPolicy::ColorRenderTarget)
+    return result;
+  if (originIdentity.generation == 0u || originIdentity.objectId == 0u ||
+      resolvedIdentity.generation == 0u || resolvedIdentity.objectId == 0u)
+    return {.status = RenderTapeProducedProofStatus::InvalidTextureIdentity,
+            .observation = result.observation};
+  if (result.observation.sectionKind !=
+      D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL)
+    return {.status = RenderTapeProducedProofStatus::WrongAttachmentBinding,
+            .observation = result.observation};
+  if (result.observation.recordIndex >= chunk.records.size())
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = result.observation};
+  const auto record = chunk.record(result.observation.recordIndex);
+  D9CCommandChunkWireClear clear{};
+  if (record.header.type != D9C_COMMAND_RECORD_CLEAR ||
+      !load(record.payload, 0u, clear) ||
+      !validRectTail(record, clear.rectCount, clear.rectOffset))
+    return {.status = RenderTapeProducedProofStatus::Malformed,
+            .observation = result.observation};
+  if ((clear.flags & kD3DClearZBuffer) == 0u)
+    return {.status = RenderTapeProducedProofStatus::MissingRequiredClearAspect,
+            .observation = result.observation};
+  if (!renderTapeProducedDf24ClearSupported(
+          result.observation.sectionKind, clear.flags, clear.rectCount))
+    return {.status = RenderTapeProducedProofStatus::UnsupportedClearFlags,
+            .observation = result.observation};
+  return result;
+}
+
 RenderTapeProducedProofResult
 renderTapeClassifyProducedStandaloneSurfaceByCapturedPass(
     const ImportedChunkView& chunk,
@@ -599,6 +646,16 @@ const char* renderTapeProducedProofStatusName(
     return "resolved_identity_mismatch";
   case RenderTapeProducedProofStatus::ObservedIdentityMismatch:
     return "observed_identity_mismatch";
+  case RenderTapeProducedProofStatus::UnsupportedTextureDescriptor:
+    return "unsupported_texture_descriptor";
+  case RenderTapeProducedProofStatus::TextureAliasDescriptorMismatch:
+    return "texture_alias_descriptor_mismatch";
+  case RenderTapeProducedProofStatus::WrongAttachmentBinding:
+    return "wrong_attachment_binding";
+  case RenderTapeProducedProofStatus::UnsupportedClearFlags:
+    return "unsupported_clear_flags";
+  case RenderTapeProducedProofStatus::InvalidTextureIdentity:
+    return "invalid_texture_identity";
   }
   return "unknown";
 }

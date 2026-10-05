@@ -5,6 +5,7 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_query_policy.hpp"
 #include "dxmt9_resource_initializer.hpp"
+#include "dxmt9_render_tape_topology_scope.hpp"
 #include "framegraph/fg_multi_source_planner.hpp"
 #include "render/backend_interface.hpp"
 #include "render/dag_observer.hpp"
@@ -516,6 +517,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     if (record.testOnlyAllowNullCommandBuffer) {
       record.commandBuffer = {};
     }
+    if (tapeRuntimeObserverEndpoint_.enabled()) render::registerTapeTopologyCompletionSources(
+        acquireTapeRuntimeCapture(), record.explicitCompletionSourceSpan());
     if (!queueLifecycle_.submitEncodedSubmission(lock, record)) {
       return false;
     }
@@ -1760,8 +1763,15 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 [&](const SynchronousSourceBorrowBatch& sourceBorrows) noexcept {
                   try {
                     ScopedQueueUnlock queueUnlocked(lock);
-                    replayPlan = backend_->planMultiSourceSessionReplay(
-                        pool_, sourceBorrows, replayFrontier);
+                    if (tapeRuntimeObserverEndpoint_.enabled()) {
+                      const auto ranges = render::tapeTopologySourceRanges(
+                          std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count));
+                      render::ScopedTapeTopologyInvocation topology(render::retainTapeTopologyInvocation(
+                          acquireTapeRuntimeCapture(), ranges, true));
+                      replayPlan = backend_->planMultiSourceSessionReplay(pool_, sourceBorrows, replayFrontier);
+                    } else {
+                      replayPlan = backend_->planMultiSourceSessionReplay(pool_, sourceBorrows, replayFrontier);
+                    }
                     if (replayPlan.valid() && replayPlan.reordered()) {
                       std::array<framegraph::MultiSourcePlanningSource,
                                  framegraph::kMaxMultiSourcePlanningSources>
@@ -1844,6 +1854,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             liveActive == active;
 
         if (!snapshotStillValid) {
+          if (tapeRuntimeObserverEndpoint_.enabled()) render::rejectTapeTopologyCandidate(
+              acquireTapeRuntimeCapture(), render::tapeTopologySourceRanges(
+                  std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count)));
           if (selectionAcquiredLease) {
             releaseCapacityLease();
           } else {
@@ -1894,6 +1907,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     if (!queueLifecycle_.commitReservedReadySlotBatch(
             lock,
             std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
+      if (tapeRuntimeObserverEndpoint_.enabled()) render::rejectTapeTopologyCandidate(
+          acquireTapeRuntimeCapture(), render::tapeTopologySourceRanges(
+              std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count)));
       if (selectionAcquiredLease) {
         releaseCapacityLease();
       } else {
@@ -2147,6 +2163,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 std::span<const QueueCompletionSource>(
                     selectedCompletionSources.data(), 1u));
         if (registrationValid) {
+          if (tapeRuntimeObserverEndpoint_.enabled()) render::registerTapeTopologyCompletionSources(
+              acquireTapeRuntimeCapture(), std::span<const QueueCompletionSource>(
+                  selectedCompletionSources.data(), 1u));
           pendingSources = stagedSources;
           pendingAdmission = stagedAdmission;
           if (freshPlanningFrontier) {
@@ -2692,6 +2711,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     abortCpuReadySessionFailOpen(
                         "deferred terminal-suffix successor registration");
                   }
+                  if (tapeRuntimeObserverEndpoint_.enabled()) render::registerTapeTopologyCompletionSources(
+                      acquireTapeRuntimeCapture(), std::span(&successorCompletion, 1u));
                   pendingAdmission = joinedAdmission;
 
                   std::array<ResolvedPublishedSource, 2u> replaySources{
@@ -3057,6 +3078,14 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   pendingSession.reset();
                 }
               } else {
+                if (tapeRuntimeObserverEndpoint_.enabled()) {
+                  const auto ranges = render::tapeTopologySourceRanges(
+                      std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count));
+                  render::activateTapeTopologyCandidate(acquireTapeRuntimeCapture(), ranges,
+                      static_cast<std::uint32_t>(replayRuns.runs.size()));
+                  render::registerTapeTopologyCompletionSources(acquireTapeRuntimeCapture(),
+                      std::span<const QueueCompletionSource>(selectedCompletionSources.data(), count));
+                }
                 if (exactRedundantFixedSources) {
                   // Natural source-local merging may materialize the same
                   // complete FIFO list in record, queue, and session owners.
@@ -3130,13 +3159,23 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     };
                   }
 
-                  auto submission = encodeWithBorrows(
-                      lock,
-                      std::span<const ResolvedPublishedSource>(
-                          replayLookaheadSources.data(),
-                          replayLookaheadSources.size())
-                          .subspan(runIndex),
-                      replaySource, std::move(options), true);
+                  auto submission = tapeRuntimeObserverEndpoint_.enabled()
+                      ? [&] {
+                          const auto ranges = render::tapeTopologySourceRanges(
+                              std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count));
+                          render::TapeTopologyInvocationHandle handle;
+                          auto context = render::tapeTopologyCandidateContext(
+                              acquireTapeRuntimeCapture(), ranges, handle);
+                          render::ScopedTapeTopologyInvocation topology(std::move(context), handle, true);
+                          return encodeWithBorrows(lock,
+                              std::span<const ResolvedPublishedSource>(replayLookaheadSources.data(),
+                                  replayLookaheadSources.size()).subspan(runIndex),
+                              replaySource, std::move(options), true);
+                        }()
+                      : encodeWithBorrows(lock,
+                          std::span<const ResolvedPublishedSource>(replayLookaheadSources.data(),
+                              replayLookaheadSources.size()).subspan(runIndex),
+                          replaySource, std::move(options), true);
                   if (!submission.has_value()) {
                     perf::countCpuReadyMultiSourcePostEffectFatal(
                         perf::CpuReadyMultiSourceFatalReason::
@@ -3165,6 +3204,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     }
                   }
                   fragmentCarrier = std::move(*submission);
+                  if (tapeRuntimeObserverEndpoint_.enabled()) render::foldTapeTopologyCandidate(
+                      acquireTapeRuntimeCapture(), render::tapeTopologySourceRanges(
+                          std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count)),
+                      runIndex + 1u == replayRuns.runs.size());
                 }
 
                 if (!fragmentCarrier) {
@@ -3228,6 +3271,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       }
     }
 multi_source_window_complete:
+    if (tapeRuntimeObserverEndpoint_.enabled()) render::rejectTapeTopologyCandidate(
+        acquireTapeRuntimeCapture(), render::tapeTopologySourceRanges(
+            std::span<const ResolvedPublishedSource>(resolvedWindow.data(), count)));
     const bool naturalSourceLocalFallback =
         sourceLocalReplayDisposition == encoders::ReplayWindowDisposition::
             NaturalAfterMergeFallback;

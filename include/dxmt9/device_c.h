@@ -947,6 +947,44 @@ typedef struct D9CRenderTapeIdentityCaptureResult {
     uint64_t settlementTableOffset;
 } D9CRenderTapeIdentityCaptureResult;
 
+/* Capture-only v3 snapshot transfer, not a tape sidecar or replay authority.
+ * Size-query and copy return the same frozen token/epoch-qualified snapshot.
+ * PE must bind and fully validate it against its sealed tape before publication.
+ */
+typedef struct D9CRenderTapeIdentityCaptureV3Result {
+    uint32_t status;
+    uint32_t version;
+    uint64_t captureToken;
+    uint64_t captureEpoch;
+    uint64_t presentOrdinal;
+    uint64_t byteCount;
+} D9CRenderTapeIdentityCaptureV3Result;
+
+/* Trusted v4 arm binding, returned independently of snapshot transfer bytes.
+ * COMPLETE means this exact token/epoch was attached to the returned queue.
+ */
+typedef struct D9CRenderTapeIdentityCaptureV4ArmResult {
+    uint32_t status;
+    uint32_t version;
+    uint64_t captureToken;
+    uint64_t captureEpoch;
+    uint64_t queue;
+} D9CRenderTapeIdentityCaptureV4ArmResult;
+
+/* Frozen identity.v4 + execution_topology.v1 transfer (D9RTSNV2). Size query
+ * and copy return the same 48-byte receipt and bytes. Queue is the trusted arm
+ * binding, not authority recovered from either transferred sidecar.
+ */
+typedef struct D9CRenderTapeIdentityCaptureV4Result {
+    uint32_t status;
+    uint32_t version;
+    uint64_t captureToken;
+    uint64_t captureEpoch;
+    uint64_t queue;
+    uint64_t presentOrdinal;
+    uint64_t byteCount;
+} D9CRenderTapeIdentityCaptureV4Result;
+
 typedef struct D9CRenderTapeIdentitySettlementEntry {
     uint64_t eventOrdinal;
     uint64_t rawOrdinal;
@@ -1143,6 +1181,8 @@ typedef struct D9CRenderTapeEventQueryCheckpointResult {
  * exact generation-qualified standalone X8R8G8B8 surface or a supported
  * texture subresource. Version 1 is the tightly packed logical four-byte
  * pixel representation for X8R8G8B8 2D, A8R8G8B8 managed 2D, or R32F cube.
+ * It also admits one-level DEFAULT render-target R32F 2D as raw little-endian
+ * float32 bits in matching physical R32Float storage, without conversion.
  * Version 2 is raw RGBA16Float little-endian (R, G, B, A half lanes, eight
  * bytes/pixel) for a single-level, single-sample DEFAULT-pool A16B16G16R16F
  * 2D render-target texture only; it performs no float conversion. The
@@ -1320,6 +1360,14 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk_segmented(
     D9CDevice*, const D9CCommandChunkSegmentedTransportV1*);
+/* Cold metadata observation under the serialized PE recorder capture guard.
+ * Resolves the exact surface facade identity and compares its retained core
+ * backing to current primary swapchain0/backbuffer0. No drain, flush, snapshot,
+ * or new facade acquisition. Logical identities are not merged; every failure
+ * leaves outIsPrimary zero. Do not cache this observation across Reset. */
+DXMT9_NODISCARD int32_t
+dxmt9c_device_classify_render_tape_primary_backbuffer(
+    D9CDevice*, const D9CWireObjectIdentity*, uint32_t* outIsPrimary);
 DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
     D9CDevice*, D9CRenderTapePresentCaptureResult* out, void* bytes,
@@ -1331,6 +1379,34 @@ dxmt9c_device_finish_render_tape_present_source_capture(
 DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture(
     D9CDevice*, uint64_t captureToken,
     D9CRenderTapeIdentityCaptureResult* out, void* bytes, uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_begin_render_tape_identity_capture_v3(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch);
+/* Cold external-event boundary; cutKind is the v3 BeforeEvent/AfterEvent
+ * value. Command-record cuts are owned by Unix replay, not this entrypoint. */
+DXMT9_NODISCARD int32_t dxmt9c_device_note_render_tape_identity_cut_v3(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch,
+    uint64_t eventOrdinal, uint32_t cutKind);
+DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture_v3(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch,
+    uint64_t presentOrdinal, D9CRenderTapeIdentityCaptureV3Result* out,
+    void* bytes, uint64_t capacity);
+void dxmt9c_device_cancel_render_tape_identity_capture_v3(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch);
+DXMT9_NODISCARD int32_t dxmt9c_device_begin_render_tape_identity_capture_v4(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch,
+    D9CRenderTapeIdentityCaptureV4ArmResult* out);
+/* Cold external-event boundary. Only BeforeEvent/AfterEvent are admitted;
+ * command-record cuts and actual replay settlement stay Unix-owned.
+ */
+DXMT9_NODISCARD int32_t dxmt9c_device_note_render_tape_identity_cut_v4(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch, uint64_t queue,
+    uint64_t eventOrdinal, uint32_t cutKind);
+DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture_v4(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch, uint64_t queue,
+    uint64_t presentOrdinal, D9CRenderTapeIdentityCaptureV4Result* out,
+    void* bytes, uint64_t capacity);
+void dxmt9c_device_cancel_render_tape_identity_capture_v4(
+    D9CDevice*, uint64_t captureToken, uint64_t captureEpoch, uint64_t queue);
 DXMT9_NODISCARD int32_t dxmt9c_device_wait_render_tape_event_completion(
     D9CDevice*, uint64_t captureToken, uint64_t eventOrdinal);
 /* Completion only after an accepted operation whose capture failed. This

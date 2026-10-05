@@ -320,11 +320,12 @@ constexpr bool resolveRenderTapePublisherCaptureEnabled(
 }
 
 constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
-    const char* value, const char* renderTapeCapture,
-    const char* renderTapeOutputRoot) noexcept {
-  return resolveCpuReadyTapeDirectReplayEnabled(value) ||
-         resolveRenderTapePublisherCaptureEnabled(renderTapeCapture,
-                                                  renderTapeOutputRoot);
+    const char* value, const char* /*renderTapeCapture*/,
+    const char* /*renderTapeOutputRoot*/) noexcept {
+  // The capture observer follows the independently selected source provider.
+  // Preserve the combined resolver's callers without giving publication
+  // configuration authority over ordinary replay routing.
+  return resolveCpuReadyTapeDirectReplayEnabled(value);
 }
 
 std::unique_ptr<Device> CreateDXMT9Device(const DEVICE_DESC& desc);

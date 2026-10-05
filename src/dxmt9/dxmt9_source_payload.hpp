@@ -641,6 +641,9 @@ class ArenaSourcePayloadBuilder {
 
   bool good() const noexcept { return good_; }
   bool failed() const noexcept { return !good_; }
+  std::size_t commandCount() const noexcept {
+    return block_ ? block_->commandHeaders_.size() : 0u;
+  }
   bool publish() noexcept;
 
   bool tryAppendCommand(MetalCommandKind kind,

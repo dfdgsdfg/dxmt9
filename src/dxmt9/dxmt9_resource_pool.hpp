@@ -138,8 +138,19 @@
 //    replay is the immutable snapshot. `HandleArena::find` protects handle
 //    resolution only; its returned pointer-stable live view is not covered by
 //    this lock claim and retains separate ordering/lifetime obligations.
+//    Cold `proveBufferReadFootprint` retains that same shared arena lock across
+//    backing qualification and byte comparison. Its caller independently pins
+//    the actual source; unsynchronized mapped/GPU writes are not serialized by
+//    this arena lock. The per-buffer observation grants no queue authority.
+//    `proveBufferReadFootprints` holds ONE shared lock across qualification
+//    and comparison of every batch member, giving a coherent instantaneous
+//    index/vertex observation, not preservation after that lock is released.
+//    Cold `observeBufferVersion` copies current logical-version and allocation
+//    identity facts from one shared arena inspection, including nonversioned
+//    buffers. It returns no pointer/address or pin and grants no future proof.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_buffer_read_proof.hpp"
 #include "dxmt9_buffer_use_batch.hpp"
 #include "dxmt9_heap_manager.hpp"
 #include "dxmt9_managed_mutation_lease.hpp"
@@ -516,6 +527,23 @@ class HandleArena {
                             }
                             fn(*record);
                             return true;
+                          });
+  }
+
+  // Cold two-phase inspection. Resolve every complete handle and validate all
+  // members before the final synchronous visitor, retaining ONE shared lock
+  // across both phases. Missing/stale records are passed as nullptr. Visitors
+  // may not retain record pointers or recursively enter this arena.
+  template <typename Item, typename Project, typename Inspect, typename Finish>
+  bool inspectMany(std::span<const Item> items, Project&& project,
+                   Inspect&& inspect, Finish&& finish) const {
+    return withSharedLock(UploadLockOperation::Inspect,
+                          [&]() {
+                            for (std::size_t index = 0u; index < items.size(); ++index) {
+                              const auto* record = findUnlocked(project(items[index]));
+                              if (!inspect(record, items[index], index)) return false;
+                            }
+                            return finish();
                           });
   }
 
@@ -1028,6 +1056,26 @@ struct Pool {
       core::Handle handle,
       const core::DrawBufferBindingSnapshot& snapshot) const noexcept;
   core::DrawBufferBindingSnapshot snapshotBufferBinding(core::Handle handle) const noexcept;
+
+  // Cold producer value pull. All current logical/backing facts come from one
+  // arena shared lock, not separate live-record/capture probes. The caller owns
+  // successful mutation -> observation -> source/context attachment ordering.
+  // No pin, CPU epoch authentication, or future backing validity is granted.
+  BufferVersionObservation observeBufferVersion(core::Handle handle) const noexcept;
+
+  // Cold physical-byte observation only. Like commit-time capture, it may run
+  // outside the queue mutex while its caller retains the actual source. The
+  // arena shared lock covers all validation and memcmp against arena-locked
+  // uploads/rotation/reclaim; no live record or contents pointer escapes.
+  BufferReadProofResult proveBufferReadFootprint(
+      const BufferReadProofRequest& request) const noexcept;
+
+  // Cold coherent batch observation. The same shared arena lock covers every
+  // record/backing qualification and every memcmp; no per-member inspect lock
+  // is nested. All request/range/byte sums are bounded before comparisons.
+  BufferReadProofBatchResult proveBufferReadFootprints(
+      std::span<const BufferReadProofRequest> requests,
+      BufferReadProofBatchLimits limits = {}) const noexcept;
 
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp
   // their last-used watermark.

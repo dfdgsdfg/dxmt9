@@ -5,6 +5,8 @@
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_draw_internal.hpp"
+#include "dxmt9_draw_fetch_address.hpp"
+#include "dxmt9_draw_fetch_counts.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_draw_encoder_diagnostics.hpp"
 #include "dxmt9_encode_session_storage_internal.hpp"
@@ -441,16 +443,7 @@ u32 x8AlphaOneTextureMaskForDraw(core::FlatDrawStateView drawState,
 }
 
 u32 primitiveVertexCount(core::PrimitiveType type, u32 primitiveCount) {
-  switch (type) {
-    case core::PrimitiveType::PointList: return primitiveCount;
-    case core::PrimitiveType::LineList: return primitiveCount * 2u;
-    case core::PrimitiveType::LineStrip: return primitiveCount + 1u;
-    case core::PrimitiveType::TriangleList: return primitiveCount * 3u;
-    case core::PrimitiveType::TriangleStrip:
-    case core::PrimitiveType::TriangleFan:
-      return primitiveCount + 2u;
-  }
-  return 0u;
+  return encoderPrimitiveVertexCount(type, primitiveCount);
 }
 
 u64 shaderVariantHashForDraw(core::FlatDrawStateView drawState,
@@ -727,7 +720,7 @@ void countDrawIssue(core::FlatDrawStateView drawState,
 }
 
 std::size_t indexElementSize(IndexType type) {
-  return type == IndexType::UInt16 ? 2u : 4u;
+  return encoderIndexElementSize(type);
 }
 
 template <std::size_t Capacity>
@@ -3009,6 +3002,10 @@ bool encodeDraw(EncodeContext& ctx,
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
+  if (auto* recorder = ctx.drawRecorder; recorder && recorder->beginDraw) {
+    recorder->beginDraw(recorder->userdata, seqId, native.commandIndex,
+                        native.commandDrawIndex);
+  }
   auto* dirty = native.uniformDirty;
   auto* textureSamplerShadow = native.textureSampler;
   auto* encoderBreakdown = native.encoderBreakdown;
@@ -3174,7 +3171,8 @@ bool encodeDraw(EncodeContext& ctx,
   const u32 primitiveCount = std::max<u32>(1, pv.primitiveCount);
   const uint64_t vertexCount =
       static_cast<uint64_t>(std::max(1u, primitiveVertexCount(pv.primitiveType, primitiveCount)));
-  const bool indexedDraw = pv.indexed && (hot.indexBuffer || !pv.userIndexData.empty());
+  const bool indexedDraw = encoderEffectiveIndexed(pv.indexed,
+      static_cast<bool>(hot.indexBuffer), !pv.userIndexData.empty());
   const auto primitiveType = toPrimitiveType(pv.primitiveType);
   const bool preTransformed = ffLayout && ffLayout->preTransformed;
   const auto fillMode = triangleFillModeFromRenderState(hot.renderStates);
@@ -4480,6 +4478,14 @@ bool encodeDraw(EncodeContext& ctx,
   auto makeTransientVertexBuffer = [&](const void* data, std::size_t len,
                                        ActiveEncoderBreakdown::TransientVertexSource source) {
     auto slice = makeTransientBuffer(data, len);
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->observeBufferSlice && slice) {
+      recorder->observeBufferSlice(recorder->userdata,
+          EncodeDrawBufferObservationKind::TransientVertexUpload,
+          static_cast<std::uint8_t>(source), 0u,
+          std::span<const u8>(static_cast<const u8*>(data), len),
+          slice.buffer, slice.offset, static_cast<u64>(slice.size));
+    }
     if (slice && encoderBreakdown) {
       encoderBreakdown->addTransientVertexBytes(static_cast<u64>(len), source);
     }
@@ -4488,6 +4494,14 @@ bool encodeDraw(EncodeContext& ctx,
   auto makeTransientIndexBuffer = [&](const void* data, std::size_t len,
                                       ActiveEncoderBreakdown::TransientIndexSource source) {
     auto slice = makeTransientBuffer(data, len);
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->observeBufferSlice && slice) {
+      recorder->observeBufferSlice(recorder->userdata,
+          EncodeDrawBufferObservationKind::TransientIndexUpload,
+          static_cast<std::uint8_t>(source), 0u,
+          std::span<const u8>(static_cast<const u8*>(data), len),
+          slice.buffer, slice.offset, static_cast<u64>(slice.size));
+    }
     if (slice && encoderBreakdown) {
       encoderBreakdown->addTransientIndexBytes(static_cast<u64>(len), source);
     }
@@ -4497,6 +4511,20 @@ bool encodeDraw(EncodeContext& ctx,
       streamBindingSnapshot(bindingSnapshot, 0u);
   const auto* indexSnapshot =
       indexBindingSnapshot(bindingSnapshot);
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->observeDrawBindingContext) {
+    core::DrawParam observedParam = paramOverride ? *paramOverride : core::DrawParam{};
+    observedParam.primitiveType = pv.primitiveType;
+    observedParam.primitiveCount = pv.primitiveCount;
+    observedParam.startVertex = pv.startVertex;
+    observedParam.baseVertexIndex = pv.baseVertexIndex;
+    observedParam.startIndex = pv.startIndex;
+    observedParam.indexType = pv.indexType;
+    observedParam.indexed = pv.indexed;
+    observedParam.instanceCount = pv.instanceCount;
+    recorder->observeDrawBindingContext(recorder->userdata, hot, shader, observedParam,
+                                       stream0Snapshot, indexSnapshot);
+  }
   {
     PerfScope fvfDecodeBytesScope(perf::countEncodeDrawFvfDecodeCpuTime,
                             perf::countEncodeDrawFvfDecodeBytesCpuTime);
@@ -4710,15 +4738,14 @@ bool encodeDraw(EncodeContext& ctx,
       PerfScope uniformBuildFfScope(perf::countEncodeDrawUniformBuildCpuTime,
                             perf::countEncodeDrawUniformBuildFfpCpuTime);
       drawVertexStreamOffset = 0;
-      drawVertexStreamStride =
-          vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
+      drawVertexStreamStride = encoderStream0SourceStride(vertexDecl.streams[0].stride,
+          true, ffLayout->stride, 0u);
       if (!indexedDraw && drawVertexStreamStride != 0u) {
-        vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                              static_cast<uint64_t>(drawVertexStreamStride);
-        drawVertexBaseIndex = 0;
-      } else {
-        drawVertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+        vertexBufferOffset += encoderNonIndexedStartByteDisplacement(indexedDraw,
+            pv.startVertex, drawVertexStreamStride);
       }
+      drawVertexBaseIndex = encoderDrawVertexBaseIndex(indexedDraw, pv.startVertex,
+          pv.baseVertexIndex, drawVertexStreamStride);
     }
     {
       PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime,
@@ -5144,16 +5171,16 @@ bool encodeDraw(EncodeContext& ctx,
       PerfScope uniformBuildVsScope(perf::countEncodeDrawUniformBuildCpuTime,
                             perf::countEncodeDrawUniformBuildVsCpuTime);
       drawVertexStreamOffset = 0;
-      drawVertexStreamStride =
-          ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
-                   : computeVertexDeclStride(vertexDecl);
+      drawVertexStreamStride = encoderStream0SourceStride(
+          ffLayout ? vertexDecl.streams[0].stride : 0u,
+          ffLayout.has_value(), ffLayout ? ffLayout->stride : 0u,
+          ffLayout ? 0u : computeVertexDeclStride(vertexDecl));
       if (!indexedDraw && drawVertexStreamStride != 0u) {
-        vertexBufferOffset += static_cast<uint64_t>(pv.startVertex) *
-                              static_cast<uint64_t>(drawVertexStreamStride);
-        drawVertexBaseIndex = 0;
-      } else {
-        drawVertexBaseIndex = indexedDraw ? pv.baseVertexIndex : static_cast<i32>(pv.startVertex);
+        vertexBufferOffset += encoderNonIndexedStartByteDisplacement(indexedDraw,
+            pv.startVertex, drawVertexStreamStride);
       }
+      drawVertexBaseIndex = encoderDrawVertexBaseIndex(indexedDraw, pv.startVertex,
+          pv.baseVertexIndex, drawVertexStreamStride);
     }
     {
       PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime,
@@ -5925,8 +5952,9 @@ bool encodeDraw(EncodeContext& ctx,
         }
       }
       const std::size_t stride = static_cast<std::size_t>(
-          ffLayout ? (drawVertexStreamStride ? drawVertexStreamStride : ffLayout->stride)
-                   : computeVertexDeclStride(vertexDecl));
+          encoderStream0SourceStride(ffLayout ? drawVertexStreamStride : 0u,
+              ffLayout.has_value(), ffLayout ? ffLayout->stride : 0u,
+              ffLayout ? 0u : computeVertexDeclStride(vertexDecl)));
       const std::size_t streamBase = static_cast<std::size_t>(hot.streamOffsets[0]);
       if (traceEncode) {
         std::ostringstream out;

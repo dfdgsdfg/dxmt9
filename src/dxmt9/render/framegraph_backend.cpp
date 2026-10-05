@@ -3,6 +3,7 @@
 #include "../dxmt9_draw_encoder.hpp"
 #include "../dxmt9_cpu_supply_trace.hpp"
 #include "../dxmt9_perf_counters.hpp"
+#include "../dxmt9_render_tape_topology_scope.hpp"
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_linearizer.hpp"
 #include "../framegraph/fg_multi_source_planner.hpp"
@@ -452,8 +453,10 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     if (::dxmt9::supply::enabled())
       ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphEncodeBegin,
                             static_cast<const IRenderBackend*>(this), seqId, disposition);
+    if (activeTapeTopologyInvocation) prepareTapeTopologySourceEncode(payload, seqId, options);
     auto result = encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                        std::move(options));
+    if (activeTapeTopologyInvocation) activeTapeTopologyInvocation->observePreparedEncode(result.has_value());
     if (::dxmt9::supply::enabled())
       ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphEncodeEnd,
                             static_cast<const IRenderBackend*>(this), seqId, disposition);
@@ -467,6 +470,14 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     // delegating so encodeChunk does not materialize the same lookahead twice.
     options.sessionLookaheadBorrows = nullptr;
     options.sessionLookaheadSources = sessionLookaheadSources;
+    if (activeTapeTopologyInvocation) {
+      const auto reason = options.skipBackendPlanning
+          ? (options.replayCommandPlanActive
+                ? d3d9::RenderTapeExecutionTopologyV1FallbackReason::ExternalCommittedPlan
+                : d3d9::RenderTapeExecutionTopologyV1FallbackReason::ExplicitSkip)
+          : d3d9::RenderTapeExecutionTopologyV1FallbackReason::QueryScope;
+      stageTapeTopologySourceWithoutDag(payload, seqId, options, reason);
+    }
     return encodePlannedChunk(1u); // Planning bypass: scoped/explicit skip.
   }
 
@@ -805,6 +816,13 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
                         FinalNaturalOrder);
           options.sessionLookaheadBorrows = nullptr;
           options.sessionLookaheadSources = sessionLookaheadSources;
+          if (activeTapeTopologyInvocation) {
+            activeTapeTopologyInvocation->stageSelectedDag(
+                options.replayCommandsAlreadyEncoded.empty()
+                    ? d3d9::RenderTapeExecutionTopologyV1FallbackReason::None
+                    : d3d9::RenderTapeExecutionTopologyV1FallbackReason::DceEncodedPrefix,
+                graph, replayPlan, options.replayCommandsAlreadyEncoded);
+          }
           return encodePlannedChunk(2u); // Validated replay-command plan.
         }
         recordSourceLocalReturnOutcome(
@@ -832,6 +850,9 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
   }
   options.sessionLookaheadBorrows = nullptr;
   options.sessionLookaheadSources = sessionLookaheadSources;
+  if (activeTapeTopologyInvocation) stageTapeTopologySourceWithoutDag(payload, seqId, options,
+      features_.empty() ? d3d9::RenderTapeExecutionTopologyV1FallbackReason::FeaturesOff
+                        : d3d9::RenderTapeExecutionTopologyV1FallbackReason::None);
   return encodePlannedChunk(3u); // Natural-order final path.
 }
 

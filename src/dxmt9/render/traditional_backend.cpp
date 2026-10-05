@@ -1,4 +1,5 @@
 #include "traditional_backend.hpp"
+#include "../dxmt9_render_tape_topology_scope.hpp"
 
 #include <utility>
 
@@ -26,8 +27,11 @@ TraditionalBackend::onSourceReady(encoders::EncodeContext& ctx,
                              makeResourceAliasResolver(ctx.pool));
 
   // Byte-identical traditional path: forward straight to the free function.
-  return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
-                               std::move(options));
+  if (activeTapeTopologyInvocation) stageTapeTopologySourceWithoutDag(payload, seqId, options,
+      d3d9::RenderTapeExecutionTopologyV1FallbackReason::TraditionalBackend);
+  auto result = encoders::encodeChunk(ctx, slotIndex, payload, seqId, std::move(options));
+  if (activeTapeTopologyInvocation) activeTapeTopologyInvocation->observePreparedEncode(result.has_value());
+  return result;
 }
 
 bool TraditionalBackend::emitDraw(encoders::EncodeContext& ctx,

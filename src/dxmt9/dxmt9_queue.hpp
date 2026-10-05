@@ -6,6 +6,7 @@
 #include "dxmt9_direct_continuation.hpp"
 #include "dxmt9_post_encode_retirement.hpp"
 #include "dxmt9_pipeline_lifecycle.hpp"
+#include "dxmt9_render_tape_runtime_observer.hpp"
 #include "render/encode_scheduling_progress.hpp"
 #include "../winemetal/Metal.hpp"
 
@@ -1510,6 +1511,7 @@ class QueueLifecycleController {
     ::dxmt9::queue::PipelineControlObserverSink pipelineControlObserver{};
     ::dxmt9::core::metalqueue::ReplaySourcePublicationSink
         replaySourcePublicationSink{};
+    ::dxmt9::render::TapeRuntimeObserverEndpoint* tapeRuntimeObserver = nullptr;
     // Resolved once when this binding is installed. Queue event producers use
     // this cached bit to avoid an unconditional call into the owner observer.
     bool pipelineLifecycleObservationEnabled = false;
@@ -1524,6 +1526,11 @@ class QueueLifecycleController {
   // while holding the same scheduling mutex used by commitCurrentChunk.
   void setReplaySourcePublicationSink(
       ReplaySourcePublicationSink sink) noexcept;
+  void observeTapeRuntimeAppend(ChunkSlot& payload,
+      std::uint32_t commandIndex, std::uint32_t firstSubdraw = 0u,
+      std::uint32_t subdrawCount = 0u) const noexcept;
+  void observeTapeRuntimeNewCommands(ChunkSlot& payload,
+      std::size_t firstCommand, std::size_t priorTailDraws) const noexcept;
   // Control-plane boundary evidence. This is separate from per-source owner
   // rows and never synthesizes a GPU completion or reclaim.
   void observePipelineControl(::dxmt9::queue::PipelineControl control,
@@ -1587,7 +1594,24 @@ class QueueLifecycleController {
   // retain the historical append path without a capacity scan or fat token.
   template <typename Mutation>
   bool mutateWritingPayload(ChunkSlot& payload, Mutation&& mutation) {
-    if (!payload.admissionCapacityReceipt.qualified()) return mutation();
+    const bool observe = submissionBinding_.tapeRuntimeObserver &&
+        submissionBinding_.tapeRuntimeObserver->enabled();
+    std::size_t firstCommand;
+    std::size_t priorTailDraws;
+    if (observe) {
+      firstCommand = payload.commandCount();
+      priorTailDraws = 0u;
+      if (firstCommand) {
+        const auto tail = SourcePayloadView(payload).commandAt(firstCommand - 1u).command;
+        if (tail.kind == MetalCommandKind::DrawRun) priorTailDraws = tail.drawParams.size();
+      }
+    }
+    if (!payload.admissionCapacityReceipt.qualified()) {
+      const bool appended = mutation();
+      if (appended && observe)
+        observeTapeRuntimeNewCommands(payload, firstCommand, priorTailDraws);
+      return appended;
+    }
     const auto identity = writingCapacityIdentity(payload);
     auto* ledger = submissionBinding_.directSlotCapacityLedger;
     auto lease = identity && ledger
@@ -1608,6 +1632,8 @@ class QueueLifecycleController {
         poisonTapeFailureLocked();
         return false;
       }
+      if (appended && observe)
+        observeTapeRuntimeNewCommands(payload, firstCommand, priorTailDraws);
       return appended;
     } catch (...) {
       // A reserve may grow some vectors before a later allocation throws.

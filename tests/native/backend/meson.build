@@ -84,6 +84,21 @@ test('dxmt9-query-poll-receipt-timeline-spec', query_poll_receipt_bridge_spec,
        'DXMT9_QUERY_OBSERVER=1', 'DXMT9_QUERY_OBSERVER_END_STRIDE=1',
        'DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'], timeout: 30)
 
+provider_replay_observation_v4_spec = executable(
+  'dxmt9-render-tape-provider-observation-v4-spec',
+  'provider_replay_observation_v4_spec.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src'),
+                        include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-provider-observation-v4-spec',
+     provider_replay_observation_v4_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'],
+     timeout: 30)
+
 query_replay_receipt_spec = executable(
   'dxmt9-query-replay-receipt-spec', 'query_replay_receipt_spec.cpp',
   include_directories: dxmt9_inc,
@@ -869,9 +884,45 @@ test('dxmt9-cpu-ready-production-routing-spec',
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
+test('dxmt9-render-tape-controlled-cpu-v4-queue-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-consumer-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 60)
+test('dxmt9-render-tape-controlled-cpu-v4-integration-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-integration-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 60)
+test('dxmt9-render-tape-controlled-cpu-v4-progress-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-progress-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 60)
+foreach grouping_limit : ['0', '3', '64']
+  test('dxmt9-render-tape-controlled-cpu-v4-grouping-' + grouping_limit + '-spec',
+       cpu_ready_production_routing_spec,
+       args: ['--controlled-cpu-v4-grouping-spec', grouping_limit],
+       env: dxmt9_native_test_env,
+       timeout: 60)
+endforeach
+test('dxmt9-render-tape-controlled-cpu-v4-executor-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-executor-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 60)
 test('dxmt9-render-tape-cpu-query-transcript-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-query-spec'],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-controlled-cpu-v4-route-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-route-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-controlled-cpu-v4-execute-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--controlled-cpu-v4-execute-spec'],
      env: dxmt9_native_test_env)
 test('dxmt9-render-tape-cpu-event-checkpoint-spec',
      cpu_ready_production_routing_spec,
@@ -948,6 +999,11 @@ test('dxmt9-render-tape-cpu-measurement-spec',
      args: ['--general-cpu-measurement-spec'],
      env: dxmt9_native_test_env)
 
+test('dxmt9-render-tape-capture-source-v3-policy-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--capture-source-v3-policy-spec'],
+     env: dxmt9_native_test_env)
+
 test('dxmt9-render-tape-cpu-attachment-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-attachment-spec'],
@@ -959,6 +1015,13 @@ cpu_policy_spec = executable(
   include_directories: dxmt9_inc,
 )
 test('dxmt9-render-tape-cpu-policy-spec', cpu_policy_spec)
+
+v4_capacity_policy_spec = executable(
+  'dxmt9-render-tape-v4-capacity-policy-spec',
+  'render_tape_v4_capacity_policy_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-render-tape-v4-capacity-policy-spec', v4_capacity_policy_spec)
 
 cpu_source_admission_spec = executable(
   'dxmt9-render-tape-cpu-source-admission-spec',
@@ -1162,6 +1225,19 @@ test('dxmt9-wmt-generate-mipmaps-metal-spec',
      is_parallel: false,
      timeout: 30)
 
+# Standalone mechanism diagnostic; split equality is measured, not assumed.
+render_pass_roundtrip_metal_spec = executable(
+  'dxmt9-render-pass-roundtrip-metal-spec',
+  'render_pass_roundtrip_metal_spec.mm',
+  dependencies: [dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  objcpp_args: ['-fobjc-arc'],
+)
+test('dxmt9-render-pass-roundtrip-metal-spec',
+     render_pass_roundtrip_metal_spec,
+     env: ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 60)
+
 # Concrete Render Tape D24X8 capability fixture. The roundtrip deliberately
 # converts through shaders so no physical depth/stencil byte layout is assumed.
 render_tape_d24x8_snapshot_metal_spec = executable(
@@ -1291,6 +1367,31 @@ buffer_use_batch_spec = executable(
 )
 test('dxmt9-buffer-use-batch-spec', buffer_use_batch_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
+
+foreach spec : ['buffer-read-proof', 'draw-fetch-counts', 'draw-fetch-address',
+                'render-tape-cpu-source-observation', 'render-tape-encode-draw-witness',
+                'render-tape-encode-original-adapter']
+  target_name = 'dxmt9-' + spec + '-spec'
+  target = executable(target_name,
+    spec.replace('-', '_') + '_spec.cpp',
+    include_directories: dxmt9_inc,
+    dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+    link_args: dxmt9_test_link_args,
+  )
+  test(target_name, target, env: dxmt9_native_test_env, timeout: 30)
+endforeach
+
+render_tape_encode_destination_spec = executable(
+  'dxmt9-render-tape-encode-destination-spec',
+  ['render_tape_encode_destination_spec.mm', 'render_tape_encode_destination.mm'],
+  include_directories: dxmt9_inc,
+  objcpp_args: ['-fobjc-arc'],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-encode-destination-spec', render_tape_encode_destination_spec,
+     env: dxmt9_native_test_env, timeout: 30)
 
 range_upload_lock_scope_spec = executable(
   'dxmt9-range-upload-lock-scope-spec',
@@ -1787,6 +1888,16 @@ test('dxmt9-render-tape-event-completion-binding-spec',
      render_tape_event_completion_binding_spec,
      env: dxmt9_native_test_env)
 
+texture_upload_outcome_spec = executable(
+  'dxmt9-texture-upload-outcome-spec',
+  'texture_upload_outcome_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-texture-upload-outcome-spec', texture_upload_outcome_spec,
+     env: dxmt9_native_test_env)
+
 render_tape_publication_spec = executable(
   'dxmt9-render-tape-publication-spec',
   'render_tape_publication_spec.cpp',
@@ -1797,6 +1908,37 @@ render_tape_publication_spec = executable(
 test('dxmt9-render-tape-publication-spec',
      render_tape_publication_spec,
      env: dxmt9_native_test_env)
+
+foreach spec : ['render_tape_runtime_identity_v3', 'render_tape_runtime_identity_v4',
+                'render_tape_runtime_binding_v4', 'render_tape_ordinary_coordinator',
+                'render_tape_replay_observer', 'render_tape_emission_observer',
+                'render_tape_execution_v3', 'render_tape_execution_v4',
+                'render_tape_initial_setup_v4',
+                'render_tape_mutation_admission_v4',
+                'render_tape_provider_v4',
+                'render_tape_topology_observer', 'render_tape_topology_scope',
+                'render_tape_capture_attachment', 'render_tape_action_profile']
+  target_name = 'dxmt9-' + spec.replace('_', '-') + '-spec'
+  spec_dependencies = [dxmt9_dep, dxmt9_frontend_dep]
+  if spec in ['render_tape_runtime_identity_v3', 'render_tape_runtime_binding_v4',
+              'render_tape_topology_scope', 'render_tape_execution_v4',
+              'render_tape_initial_setup_v4',
+              'render_tape_mutation_admission_v4',
+              'render_tape_provider_v4', 'render_tape_ordinary_coordinator']
+    spec_dependencies += [dxmt9_winemetal_dep]
+  endif
+  spec_sources = [spec + '_spec.cpp']
+  if spec == 'render_tape_ordinary_coordinator'
+    spec_sources += ['../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+                     '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+                     '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp']
+  endif
+  target = executable(target_name, spec_sources,
+      include_directories: dxmt9_inc,
+      dependencies: spec_dependencies,
+      link_args: dxmt9_test_link_args)
+  test(target_name, target, env: dxmt9_native_test_env)
+endforeach
 
 # Second, bounded CPU-general admission over an already-built general-provider
 # plan. This is a pure narrowing gate; command/tape validation remains owned by
@@ -1812,6 +1954,31 @@ render_tape_cpu_general_grammar_spec = executable(
 test('dxmt9-render-tape-cpu-general-grammar-spec',
      render_tape_cpu_general_grammar_spec,
      env: dxmt9_native_test_env)
+
+executable('dxmt9-render-tape-cpu-v4-input-diagnostic',
+  'render_tape_cpu_v4_input_diagnostic.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+foreach spec : ['render-tape-cpu-initial-setup-v4', 'render-tape-cpu-v4-consumer',
+                'render-tape-cpu-v4-admission',
+                'render-tape-cpu-producer-resource-ledger-v4',
+                'render-tape-cpu-resource-observation', 'render-tape-cpu-resource-context',
+                'render-tape-cpu-semantic-location', 'render-tape-cpu-source-rows',
+                'render-tape-cpu-v4-surface-roles',
+                'render-tape-cpu-v4-logical-semantics',
+                'render-tape-encode-original-context']
+  target_name = 'dxmt9-' + spec + '-spec'
+  target = executable(target_name,
+    spec.replace('-', '_') + '_spec.cpp',
+    include_directories: dxmt9_inc,
+    dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+    link_args: dxmt9_test_link_args,
+  )
+  test(target_name, target, env: dxmt9_native_test_env)
+endforeach
 
 render_tape_cpu_snapshot_proof_spec = executable(
   'dxmt9-render-tape-cpu-snapshot-proof-spec',

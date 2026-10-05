@@ -6,6 +6,73 @@
 #include "d3d9_pe_device_impl.hpp"
 #include "d3d9_pe_tape_support.hpp"
 
+void D3D9DeviceImpl::BeginRenderTapeOrderedControlForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+    if (!peCaptureState_ || !peCaptureState_->renderTapeActiveCaptureEpoch ||
+        !IsRenderTapeCaptureActiveForChild())
+        return;
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (peCaptureState_->renderTapeExternalEventOrdinal) {
+        abortRenderTapeCapture("external_effect_nested");
+        return;
+    }
+    // Materialization may append ObjectDefine/seed facts. Finish those before
+    // reserving the control's exact ordinal and before the caller's effect.
+    if (identity.objectId && !materializeRenderTapeObjectForReference(identity))
+        return;
+    std::uint64_t ordinal = 0u;
+    if (beginRenderTapeJournalV4(ordinal))
+        peCaptureState_->renderTapeExternalEventOrdinal = ordinal;
+}
+
+void D3D9DeviceImpl::BeginRenderTapeResourceMutationForChild(
+    const D9CWireObjectIdentity &identity) noexcept {
+    if (!peCaptureState_ || !peCaptureState_->renderTapeActiveCaptureEpoch ||
+        !IsRenderTapeCaptureActiveForChild())
+        return;
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (!renderTapeNullRtReferenceAdmitted(identity, nullptr, nullptr)) {
+        RejectRenderTapeCaptureForChild(
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::DescriptorMismatch,
+            {.identity = identity}, 0u, {});
+        return;
+    }
+    if (!renderTapeObjectAdmitted(identity))
+        return;
+    if (peCaptureState_->renderTapeExternalEventOrdinal) {
+        abortRenderTapeCapture("external_effect_nested");
+        return;
+    }
+    // Unadmitted resources keep their existing future-seed behavior. This
+    // method must not manufacture a mutation event or move its initial state.
+    std::uint64_t ordinal = 0u;
+    if (beginRenderTapeJournalV4(ordinal))
+        peCaptureState_->renderTapeExternalEventOrdinal = ordinal;
+}
+
+void D3D9DeviceImpl::EndRenderTapeExternalEffectForChild() noexcept {
+    if (peCaptureState_ && peCaptureState_->renderTapeActiveCaptureEpoch &&
+        peCaptureState_->renderTapeExternalEventOrdinal)
+        abortRenderTapeCapture("external_effect_unjournaled");
+}
+
+void D3D9DeviceImpl::BeginRenderTapeVolumeUnlockForChild(
+    D9CTexture *texture, std::uint32_t subresource) noexcept {
+    if (!peCaptureState_ || !peCaptureState_->renderTapeActiveCaptureEpoch ||
+        !IsRenderTapeCaptureActiveForChild()) return;
+    D9CWireObjectIdentity identity{};
+    if (!texture || FAILED(hr32(dxmt9c_texture_get_wire_identity(texture, &identity)))) {
+        abortRenderTapeCapture("volume_unlock_identity_cut");
+        return;
+    }
+    const auto *entry = findRenderTapeObject({.identity = identity});
+    if (entry && subresource < entry->volumeLocks.size() &&
+        entry->volumeLocks[subresource].active && entry->volumeLocks[subresource].writable)
+        BeginRenderTapeResourceMutationForChild(identity);
+}
+
 void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &object,
     std::span<const std::byte> descriptor,
@@ -38,6 +105,9 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
             abortRenderTapeCapture("object_define_descriptor_kind");
             return;
         }
+        std::uint64_t ordinal = 0u;
+        if (!peCaptureState_->renderTapeCapture.hasLiveObject(object.identity) &&
+            !beginRenderTapeJournalV4(ordinal)) return;
         dxmt9::d3d9::RenderTapeObjectDefineDisposition disposition{};
         const auto status = peCaptureState_->renderTapeCapture.objectDefine(
             object.identity, static_cast<std::uint32_t>(descriptorKind),
@@ -54,6 +124,12 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDefineForChild(
                 object.identity.kind, object.identity.generation,
                 static_cast<unsigned long long>(object.identity.objectId),
                 descriptor.size());
+        }
+        if (status == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted &&
+            disposition != dxmt9::d3d9::RenderTapeObjectDefineDisposition::Appended) {
+            if (ordinal) abortRenderTapeCapture("object_define_no_event");
+        } else if (status == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            (void)endRenderTapeJournalV4(ordinal);
         }
         if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             dxmt9DeviceInfoLog(
@@ -371,7 +447,8 @@ void D3D9DeviceImpl::NotifyRenderTapeVolumeSnapshotForChild(
         if (entry)
             (void)renderTapeObjectSubresourceDesc(*entry, object, subresource, desc);
         RejectRenderTapeCaptureForChild(
-            status == dxmt9::d3d9::RenderTapeBlockMutationStatus::AllocationFailed
+            (status == dxmt9::d3d9::RenderTapeBlockMutationStatus::AllocationFailed ||
+             status == dxmt9::d3d9::RenderTapeBlockMutationStatus::IoFailed)
                 ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed
                 : dxmt9::d3d9::RenderTapeCaptureRejectionReason::DescriptorMismatch,
             object, subresource,
@@ -425,6 +502,48 @@ void D3D9DeviceImpl::NotifyRenderTapeStandaloneSurfaceForChild(
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
     if (!IsRenderTapeCaptureTrackingEnabledForChild())
         return;
+    const auto *existing = findRenderTapeObject(surface);
+    dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 existingDescriptor{};
+    const bool existingPrimaryStorage = existing &&
+        !existing->lifetime.textureAlias &&
+        dxmt9::d3d9::renderTapeLoadSurfaceDescriptorV2(
+            existing->descriptor, existingDescriptor) &&
+        existingDescriptor.storage == static_cast<std::uint32_t>(
+            dxmt9::d3d9::RenderTapeSurfaceStorage::SwapchainBackbuffer);
+    const bool exactPrimaryRewrap = existingPrimaryStorage &&
+        renderTapeSameIdentity(existing->identity, surface.identity) &&
+        existingDescriptor.surface.resourceType == descriptor.resourceType &&
+        dxmt9::d3d9::renderTapeSurfaceDescriptorsEqual(
+            existingDescriptor.surface, descriptor);
+    if (IsRenderTapeCaptureActiveForChild()) {
+        std::uint32_t isPrimary = 0u;
+        const HRESULT classificationHr = hr32(
+            dxmt9c_device_classify_render_tape_primary_backbuffer(
+                dev_, &surface.identity, &isPrimary));
+        if (FAILED(classificationHr) || isPrimary > 1u) {
+            RejectRenderTapeCaptureForChild(
+                dxmt9::d3d9::RenderTapeCaptureRejectionReason::DescriptorMismatch,
+                surface, 0u, {});
+            return;
+        }
+        // A new wrapper cannot acquire a pre-arm seed during the interval.
+        // Existing exact rewraps only acquire a lifetime reference; neither
+        // path snapshots, uploads, drains, or changes a command identity.
+        if ((isPrimary != 0u && !exactPrimaryRewrap) ||
+            (isPrimary == 0u && existingPrimaryStorage)) {
+            markRenderTapeInvalidOnce("late_primary_backbuffer_alias", &surface);
+            abortRenderTapeCapture("late_primary_backbuffer_alias");
+            return;
+        }
+    }
+    if (exactPrimaryRewrap) {
+        // Constructor notifications are storage-agnostic. Retain the exact
+        // arm-classified descriptor, including the selected output's role
+        // disposition, instead of comparing it to a fabricated Standalone.
+        notifyRenderTapeCreatedObject(
+            surface, std::as_bytes(std::span(&existingDescriptor, 1u)));
+        return;
+    }
     const dxmt9::d3d9::RenderTapeSurfaceDescriptorV2 standalone{
         .schemaVersion =
             dxmt9::d3d9::kRenderTapeSurfaceDescriptorVersion2,
@@ -457,17 +576,21 @@ bool D3D9DeviceImpl::retireRenderTapeObject(
     if (recordDestroy && admitted && peCaptureState_ &&
         peCaptureState_->renderTapeCapture.state() ==
             dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
-        const auto status = peCaptureState_->renderTapeCapture.objectDestroy(identity);
-        dxmt9DeviceInfoLog(
-            "render_tape_capture object_destroy status=%u kind=%u "
-            "generation=%u object_id=%llu",
-            static_cast<unsigned>(status), identity.kind,
-            identity.generation,
-            static_cast<unsigned long long>(identity.objectId));
-        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
-            abortRenderTapeCapture(failureReason);
-        } else {
-            removeRenderTapeObjectAdmitted(identity);
+        std::uint64_t ordinal = 0u;
+        if (beginRenderTapeJournalV4(ordinal)) {
+            const auto status = peCaptureState_->renderTapeCapture.objectDestroy(identity);
+            dxmt9DeviceInfoLog(
+                "render_tape_capture object_destroy status=%u kind=%u "
+                "generation=%u object_id=%llu",
+                static_cast<unsigned>(status), identity.kind,
+                identity.generation,
+                static_cast<unsigned long long>(identity.objectId));
+            if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+                abortRenderTapeCapture(failureReason);
+            } else {
+                (void)endRenderTapeJournalV4(ordinal);
+                removeRenderTapeObjectAdmitted(identity);
+            }
         }
     }
     try {
@@ -701,12 +824,19 @@ void D3D9DeviceImpl::NotifyRenderTapeResourceMutationForChild(
     if (!renderTapeObjectAdmitted(object.identity))
         return;
     try {
+        if (peCaptureState_->renderTapeActiveCaptureEpoch &&
+            !peCaptureState_->renderTapeExternalEventOrdinal) {
+            abortRenderTapeCapture("resource_mutation_effect_cut_missing");
+            return;
+        }
+        std::uint64_t ordinal = 0u;
+        if (!beginRenderTapeJournalV4(ordinal)) return;
         if (peCaptureState_->renderTapeCapture.resourceMutationBytes(
                 object.identity, kind, subresource, byteOffset, bytes,
                 bufferDisposition) !=
             dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             abortRenderTapeCapture("resource_mutation");
-        }
+        } else (void)endRenderTapeJournalV4(ordinal);
     } catch (...) {
         abortRenderTapeCapture("resource_mutation_exception");
     }
@@ -789,11 +919,18 @@ void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
         queryControl.issueCycle = query->query.issueCycle;
         payload = std::as_bytes(std::span(&queryControl, 1u));
     }
+    if (peCaptureState_->renderTapeActiveCaptureEpoch &&
+        !peCaptureState_->renderTapeExternalEventOrdinal) {
+        abortRenderTapeCapture("ordered_control_effect_cut_missing");
+        return;
+    }
+    std::uint64_t ordinal = 0u;
+    if (!beginRenderTapeJournalV4(ordinal)) return;
     recorded.completionOrdinal = ++peCaptureState_->renderTapeCompletionOrdinal;
     if (peCaptureState_->renderTapeCapture.orderedControl(recorded, payload) !=
         dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
         abortRenderTapeCapture("ordered_control");
-    }
+    } else (void)endRenderTapeJournalV4(ordinal);
 }
 
 void D3D9DeviceImpl::notifyRenderTapeCreatedObject(
@@ -908,6 +1045,12 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedTexture(
                         static_cast<std::size_t>(subresource) *
                             sizeof(D9CSurfaceDesc),
                     &subresourceDesc, sizeof(subresourceDesc));
+    }
+    if (dxmt9::d3d9::renderTapeNullRtTextureShapeSupported(descriptorBytes)) {
+        auto descriptorOnly = descriptor;
+        descriptorOnly.initialContentDisposition = static_cast<std::uint32_t>(
+            dxmt9::d3d9::RenderTapeInitialContentDisposition::NullRtDescriptorOnly);
+        std::memcpy(descriptorBytes.data(), &descriptorOnly, sizeof(descriptorOnly));
     }
     notifyRenderTapeCreatedObject(
         object,

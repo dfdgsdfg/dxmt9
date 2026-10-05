@@ -4,6 +4,7 @@
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_first_access_locator.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_snapshot_budget.hpp"
 #include "d3d9_pe_render_tape_commit_receipt.hpp"
 #include "dxmt9/device_c.h"
 
@@ -12,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 // These PE-local capture types are kept at global namespace scope because
@@ -35,10 +37,36 @@ struct RenderTapeLiveObject {
 };
 
 struct RenderTapeArmObjectSnapshot {
+  RenderTapeArmObjectSnapshot() noexcept = default;
+  RenderTapeArmObjectSnapshot(const RenderTapeArmObjectSnapshot&) = delete;
+  RenderTapeArmObjectSnapshot& operator=(const RenderTapeArmObjectSnapshot&) = delete;
+  RenderTapeArmObjectSnapshot(RenderTapeArmObjectSnapshot&&) noexcept = default;
+  RenderTapeArmObjectSnapshot& operator=(RenderTapeArmObjectSnapshot&& other) noexcept {
+    if (this != &other) {
+      // Default member assignment would release old receipts before freeing
+      // old vectors. Retire the whole owner, preserving destruction order.
+      RenderTapeArmObjectSnapshot retired;
+      retired.swap(*this);
+      swap(other);
+    }
+    return *this;
+  }
+
+  void swap(RenderTapeArmObjectSnapshot& other) noexcept {
+    std::swap(objectIndex, other.objectIndex);
+    std::swap(armOrdinal, other.armOrdinal);
+    std::swap(identity, other.identity);
+    descriptor.swap(other.descriptor);
+    retainedLeases.swap(other.retainedLeases);
+    content.swap(other.content);
+  }
+
   std::size_t objectIndex = 0u;
   std::uint64_t armOrdinal = 0u;
   D9CWireObjectIdentity identity{};
   std::vector<std::byte> descriptor{};
+  // Payload vectors are destroyed before their allocation-bound receipts.
+  std::vector<dxmt9::d3d9::RenderTapeSnapshotBudgetLease> retainedLeases{};
   std::vector<std::vector<std::byte>> content{};
 };
 
@@ -56,11 +84,25 @@ struct RenderTapeArmContentTransferSelection {
   RenderTapeArmContentTransferDisposition disposition =
       RenderTapeArmContentTransferDisposition::Borrowed;
   std::span<std::vector<std::byte>> content{};
+  std::span<dxmt9::d3d9::RenderTapeSnapshotBudgetLease> retainedLeases{};
 
   std::vector<std::byte>* payload(std::size_t subresource) const noexcept {
     return disposition == RenderTapeArmContentTransferDisposition::OwnedSnapshot &&
                    subresource < content.size()
         ? &content[subresource] : nullptr;
+  }
+
+  dxmt9::d3d9::RenderTapeSnapshotBudgetLease* retainedLease(
+      std::size_t subresource) const noexcept {
+    const auto* bytes = payload(subresource);
+    if (!bytes || subresource >= retainedLeases.size()) return nullptr;
+    auto& lease = retainedLeases[subresource];
+    return lease.valid() &&
+                   lease.kind() == dxmt9::d3d9::RenderTapeSnapshotBudgetKind::Retained &&
+                   lease.resourceBytes() == bytes->size() &&
+                   lease.chargedBytes() == bytes->size() &&
+                   lease.boundPayloadMatches(bytes->data(), bytes->size())
+        ? &lease : nullptr;
   }
 };
 
@@ -87,9 +129,17 @@ inline RenderTapeArmContentTransferSelection selectRenderTapeArmContentTransfer(
       selected.descriptor.size() != snapshot->descriptor.size() ||
       !selected.content.vectorBacked() ||
       selected.content.vectorData() != snapshot->content.data() ||
-      selected.content.size() != snapshot->content.size())
+      selected.content.size() != snapshot->content.size() ||
+      snapshot->retainedLeases.size() != snapshot->content.size())
     return {.disposition = Disposition::InvalidSnapshot};
-  return {.disposition = Disposition::OwnedSnapshot, .content = snapshot->content};
+  const RenderTapeArmContentTransferSelection transfer{
+      .disposition = Disposition::OwnedSnapshot,
+      .content = snapshot->content,
+      .retainedLeases = snapshot->retainedLeases};
+  for (std::size_t subresource = 0u; subresource < snapshot->content.size(); ++subresource)
+    if (!snapshot->content[subresource].empty() && !transfer.retainedLease(subresource))
+      return {.disposition = Disposition::InvalidSnapshot};
+  return transfer;
 }
 
 enum class RenderTapeObjectRegistration : std::uint8_t {
@@ -118,8 +168,16 @@ struct PeCaptureState {
   PeCaptureState(dxmt9::d3d9::RenderTapeCaptureLimits limits,
                  std::uint32_t profile, std::uint32_t armPresentSkip)
       : renderTapeCapture(true, limits, profile),
-        renderTapeArmPresentSkipRemaining(armPresentSkip) {}
+        renderTapeArmPresentSkipRemaining(armPresentSkip) {
+    renderTapeSnapshotBudgetInitializationStatus =
+        renderTapeSnapshotBudget.initialize(renderTapeCapture.limits().maxBlobBytes);
+  }
 
+  // One session budget, never reset at arm/rearm. Shared immutable receipts
+  // may outlive the arm vectors and publication may outlive an interval.
+  dxmt9::d3d9::RenderTapeSnapshotBudget renderTapeSnapshotBudget{};
+  dxmt9::d3d9::RenderTapeSnapshotBudgetStatus renderTapeSnapshotBudgetInitializationStatus =
+      dxmt9::d3d9::RenderTapeSnapshotBudgetStatus::NotInitialized;
   dxmt9::d3d9::RenderTapeCaptureSession renderTapeCapture;
   RenderTapeLiveRegistry renderTapeRegistry{};
   std::vector<dxmt9::d3d9::RenderTapeOracleAttachment>
@@ -133,6 +191,12 @@ struct PeCaptureState {
   std::uint64_t renderTapeArmSnapshotOrdinal = 0u;
   std::uint64_t renderTapeNextCaptureToken = 0u;
   std::uint64_t renderTapeActiveCaptureToken = 0u;
+  // Trusted arm receipt, independent of transferred identity/topology bytes.
+  std::uint64_t renderTapeActiveCaptureEpoch = 0u;
+  std::uint64_t renderTapeActiveCaptureQueue = 0u;
+  // One cold external effect may reserve the next canonical journal event.
+  // Preparatory materialization must finish before this ordinal is installed.
+  std::uint64_t renderTapeExternalEventOrdinal = 0u;
   std::uint32_t renderTapeArmPresentSkipRemaining = 0u;
   std::vector<RenderTapeArmObjectSnapshot> renderTapeArmSnapshots{};
   std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities{};
@@ -151,10 +215,10 @@ inline const dxmt9::d3d9::RenderTapePayloadLedger& measureRenderTapePayloadBound
   auto& ledger = state.renderTapePayloadLedger;
   ledger.reset();
   const auto observeShadow = [&](const auto& shadow) {
-    ledger.observe(shadow.readBytes().data(), shadow.size(), shadow.capacity(), shadow.shared());
+    ledger.observe(shadow.backingIdentity(), shadow.size(), shadow.capacity(), shadow.shared());
   };
   const auto observeImmutable = [&](const auto& payload) {
-    ledger.observe(payload.data(), payload.size(), payload.capacity(), payload.shared());
+    ledger.observe(payload.backingIdentity(), payload.size(), payload.capacity(), payload.shared());
   };
   for (const auto& object : state.renderTapeRegistry.objects) {
     ledger.observe(object.immutablePayload.data(), object.immutablePayload.size(),
@@ -182,7 +246,8 @@ inline void logRenderTapePayloadBoundary(PeCaptureState& state, const char* boun
       "logical_capacity=%llu logical_owners=%llu unique_backings_lower_bound=%zu "
       "unique_bytes_lower_bound=%llu unique_capacity_lower_bound=%llu "
       "unique_shared_bytes_lower_bound=%llu unique_shared_capacity_lower_bound=%llu "
-      "unique_complete=%d logical_totals_valid=%d observer_capacity=%zu",
+      "unique_complete=%d logical_totals_valid=%d observer_capacity=%zu "
+      "scratch_live_bytes=%llu scratch_high_water_bytes=%llu",
       boundary, static_cast<unsigned long long>(ledger.logicalBytes),
       static_cast<unsigned long long>(ledger.logicalCapacity),
       static_cast<unsigned long long>(ledger.logicalOwners), ledger.backingCount,
@@ -190,7 +255,9 @@ inline void logRenderTapePayloadBoundary(PeCaptureState& state, const char* boun
       static_cast<unsigned long long>(ledger.uniqueCapacity),
       static_cast<unsigned long long>(ledger.uniqueSharedBytes),
       static_cast<unsigned long long>(ledger.uniqueSharedCapacity),
-      ledger.uniqueComplete ? 1 : 0, ledger.totalsValid ? 1 : 0, ledger.kMaxBackings);
+      ledger.uniqueComplete ? 1 : 0, ledger.totalsValid ? 1 : 0, ledger.kMaxBackings,
+      static_cast<unsigned long long>(state.renderTapeCapture.payloadArena()->liveBytes()),
+      static_cast<unsigned long long>(state.renderTapeCapture.payloadArena()->highWaterBytes()));
 }
 
 inline std::unique_ptr<PeCaptureState> makePeCaptureState(

@@ -96,6 +96,15 @@ inline FrameTapeReplayResult buildGeneralReplayPlan(
   return buildGeneralReplayPlan(tape, blobs, &plan);
 }
 
+// Rebuilds the single trusted General grammar from exact tape bytes and only
+// a valid immutable v3 owner's authenticated, value-owned blob metadata.
+// Every supplied derived plan field must match before any effects. Catalogue
+// ordering is irrelevant, but extra/duplicate/unverified entries fail closed.
+// This does not reauthenticate blob contents or promote execution evidence.
+bool generalReplayPlanMatchesAuthenticatedV3(
+    std::span<const std::byte> tape, const CaptureSourceReplayPlanV3& sourcePlan,
+    const GeneralPreflightPlan& supplied) noexcept;
+
 // Exact identity includes kind, slot generation, and object id. The table is
 // a borrowed, stable view whose live records have unique identities. A null
 // result means the identity is absent or its acquisition has been released.

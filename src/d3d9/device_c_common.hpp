@@ -12,6 +12,9 @@
 
 #include "device_c_chunk_registry.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_runtime_identity_v3.hpp"
+#include "device_c_render_tape_runtime_identity_v4.hpp"
+#include "device_c_render_tape_runtime_binding_v4.hpp"
 #include "device_c_replay_offload.hpp"
 #include "device_c_query_poll_policy.hpp"
 #include "device_c_render_tape_query_checkpoint.hpp"
@@ -218,6 +221,19 @@ struct D9CDevice {
   dxmt9::d3d9::WireObjectRegistry wireObjects;
   std::optional<D9CRenderTapePresentCaptureLease> renderTapePresentCapture;
   dxmt9::d3d9::RenderTapeProductionIdentityLedger renderTapeIdentityCapture;
+  std::unique_ptr<dxmt9::d3d9::RenderTapeRuntimeIdentityV3>
+      renderTapeRuntimeIdentityV3;
+  // Only atomic shared_ptr operations access this member: replay may retain an
+  // old arm concurrently with optional-capture cancel/reset. Binding state is
+  // serialized separately and is never read by replay/Encode observers.
+  std::shared_ptr<dxmt9::d3d9::RenderTapeRuntimeIdentityV4>
+      renderTapeRuntimeIdentityV4;
+  // A successful V4 arm permanently selects route-neutral capture for this
+  // device. Revoked/mismatched old tags never regain V2 route authority.
+  std::atomic<bool> renderTapeRuntimeV4Selected{false};
+  std::mutex renderTapeRuntimeIdentityV4Mutex;
+  std::unique_ptr<dxmt9::d3d9::RenderTapeRuntimeBindingV4State>
+      renderTapeRuntimeBindingV4;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
   // Latched by the one-time PE/unix negotiation. A segmented entry is
   // rejected unless this device explicitly selected SegmentedTransportV1.
@@ -431,6 +447,9 @@ struct D9CQueryPollState {
   bool checkpointMappingValid = true;
   dxmt9::d3d9::RenderTapeQueryCycleState checkpointCycle{};
   std::uint64_t checkpointEpoch = 0u;
+  bool runtimeTapeTracking = false;
+  bool runtimeTapeMappingValid = true;
+  dxmt9::d3d9::RenderTapeQueryCycleState runtimeTapeCycle{};
 };
 
 struct D9CQuery {
@@ -449,6 +468,8 @@ struct D9CQuery {
     pollState = std::make_unique<D9CQueryPollState>();
     pollState->checkpointTracking = obj &&
         obj->type() == dxmt9::core::QueryType::Event &&
+        dxmt9::d3d9::renderTapeEventQueryCheckpointTrackingEnabled();
+    pollState->runtimeTapeTracking =
         dxmt9::d3d9::renderTapeEventQueryCheckpointTrackingEnabled();
     if (device) {
       wireIdentity = device->wireObjects.insert(

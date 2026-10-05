@@ -1,6 +1,8 @@
 #pragma once
 
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_execution_v3.hpp"
+#include "device_c_render_tape_execution_v4.hpp"
 
 #include <array>
 #include <cstddef>
@@ -10,8 +12,22 @@
 #include <vector>
 
 struct D9CDevice;
+struct D9CBuffer;
 
 namespace dxmt9::d3d9 {
+
+class CaptureSourceReplayPlanV4;
+
+namespace render_tape_runtime {
+struct GeneralPreflightPlan;
+
+// Cold exact-input check for an immutable, admitted V4 pair owner. Reuses the
+// General grammar and full derived-plan comparison before any replay effects.
+// This neither reauthenticates blob contents nor enables public V4 execution.
+bool generalReplayPlanMatchesAuthenticatedV4(
+    std::span<const std::byte> tape, const CaptureSourceReplayPlanV4& sourcePlan,
+    const GeneralPreflightPlan& supplied) noexcept;
+} // namespace render_tape_runtime
 
 struct RenderTapeProviderBlob {
   RenderTapeDigest digest{};
@@ -182,6 +198,11 @@ enum class RenderTapePreparedReset : std::uint8_t {
 enum class RenderTapeSourceBoundaryMode : std::uint8_t {
   Chunk,
   CaptureSource,
+  CaptureSourceV3,
+  // Private V4 diagnostic carrier retained for compatibility. publicationModeV4
+  // selects exact receipts or semantic correspondence; neither is a boundary
+  // policy. The renderer keeps its natural publication/Encode workflow.
+  CaptureSourceV4ExactDiagnostic,
 };
 
 struct RenderTapeBatchCut {
@@ -213,6 +234,103 @@ struct RenderTapeTextureInputAuditEvidence {
   RenderTapeDigest afterDigest{};
 };
 
+enum class RenderTapePreparedBufferPhaseV4 : std::uint8_t {
+  HiddenDefined,
+  HiddenSeedApplied,
+  Defined,
+  Activated,
+  SeedConsumed,
+  MutationApplied,
+  Retiring,
+};
+
+// Every input borrows an admitted immutable definition/event. Hidden phases
+// use the original future event locator, not a fabricated setup event. Cleanup
+// retirement has no original event and uses NoIndex/zero. The genuine wrapper
+// is borrowed synchronously; its bytes are never expected-content authority.
+// Successful apply is a logical notification, not proof that a MANAGED write
+// has reached physical storage. Physical facts may be finalized only in the
+// ordinary post-drain beforeRecord callback below.
+struct RenderTapePreparedBufferEventV4 {
+  RenderTapePreparedBufferPhaseV4 phase = RenderTapePreparedBufferPhaseV4::Defined;
+  std::uint32_t eventIndex = kRenderTapeIdentityV4NoIndex;
+  std::uint64_t eventOrdinal = 0u;
+  const RenderTapeObjectDefineHeader* definition = nullptr;
+  std::span<const std::byte> descriptor{};
+  const RenderTapeResourceMutationHeader* mutation = nullptr;
+  D9CBuffer* buffer = nullptr;
+};
+
+struct RenderTapePreparedHandleAssociationV4 {
+  std::uint32_t handleIndex = 0u;
+  D9CWireObjectIdentity identity{};
+  void* resolvedWrapper = nullptr;
+};
+
+// Optional caller-owned cold diagnostic, admitted only by explicit prepared
+// V4 execution. All borrows are synchronous. The observer and its callback
+// owner must outlive this prepared call and device teardown. Callbacks must not
+// re-enter replay, select routes, publish/submit work, or add drains. Rejection
+// disables data callbacks only, never renderer effects or original execution
+// observations; closed still runs once after the existing cleanup flush/join.
+struct RenderTapePreparedObserverV4 {
+  void* context = nullptr;
+  bool (*buffer)(void*, D9CDevice*, const RenderTapePreparedBufferEventV4&) noexcept = nullptr;
+  bool (*beforeRecord)(void*, D9CDevice*, std::uint64_t eventOrdinal,
+      std::uint32_t recordIndex, std::uint32_t recordType,
+      std::span<const RenderTapePreparedHandleAssociationV4>) noexcept = nullptr;
+  bool (*armed)(void*, D9CDevice*, std::int32_t localArmHresult,
+      const D9CRenderTapeIdentityCaptureV4ArmResult&,
+      const std::shared_ptr<RenderTapeRuntimeIdentityV4>&) noexcept = nullptr;
+  bool (*closed)(void*, D9CDevice*) noexcept = nullptr;
+};
+
+struct RenderTapePreparedObserverV4Evidence {
+  bool requested = false;
+  bool admitted = false;
+  bool complete = false;
+  bool closed = false;
+  std::size_t bufferCallbacks = 0u;
+  std::array<std::size_t, 7u> bufferPhases{};
+  std::size_t beforeRecordCallbacks = 0u;
+  std::size_t armedCallbacks = 0u;
+  std::size_t closedCallbacks = 0u;
+  std::size_t associationRaws = 0u;
+  std::size_t handleAssociations = 0u;
+  // Process-static diagnostic reason, independent of renderer/qualification.
+  const char* failure = "none";
+};
+
+namespace render_tape_runtime {
+
+// Shared production forwarding reducer. It holds only synchronous borrows;
+// wrapping an original observation preserves all credentials and all original
+// callback results, even when the separate prepared observer rejects.
+class PreparedObserverV4Session {
+public:
+  PreparedObserverV4Session(RenderTapePreparedObserverV4*,
+      RenderTapePreparedObserverV4Evidence&, D9CDevice*) noexcept;
+  bool enabled() const noexcept;
+  void reject(const char*) noexcept;
+  void buffer(const RenderTapePreparedBufferEventV4&) noexcept;
+  void armed(std::int32_t, const D9CRenderTapeIdentityCaptureV4ArmResult&,
+      const std::shared_ptr<RenderTapeRuntimeIdentityV4>&) noexcept;
+  ProviderReplayObservationV4 observation(ProviderReplayObservationV4,
+      std::span<const RenderTapePreparedHandleAssociationV4>) noexcept;
+  void observationComplete() noexcept;
+  void closed(bool traversalComplete) noexcept;
+
+private:
+  RenderTapePreparedObserverV4* observer_ = nullptr;
+  RenderTapePreparedObserverV4Evidence& evidence_;
+  D9CDevice* device_ = nullptr;
+  bool rejected_ = false;
+  ProviderReplayObservationV4 original_{};
+  std::span<const RenderTapePreparedHandleAssociationV4> associations_{};
+};
+
+} // namespace render_tape_runtime
+
 struct RenderTapePreparedExecutionOptions {
   RenderTapePreparedRoute route = RenderTapePreparedRoute::Compatibility;
   RenderTapePreparedReset reset = RenderTapePreparedReset::FreshDevice;
@@ -228,18 +346,51 @@ struct RenderTapePreparedExecutionOptions {
   // Cold general-provider discriminator. Source cuts are authenticated against
   // the owned tape; they are not imported as this process's queue identities.
   bool auditSourceBoundaries = false;
-  // Explicit normal reference policy, distinct from the source-cut diagnostic.
+  // V2/V3 source policies and the separate opt-in private V4 diagnostic.
   RenderTapeSourceBoundaryMode sourceBoundaryMode = RenderTapeSourceBoundaryMode::Chunk;
   std::span<const std::byte> sourceBoundaryIdentity{};
-  // Required by the authenticated CaptureSource policy.  The digest is a
-  // value, rather than a borrowed text buffer, so the policy gate remains
+  // Required paired companion only for CaptureSourceV4ExactDiagnostic. Both
+  // spans remain immutable through the synchronous prepared call.
+  std::span<const std::byte> sourceExecutionTopology{};
+  // Required by authenticated policy callers and by the V4 diagnostic. The
+  // digest is a value, rather than a borrowed text buffer, so the gate remains
   // valid for the entire prepared execution call.
   RenderTapeDigest expectedSourcePlanDigest{};
   bool hasExpectedSourcePlanDigest = false;
+  // Private V4 provenance qualification only. Semantic mode accepts genuine
+  // changed source/command grouping; it never requests reference publications.
+  RenderTapeExecutionV4PublicationMode publicationModeV4 =
+      RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic;
+  // Explicit private diagnostic producer contract, never inferred from cuts.
+  RenderTapeExecutionV4ProducerContract producerContractV4 =
+      RenderTapeExecutionV4ProducerContract::None;
   // Optional diagnostic flushes strictly inside authenticated source ranges.
   // These end a CPU DrawRun batch, not a source publication or Metal pass.
   std::span<const RenderTapeBatchCut> auditBatchCuts{};
   const RenderTapeTextureInputAuditRequest* auditTextureInput = nullptr;
+  RenderTapePreparedObserverV4* observerV4 = nullptr;
+};
+
+struct RenderTapeExactDiagnosticV4Evidence {
+  RenderTapeExecutionV4Evidence execution{};
+  // Cold setup evidence, not timing/policy authority. Acquisitions include
+  // hidden owners and activation transfers them without acquiring again.
+  bool initialSetupAdmitted = false;
+  bool initialSetupCompleted = false;
+  std::uint64_t initialSetupBytes = 0u;
+  std::size_t initialSetupOwners = 0u;
+  std::size_t initialSetupSeeds = 0u;
+  std::size_t initialSetupPrepared = 0u;
+  std::size_t initialSetupActivated = 0u;
+  std::size_t initialSetupConsumed = 0u;
+  std::size_t initialSetupAllocationOnlyOwners = 0u;
+  std::uint64_t initialSetupAllocationBytes = 0u;
+  std::size_t noOverwriteWritesWithoutExtraDrain = 0u;
+  std::size_t intervalMutationsWithExtraDrain = 0u;
+  // Provider and executor reasons are process-static literals, never borrowed
+  // caller input. Query readiness/results and pixels use their independent
+  // result sinks; this evidence cannot promote policy or timing eligibility.
+  const char* failure = "none";
 };
 
 struct RenderTapeSourceBoundaryEvidence {
@@ -432,21 +583,29 @@ struct RenderTapeInitialSeedAuditEvidence {
 
 struct RenderTapePreparedTiming {
   std::uint64_t prepareWallNanos = 0u;
+  std::uint64_t v4PreparationNanos = 0u;
   std::uint64_t resetWallNanos = 0u;
   std::uint64_t resourceSetupNanos = 0u;
   std::uint64_t chunkReplayNanos = 0u;
   std::uint64_t readbackDrainNanos = 0u;
   std::uint64_t cleanupNanos = 0u;
   std::uint64_t replayWallNanos = 0u;
+  std::uint64_t v4PlanAdmissionNanos = 0u;
+  std::uint64_t v4ReplayAdmissionNanos = 0u;
+  std::uint64_t v4PreArmCheckpointNanos = 0u;
+  std::uint64_t v4FinishNanos = 0u;
 };
 
 struct RenderTapePreparedEvidence {
   bool immutableInputOwned = false;
+  bool immutableV4PreparationOwned = false;
+  bool reusedImmutablePreparation = false;
   bool preflightCompleted = false;
   bool planReused = false;
   bool resetPerformed = false;
   bool resetVerified = false;
   std::uint64_t prepareCount = 0u;
+  std::uint64_t v4PreparationCount = 0u;
   std::uint64_t tapeBytes = 0u;
   std::uint64_t blobBytes = 0u;
   std::uint32_t blobCount = 0u;
@@ -558,6 +717,9 @@ struct FrameTapeReplayResult {
   RenderTapeSourceBoundaryEvidence sourceBoundaryAudit{};
   RenderTapeTextureInputAuditEvidence textureInputAudit{};
   RenderTapeSourceReplayEvidence sourceReplay{};
+  RenderTapeSourceReplayV3Evidence sourceReplayV3{};
+  RenderTapeExactDiagnosticV4Evidence exactDiagnosticV4{};
+  RenderTapePreparedObserverV4Evidence preparedObserverV4{};
   RenderTapeQueryReplayEvidence queryReplay{};
 
   bool complete() const noexcept {
@@ -565,9 +727,32 @@ struct FrameTapeReplayResult {
   }
 };
 
-// Owns a validated tape, all referenced blob bytes, and the immutable
-// preflight plan.  It is move-only so the PIMPL remains stable while the
-// underlying spans in the plan continue to refer to owned storage.
+// Only an observed terminal pixel mismatch in the private V4 diagnostic may
+// wait for the existing event/query/source finalization. Neither helper
+// qualifies those independent sinks or relaxes the strict digest comparison.
+bool renderTapeV4TerminalOutputMismatchMayDefer(
+    bool exactDiagnosticV4, RenderTapeEventType eventType,
+    std::uint32_t eventIndex, std::uint32_t terminalEventIndex,
+    const FrameTapeValidityEvidence& validity) noexcept;
+
+// Called after normal finalization and cleanup. A concrete independent error
+// keeps its status/event/reason; successful finalization cannot accept pixels
+// already known to differ. The event index comes only from the predicate above.
+void renderTapeReduceDeferredOutputMismatch(
+    FrameTapeReplayResult& result, std::uint32_t mismatchedEventIndex) noexcept;
+
+struct RenderTapePreparedV4PreparationOptions {
+  std::span<const std::byte> sourceBoundaryIdentity{};
+  std::span<const std::byte> sourceExecutionTopology{};
+  RenderTapeDigest expectedSourcePlanDigest{};
+  RenderTapeExecutionV4PublicationMode publicationMode =
+      RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic;
+  RenderTapeExecutionV4ProducerContract producerContract =
+      RenderTapeExecutionV4ProducerContract::None;
+};
+
+// Owns a validated tape, all referenced blob bytes, and immutable preparation.
+// Moving this owner preserves the PIMPL and every internal borrow identity.
 class PreparedRenderTape {
  public:
   PreparedRenderTape();
@@ -589,9 +774,15 @@ class PreparedRenderTape {
 
   friend PreparedRenderTape prepareRenderTapeIdentity(
       std::span<const std::byte>, std::span<const RenderTapeProviderBlob>) noexcept;
+  friend PreparedRenderTape prepareRenderTapeIdentityV4(
+      std::span<const std::byte>, std::span<const RenderTapeProviderBlob>,
+      RenderTapePreparedV4PreparationOptions) noexcept;
   friend FrameTapeReplayResult replayPreparedRenderTapeIdentity(
       D9CDevice*, const PreparedRenderTape&,
       RenderTapePreparedExecutionOptions) noexcept;
+  friend FrameTapeReplayResult replayPreparedRenderTapeIdentityV4(
+      D9CDevice*, const PreparedRenderTape&, RenderTapePreparedRoute,
+      RenderTapePreparedObserverV4*) noexcept;
 };
 
 // Classifies the only accepted bootstrap attachment forms without changing
@@ -642,9 +833,22 @@ PreparedRenderTape prepareRenderTapeIdentity(
     std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept;
 
+// Eagerly owns and authenticates the V4 pair, frozen policy, setup metadata and
+// execution templates. Failure returns an invalid owner without device effects.
+PreparedRenderTape prepareRenderTapeIdentityV4(
+    std::span<const std::byte> tape, std::span<const RenderTapeProviderBlob> blobs,
+    RenderTapePreparedV4PreparationOptions options) noexcept;
+
 FrameTapeReplayResult replayPreparedRenderTapeIdentity(
     D9CDevice* device, const PreparedRenderTape& prepared,
     RenderTapePreparedExecutionOptions options = {}) noexcept;
+
+// Every call initializes fresh execution state from immutable V4 preparation
+// and requires a fresh device. Legacy owners cannot authorize this entry point;
+// V4-prepared owners must use it instead of the legacy configurable replay.
+FrameTapeReplayResult replayPreparedRenderTapeIdentityV4(
+    D9CDevice* device, const PreparedRenderTape& prepared,
+    RenderTapePreparedRoute route, RenderTapePreparedObserverV4* observer = nullptr) noexcept;
 
 // Applies the frame-tape pixel oracle only after strict digest comparison has
 // failed. The expected bytes must be the digest-authenticated production

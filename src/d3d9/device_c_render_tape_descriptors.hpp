@@ -12,6 +12,8 @@ namespace dxmt9::d3d9 {
 
 inline constexpr std::uint32_t kRenderTapeTextureDescriptorVersion2 = 2u;
 inline constexpr std::uint32_t kRenderTapeSurfaceDescriptorVersion2 = 2u;
+inline constexpr std::uint32_t kRenderTapeNullRtD3DFormat = 1280070990u;
+inline constexpr std::uint32_t kRenderTapeDf24D3DFormat = 875710020u;
 
 enum class RenderTapeTextureDimension : std::uint32_t {
   Texture2D = 1u,
@@ -32,6 +34,8 @@ enum class RenderTapeInitialContentDisposition : std::uint32_t {
   // This fixed backing contract is enforced at capture and replay; neither
   // packed D24 depth nor another physical format is compatible with it.
   CompleteDepthStencilFloat32UInt8V1 = 6u,
+  // R7.36: no meaningful color contents, never a seed or a produced proof.
+  NullRtDescriptorOnly = 7u,
 };
 
 // Capture-only model/code pin for the hard Present boundary. The PE owner
@@ -156,6 +160,14 @@ inline constexpr bool renderTapeArmColorSnapshotRgba16FloatTextureSupported(
          surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
 }
 
+inline constexpr bool renderTapeArmColorSnapshotR32FloatTextureSupported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return surface.resourceType == 3u && surface.width != 0u &&
+         surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
+         surface.usage == 1u && surface.format == 114u &&
+         surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
+
 struct RenderTapeColorSnapshotLayout {
   std::uint32_t encodingVersion = 0u;
   std::uint32_t pitch = 0u;
@@ -170,13 +182,15 @@ inline constexpr bool renderTapeDeriveColorSnapshotLayout(
   out = {};
   const bool rgba16Float =
       renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface);
+  const bool r32Float =
+      renderTapeArmColorSnapshotR32FloatTextureSupported(surface);
   const bool texture2d = surface.resourceType == 3u &&
       ((surface.pool == 0u && surface.usage == 1u &&
         (surface.format == 21u || surface.format == 22u)) ||
        (surface.pool == 1u && surface.usage == 0u && surface.format == 21u));
   const bool cube = surface.resourceType == 5u && surface.pool == 0u &&
                     surface.usage == 1u && surface.format == 114u;
-  if ((!rgba16Float && !texture2d && !cube &&
+  if ((!rgba16Float && !r32Float && !texture2d && !cube &&
        !renderTapeArmColorSnapshotStandaloneSurfaceSupported(surface)) ||
       surface.width == 0u || surface.height == 0u || surface.depth != 1u ||
       surface.multiSampleType != 0u || surface.multiSampleQuality != 0u)
@@ -421,6 +435,13 @@ inline bool renderTapeLoadSurfaceAliasDescriptor(
          out.parentTexture.objectId != 0u && out.surface.resourceType == 1u &&
          out.surface.width != 0u && out.surface.height != 0u &&
          out.surface.depth != 0u;
+}
+
+inline constexpr bool renderTapeNullRtSurfaceShapeSupported(
+    const D9CSurfaceDesc& surface) noexcept {
+  return surface.format == kRenderTapeNullRtD3DFormat && surface.resourceType == 1u &&
+      surface.usage == 1u && surface.pool == 0u && surface.width && surface.height &&
+      surface.depth == 1u && !surface.multiSampleType && !surface.multiSampleQuality;
 }
 
 inline bool renderTapeLoadSurfaceDescriptorV2(
@@ -827,10 +848,86 @@ inline bool renderTapeLoadTextureDescriptorV2(
   return true;
 }
 
+enum class RenderTapeProducedTextureContentPolicy : std::uint8_t {
+  Unsupported,
+  ColorRenderTarget,
+  Df24DepthOnly,
+};
+
+// Shape-only policy: PE missing-seed admission consults the CompleteSeed
+// descriptor before publishing ProducedByCapturedPass. DF24 has only a depth
+// plane on the current Depth32Float backing; this does not admit other depth
+// formats or change ordinary D3D9 Clear viewport/scissor semantics.
+inline RenderTapeProducedTextureContentPolicy renderTapeProducedTexturePolicy(
+    std::span<const std::byte> descriptor) noexcept {
+  RenderTapeTextureDescriptorV2 texture{};
+  D9CSurfaceDesc level0{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+      !renderTapeProducedTextureShapeSupported(texture) ||
+      !renderTapeTextureSubresourceDescriptor(descriptor, 0u, level0))
+    return RenderTapeProducedTextureContentPolicy::Unsupported;
+  if (level0.format == kRenderTapeDf24D3DFormat) {
+    if (texture.dimension == static_cast<std::uint32_t>(
+                                 RenderTapeTextureDimension::Texture2D) &&
+        texture.mipLevelCount == 1u && texture.subresourceCount == 1u &&
+        level0.resourceType == 3u && level0.usage == 2u && level0.pool == 0u &&
+        level0.width != 0u && level0.height != 0u && level0.depth == 1u &&
+        level0.multiSampleType == 0u && level0.multiSampleQuality == 0u)
+      return RenderTapeProducedTextureContentPolicy::Df24DepthOnly;
+    return RenderTapeProducedTextureContentPolicy::Unsupported;
+  }
+  if ((level0.usage & 1u) != 0u)
+    return RenderTapeProducedTextureContentPolicy::ColorRenderTarget;
+  return RenderTapeProducedTextureContentPolicy::Unsupported;
+}
+
+// R7.37 binds the current canonical/backend stream: an empty rect tail in a
+// Z-only Clear opens a whole-attachment depth Clear/Store pass. Mixed color
+// clears stay outside this proof because their render area can differ.
+inline constexpr bool renderTapeProducedDf24ClearSupported(
+    std::uint32_t sectionKind, std::uint32_t flags,
+    std::uint32_t rectCount) noexcept {
+  return sectionKind == D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL &&
+         flags == 2u && rectCount == 0u;
+}
+
+inline constexpr bool renderTapeProducedTextureAliasClosureSupported(
+    RenderTapeProducedTextureContentPolicy policy,
+    std::size_t aliasCount) noexcept {
+  return policy == RenderTapeProducedTextureContentPolicy::ColorRenderTarget ||
+         (policy == RenderTapeProducedTextureContentPolicy::Df24DepthOnly &&
+          aliasCount == 1u);
+}
+
+inline bool renderTapeNullRtTextureShapeSupported(
+    std::span<const std::byte> descriptor) noexcept {
+  RenderTapeTextureDescriptorV2 texture{};
+  D9CSurfaceDesc surface{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+      texture.dimension != static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
+      texture.mipLevelCount != 1u || texture.subresourceCount != 1u ||
+      !renderTapeTextureSubresourceDescriptor(descriptor, 0u, surface) || surface.resourceType != 3u)
+    return false;
+  surface.resourceType = 1u;
+  return renderTapeNullRtSurfaceShapeSupported(surface);
+}
+
+inline bool renderTapeNullRtDescriptorOnly(std::uint32_t identityKind,
+    std::span<const std::byte> descriptor) noexcept {
+  if (identityKind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+    RenderTapeTextureDescriptorV2 texture{};
+    return renderTapeLoadTextureDescriptorV2(descriptor, texture) &&
+        texture.initialContentDisposition == static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::NullRtDescriptorOnly) &&
+        renderTapeNullRtTextureShapeSupported(descriptor);
+  }
+  return false;
+}
+
 // Arm-boundary GPU snapshots deliberately support only the exact shapes
 // observed in GT2/STALKER: the existing DEFAULT-pool render-target shapes,
 // the single MANAGED shader texture atlas, and single-level A8R8G8B8 and
-// RGBA16Float 2D DEFAULT-pool render targets. This policy is shared by PE capture,
+// RGBA16Float/R32Float 2D DEFAULT-pool render targets. This policy is shared by PE capture,
 // unix readback, validation, and provider replay so CompleteSeed cannot widen
 // accidentally to arbitrary textures.
 inline bool renderTapeArmColorSnapshotTextureSupported(
@@ -863,7 +960,8 @@ inline bool renderTapeArmColorSnapshotTextureSupported(
     const bool defaultRenderTarget =
         !cube && surface.pool == 0u && surface.usage == 1u &&
         (surface.format == 21u || surface.format == 22u ||
-         renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface));
+         renderTapeArmColorSnapshotRgba16FloatTextureSupported(surface) ||
+         renderTapeArmColorSnapshotR32FloatTextureSupported(surface));
     const bool managedShaderTexture =
         !cube && surface.pool == 1u && surface.usage == 0u &&
         surface.format == 21u;

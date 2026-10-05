@@ -419,11 +419,21 @@ foreach spec : [
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
   ['render-tape-identity-v3', 'render_tape_identity_v3_spec.cpp'],
+  ['render-tape-identity-v4', 'render_tape_identity_v4_spec.cpp'],
+  ['render-tape-identity-v4-query', 'render_tape_identity_v4_query_spec.cpp'],
+  ['render-tape-execution-topology-v1', 'render_tape_execution_topology_v1_spec.cpp'],
   ['render-tape-volume-layout', 'render_tape_volume_layout_spec.cpp'],
   ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],
   ['render-tape-source-plan', 'render_tape_source_plan_spec.cpp'],
   ['render-tape-source-plan-v3', 'render_tape_source_plan_v3_spec.cpp'],
+  ['render-tape-source-plan-v4', 'render_tape_source_plan_v4_spec.cpp'],
+  ['render-tape-semantic-mapping-v4', 'render_tape_semantic_mapping_v4_spec.cpp'],
+  ['render-tape-identity-transfer-v3', 'render_tape_identity_transfer_v3_spec.cpp'],
+  ['render-tape-identity-transfer-v4', 'render_tape_identity_transfer_v4_spec.cpp'],
+  ['render-tape-snapshot-budget', 'render_tape_snapshot_budget_spec.cpp'],
+  ['render-tape-snapshot-budget-transfer', 'render_tape_snapshot_budget_transfer_spec.cpp'],
+  ['render-tape-snapshot-staging', 'render_tape_snapshot_staging_spec.cpp'],
 ]
   sources = [spec[1]]
   if spec[0] == 'render-tape-capture'
@@ -447,6 +457,11 @@ foreach spec : [
     test('dxmt9-' + spec[0] + '-spec', target,
          env: render_tape_provider_test_env,
          timeout: 60)
+  elif spec[0] == 'render-tape-snapshot-staging'
+    test('dxmt9-' + spec[0] + '-spec', target,
+         args: [join_paths(meson.project_source_root(),
+                          'src/d3d9/device_c_render_tape_present_capture.cpp')],
+         env: dxmt9_native_test_env)
   else
     test('dxmt9-' + spec[0] + '-spec', target,
          env: dxmt9_native_test_env)
@@ -457,12 +472,60 @@ foreach spec : [
     render_tape_capture_fixture_spec = target
   elif spec[0] == 'render-tape-identity-v3'
     render_tape_identity_v3_fixture_spec = target
+  elif spec[0] == 'render-tape-identity-v4'
+    render_tape_identity_v4_fixture_spec = target
   elif spec[0] == 'render-tape-projection'
     render_tape_projection_fixture_spec = target
   elif spec[0] == 'render-tape-provider'
     render_tape_provider_fixture_spec = target
   endif
 endforeach
+
+# Private, single-run original-input V4 qualification. This executable is not
+# registered as a routine test: the authenticated workload bundle is external.
+render_tape_v4_capture_diagnostic = executable(
+  'dxmt9-render-tape-v4-capture-diagnostic',
+  ['render_tape_v4_capture_diagnostic.cpp', '../backend/render_tape_encode_destination.mm'],
+  include_directories: dxmt9_inc,
+  objcpp_args: ['-fobjc-arc'],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-cpu-v4-semantics-cli-spec', python3,
+  args: [join_paths(meson.project_source_root(),
+                   'scripts/check/test_render_tape_cpu_v4_semantics.py')],
+  timeout: 60,
+)
+
+test('dxmt9-render-tape-v4-capture-diagnostic-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_v4_capture_diagnostic.py')],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-v4-paired-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_v4_paired.py')],
+     timeout: 60,
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-cpu-v4-execute-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_cpu_v4_execute.py')],
+     timeout: 60,
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-v4-experiment-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_v4_experiment.py')],
+     timeout: 60,
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-v4-capacity-experiment-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_v4_capacity_experiment.py')],
+     timeout: 60,
+     env: dxmt9_native_test_env)
 
 render_tape_query_test_env = environment()
 render_tape_d24s8_test_env = environment()
@@ -491,6 +554,18 @@ test('dxmt9-render-tape-a8r8g8b8-metal-oracle',
      env: render_tape_d24s8_test_env,
      is_parallel: false,
      timeout: 60)
+test('dxmt9-render-tape-r32f-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-r32f-oracle'],
+     env: render_tape_d24s8_test_env,
+     is_parallel: false,
+     timeout: 60)
+test('dxmt9-render-tape-df24-produced-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-df24-produced-oracle'],
+     env: render_tape_d24s8_test_env,
+     is_parallel: false,
+     timeout: 120)
 render_tape_query_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
 render_tape_query_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
 render_tape_query_test_env.set('DXMT9_METAL_OCCLUSION', '1')
@@ -592,6 +667,17 @@ test('dxmt9-render-tape-identity-v3-cli-spec', python3,
      ],
      env: dxmt9_native_test_env)
 
+test('dxmt9-render-tape-identity-v4-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_identity_v4_cli.py'),
+       render_tape_identity_v4_fixture_spec,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
+     ],
+     env: dxmt9_native_test_env)
+
 test('dxmt9-render-tape-capture-cli-spec', python3,
      args: [
        join_paths(meson.project_source_root(),
@@ -628,6 +714,27 @@ test('dxmt9-render-tape-policy-cli-spec', python3,
        join_paths(meson.project_source_root(),
                   'scripts/tools/run_dxmt9_render_tape.py'),
      ],
+     env: dxmt9_native_test_env)
+
+render_tape_primary_backbuffer_classification_spec = executable(
+  'dxmt9-render-tape-primary-backbuffer-classification-spec',
+  'render_tape_primary_backbuffer_classification_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-primary-backbuffer-classification-spec',
+     render_tape_primary_backbuffer_classification_spec,
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-primary-backbuffer-alias-pe-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_primary_backbuffer_alias_pe.py')],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-snapshot-budget-pe-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_snapshot_budget_pe.py')],
      env: dxmt9_native_test_env)
 
 test('dxmt9-render-tape-provider-cli-spec', python3,
@@ -723,6 +830,11 @@ render_tape_publisher_spec = executable(
 )
 test('dxmt9-render-tape-publisher-spec',
      render_tape_publisher_spec,
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-publisher-identity-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                       'scripts/check/test_render_tape_publisher_identity.py'),
+            render_tape_identity_v3_fixture_spec, render_tape_publisher_spec],
      env: dxmt9_native_test_env)
 
 pe_chunk_record_value_spec = executable(

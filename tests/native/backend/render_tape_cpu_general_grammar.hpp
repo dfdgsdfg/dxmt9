@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 
 namespace dxmt9::d3d9::render_tape_runtime {
@@ -31,7 +32,69 @@ struct GeneralCpuAdmissionCaps {
   // of queue progress or source-slot availability; production routing must
   // perform its own pre-effect queue/source reservation.
   std::size_t maxRecordsPerChunk = 64u;
+  std::size_t maxDraws = 4096u;
+  std::size_t maxBlobs = 2048u;
+  std::size_t maxQueryDefinitions = 512u;
+  std::size_t maxQueryIssues = 4096u;
+  std::size_t maxQueryPolls = 2048u;
+  // Retain the legacy per-domain record bound; bootstrap and body also share
+  // an explicit total work bound. Chunks historically shared their bound.
+  std::size_t maxTotalRecords = 8192u;
+  std::size_t maxTotalChunks = 128u;
+
+  constexpr bool operator==(const GeneralCpuAdmissionCaps&) const = default;
 };
+
+// Explicit opt-in input profile. Queue capacity and publication cadence are
+// independent and must still be admitted before execution.
+inline constexpr GeneralCpuAdmissionCaps generalCpuExtendedInputCaps() noexcept {
+  return {.maxEvents = 8192u,
+          .maxObjects = 1024u,
+          .maxMutations = 8192u,
+          .maxChunks = 256u,
+          .maxRecords = 8192u,
+          .maxBlobBytes = 512ull * 1024ull * 1024ull,
+          .maxRecordsPerChunk = 64u,
+          .maxDraws = 4096u,
+          .maxBlobs = 8192u,
+          .maxQueryDefinitions = 1024u,
+          .maxQueryIssues = 8192u,
+          .maxQueryPolls = 8192u,
+          .maxTotalRecords = 8192u,
+          .maxTotalChunks = 256u};
+}
+
+struct GeneralCpuSourceCapacity {
+  std::size_t maxPublications = 4096u;
+  // One submission or one query probe consumes one progress step. This is
+  // total session work, distinct from the queue's simultaneous resident ring.
+  std::size_t maxProgressSteps = 4096u;
+};
+
+struct GeneralCpuSourceDemand {
+  std::size_t publications = 0u;
+  std::size_t progressSteps = 0u;
+};
+
+enum class GeneralCpuSourceAdmission : std::uint8_t {
+  Accepted, InvalidCapacity, PublicationLimit, ProgressLimit,
+};
+
+inline constexpr GeneralCpuSourceAdmission admitGeneralCpuSourceDemand(
+    const GeneralCpuSourceDemand& demand,
+    const GeneralCpuSourceCapacity& capacity) noexcept {
+  constexpr auto indexLimit = std::numeric_limits<std::uint32_t>::max() - 1u;
+  if (capacity.maxPublications == 0u || capacity.maxProgressSteps == 0u ||
+      capacity.maxPublications > indexLimit ||
+      capacity.maxProgressSteps > indexLimit)
+    return GeneralCpuSourceAdmission::InvalidCapacity;
+  if (demand.publications > capacity.maxPublications)
+    return GeneralCpuSourceAdmission::PublicationLimit;
+  if (demand.progressSteps < demand.publications ||
+      demand.progressSteps > capacity.maxProgressSteps)
+    return GeneralCpuSourceAdmission::ProgressLimit;
+  return GeneralCpuSourceAdmission::Accepted;
+}
 
 struct GeneralCpuAdmissionCounts {
   // The primary counters intentionally match general-provider coverage:
@@ -44,6 +107,7 @@ struct GeneralCpuAdmissionCounts {
   std::size_t chunks = 0u;
   std::size_t records = 0u;
   std::size_t draws = 0u;
+  std::size_t blobs = 0u;
   std::uint64_t blobBytes = 0u;
   std::size_t bootstrapChunks = 0u;
   std::size_t bootstrapRecords = 0u;
@@ -52,10 +116,14 @@ struct GeneralCpuAdmissionCounts {
   std::size_t queryDefinitions = 0u;
   std::size_t queryIssues = 0u;
   std::size_t queryPolls = 0u;
+  std::size_t queryCheckpoints = 0u;
+
+  constexpr bool operator==(const GeneralCpuAdmissionCounts&) const = default;
 };
 
 enum class GeneralCpuAdmissionReason : std::uint8_t {
   Accepted,
+  InvalidBudget,
   EventLimit,
   ObjectLimit,
   MutationLimit,
@@ -63,6 +131,11 @@ enum class GeneralCpuAdmissionReason : std::uint8_t {
   RecordLimit,
   PerChunkRecordLimit,
   BlobBytesLimit,
+  BlobCountLimit,
+  DrawLimit,
+  QueryDefinitionLimit,
+  QueryIssueLimit,
+  QueryPollLimit,
   InvalidEventReference,
   UnsupportedEvent,
   UnsupportedObject,
@@ -84,6 +157,7 @@ struct GeneralCpuAdmissionResult {
   std::uint32_t chunkIndex = kGeneralCpuNoIndex;
   std::uint32_t recordIndex = kGeneralCpuNoIndex;
   GeneralCpuAdmissionCounts counts{};
+  GeneralCpuAdmissionCaps inputCaps{};
 
   constexpr bool accepted() const noexcept {
     return reason == GeneralCpuAdmissionReason::Accepted;
@@ -94,6 +168,7 @@ inline const char* generalCpuAdmissionReasonName(
     GeneralCpuAdmissionReason reason) noexcept {
   switch (reason) {
   case GeneralCpuAdmissionReason::Accepted: return "accepted";
+  case GeneralCpuAdmissionReason::InvalidBudget: return "invalid-budget";
   case GeneralCpuAdmissionReason::EventLimit: return "event-limit";
   case GeneralCpuAdmissionReason::ObjectLimit: return "object-limit";
   case GeneralCpuAdmissionReason::MutationLimit: return "mutation-limit";
@@ -102,6 +177,11 @@ inline const char* generalCpuAdmissionReasonName(
   case GeneralCpuAdmissionReason::PerChunkRecordLimit:
     return "per-chunk-record-limit";
   case GeneralCpuAdmissionReason::BlobBytesLimit: return "blob-bytes-limit";
+  case GeneralCpuAdmissionReason::BlobCountLimit: return "blob-count-limit";
+  case GeneralCpuAdmissionReason::DrawLimit: return "draw-limit";
+  case GeneralCpuAdmissionReason::QueryDefinitionLimit: return "query-definition-limit";
+  case GeneralCpuAdmissionReason::QueryIssueLimit: return "query-issue-limit";
+  case GeneralCpuAdmissionReason::QueryPollLimit: return "query-poll-limit";
   case GeneralCpuAdmissionReason::InvalidEventReference:
     return "invalid-event-reference";
   case GeneralCpuAdmissionReason::UnsupportedEvent: return "unsupported-event";
@@ -186,6 +266,14 @@ inline bool generalCpuAddBlob(std::uint64_t value, std::uint64_t limit,
   return true;
 }
 
+inline bool generalCpuMultiply(std::size_t left, std::size_t right,
+                               std::size_t& product) noexcept {
+  if (right != 0u && left > std::numeric_limits<std::size_t>::max() / right)
+    return false;
+  product = left * right;
+  return true;
+}
+
 inline std::uint32_t generalCpuEventForOrdinal(
     const GeneralPreflightPlan& plan, RenderTapeEventType type,
     std::size_t ordinal) noexcept {
@@ -218,22 +306,83 @@ inline std::uint32_t generalCpuEventForChunk(
 
 }  // namespace detail
 
+// Includes the original query probe and its bounded supplemental probes.
+// The transcript's uint32 evidence contract is checked before any narrowing.
+inline bool addGeneralCpuQueryProgressDemand(
+    const GeneralCpuAdmissionCounts& counts, std::uint32_t oraclePollsPerQuery,
+    GeneralCpuSourceDemand& demand) noexcept {
+  if (oraclePollsPerQuery > 64u) return false;
+  std::size_t supplemental = 0u;
+  std::size_t queryCycles = counts.queryPolls;
+  if (!detail::generalCpuAdd(counts.queryCheckpoints,
+                            std::numeric_limits<std::size_t>::max(), queryCycles) ||
+      !detail::generalCpuMultiply(queryCycles, oraclePollsPerQuery, supplemental) ||
+      supplemental > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  auto candidate = demand;
+  if (!detail::generalCpuAdd(queryCycles, std::numeric_limits<std::size_t>::max(),
+                            candidate.progressSteps) ||
+      !detail::generalCpuAdd(supplemental, std::numeric_limits<std::size_t>::max(),
+                            candidate.progressSteps))
+    return false;
+  demand = candidate;
+  return true;
+}
+
+inline bool addGeneralCpuSourcePublications(std::size_t publications,
+                                           GeneralCpuSourceDemand& demand) noexcept {
+  auto candidate = demand;
+  if (!detail::generalCpuAdd(publications, std::numeric_limits<std::size_t>::max(),
+                            candidate.publications) ||
+      !detail::generalCpuAdd(publications, std::numeric_limits<std::size_t>::max(),
+                            candidate.progressSteps))
+    return false;
+  demand = candidate;
+  return true;
+}
+
 // `plan` must be the immutable result of buildGeneralReplayPlan. This helper
 // intentionally does not validate tape events, descriptors, mutation bytes,
 // or command record bodies; those are the general-provider contract. The only
 // command inspection is importPrevalidatedCommandChunk(), which reconstructs
 // safe views over the already-validated bytes.
-inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
+namespace detail {
+
+// Input-only specialization. This tag grants no source capacity or progress
+// authority, and the legacy public wrapper always selects its original policy.
+enum class GeneralCpuInputValidationPolicy : std::uint8_t {
+  Legacy,
+  ControlledV4Raw256,
+};
+
+inline GeneralCpuAdmissionResult admitGeneralCpuPlanWithPolicy(
     const GeneralPreflightPlan& plan,
-    const GeneralCpuAdmissionCaps& caps = {}) noexcept {
+    const GeneralCpuAdmissionCaps& caps,
+    GeneralCpuInputValidationPolicy policy) noexcept {
   GeneralCpuAdmissionCounts counts{
       .events = plan.events.size(),
       .objects = plan.definitions.size(),
       .mutations = plan.mutations.size(),
       .chunks = plan.commandChunks.size(),
+      .blobs = plan.catalogue.blobs.size(),
       .blobBytes = 0u,
       .bootstrapChunks = plan.bootstrapChunks.size(),
   };
+  if (policy != GeneralCpuInputValidationPolicy::Legacy &&
+      policy != GeneralCpuInputValidationPolicy::ControlledV4Raw256)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::InvalidBudget, counts);
+  const auto bootstrapRecordLimit = policy == GeneralCpuInputValidationPolicy::ControlledV4Raw256
+      ? 64u : caps.maxRecordsPerChunk;
+
+  constexpr auto indexLimit = std::numeric_limits<std::uint32_t>::max() - 1u;
+  for (const auto cap : {caps.maxEvents, caps.maxObjects, caps.maxMutations,
+                        caps.maxChunks, caps.maxRecords, caps.maxRecordsPerChunk,
+                        caps.maxDraws, caps.maxBlobs, caps.maxQueryDefinitions,
+                        caps.maxQueryIssues, caps.maxQueryPolls,
+                        caps.maxTotalRecords, caps.maxTotalChunks}) {
+    if (cap > indexLimit)
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::InvalidBudget, counts);
+  }
 
   // All aggregate bounds are established before semantic iteration. This is
   // important for a plan assembled from untrusted capture metadata: no later
@@ -255,21 +404,28 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
                                     detail::generalCpuEventForOrdinal(
                                         plan, RenderTapeEventType::ResourceMutation,
                                         caps.maxMutations));
-  if (counts.chunks > caps.maxChunks ||
-      counts.bootstrapChunks > caps.maxChunks - counts.chunks) {
-    if (counts.chunks > caps.maxChunks) {
+  const auto commandChunkLimit = caps.maxChunks < caps.maxTotalChunks
+      ? caps.maxChunks : caps.maxTotalChunks;
+  if (counts.chunks > caps.maxChunks || counts.bootstrapChunks > caps.maxChunks ||
+      counts.chunks > caps.maxTotalChunks ||
+      counts.bootstrapChunks > caps.maxTotalChunks - counts.chunks) {
+    if (counts.chunks > commandChunkLimit) {
       return detail::generalCpuReject(
           GeneralCpuAdmissionReason::ChunkLimit, counts,
-          detail::generalCpuEventForChunk(plan, false, caps.maxChunks),
-          static_cast<std::uint32_t>(caps.maxChunks));
+          detail::generalCpuEventForChunk(plan, false, commandChunkLimit),
+          static_cast<std::uint32_t>(commandChunkLimit));
     }
     return detail::generalCpuReject(
         GeneralCpuAdmissionReason::ChunkLimit, counts,
         detail::generalCpuEventForChunk(
-            plan, true, caps.maxChunks - counts.chunks),
-        static_cast<std::uint32_t>(caps.maxChunks - counts.chunks));
+            plan, true, counts.bootstrapChunks > caps.maxChunks
+                ? caps.maxChunks : caps.maxTotalChunks - counts.chunks),
+        static_cast<std::uint32_t>(counts.bootstrapChunks > caps.maxChunks
+            ? caps.maxChunks : caps.maxTotalChunks - counts.chunks));
   }
 
+  if (counts.blobs > caps.maxBlobs)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::BlobCountLimit, counts);
   for (const auto& blob : plan.catalogue.blobs) {
     if (!detail::generalCpuAddBlob(blob.size, caps.maxBlobBytes,
                                    counts.blobBytes))
@@ -280,9 +436,21 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
   // Envelope counts are immutable plan metadata and are checked before any
   // record view is imported. Bootstrap overlays are counted for capacity but
   // remain separate from the general-provider command coverage counters.
+  std::size_t totalRecords = 0u;
   for (std::size_t chunkIndex = 0u; chunkIndex < plan.bootstrapChunks.size();
        ++chunkIndex) {
     const auto& chunk = plan.bootstrapChunks[chunkIndex];
+    if (chunk.envelope.recordCount > bootstrapRecordLimit)
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::PerChunkRecordLimit, counts,
+          detail::generalCpuEventForChunk(plan, true, chunkIndex),
+          static_cast<std::uint32_t>(chunkIndex));
+    if (!detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxRecords,
+                              counts.bootstrapRecords) ||
+        !detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxTotalRecords, totalRecords))
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
+          counts, detail::generalCpuEventForChunk(plan, true, chunkIndex),
+          static_cast<std::uint32_t>(chunkIndex));
     ImportedChunkView bootstrap;
     if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, bootstrap))
       return detail::generalCpuReject(GeneralCpuAdmissionReason::CommandChunkUnavailable,
@@ -297,18 +465,6 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
             counts, detail::generalCpuEventForChunk(plan, true, chunkIndex),
             static_cast<std::uint32_t>(chunkIndex), static_cast<std::uint32_t>(record));
     }
-    if (chunk.envelope.recordCount > caps.maxRecordsPerChunk)
-      return detail::generalCpuReject(
-          GeneralCpuAdmissionReason::PerChunkRecordLimit, counts,
-          detail::generalCpuEventForChunk(plan, true, chunkIndex),
-          static_cast<std::uint32_t>(chunkIndex));
-    if (!detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxRecords,
-                               counts.bootstrapRecords))
-      return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
-                                      counts,
-                                      detail::generalCpuEventForChunk(
-                                          plan, true, chunkIndex),
-                                      static_cast<std::uint32_t>(chunkIndex));
   }
   for (std::size_t chunkIndex = 0u; chunkIndex < plan.commandChunks.size();
        ++chunkIndex) {
@@ -319,28 +475,37 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
           detail::generalCpuEventForChunk(plan, false, chunkIndex),
           static_cast<std::uint32_t>(chunkIndex));
     if (!detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxRecords,
-                               counts.records))
+                               counts.records) ||
+        !detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxTotalRecords, totalRecords))
       return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
                                       counts,
                                       detail::generalCpuEventForChunk(
                                           plan, false, chunkIndex),
                                       static_cast<std::uint32_t>(chunkIndex));
   }
-  if (counts.records > caps.maxRecords)
-    return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
-                                    counts);
+  if (caps.maxEvents == 0u || caps.maxObjects == 0u || caps.maxMutations == 0u ||
+      caps.maxChunks == 0u || caps.maxRecords == 0u || caps.maxBlobBytes == 0u ||
+      caps.maxRecordsPerChunk == 0u || caps.maxDraws == 0u || caps.maxBlobs == 0u ||
+      caps.maxQueryDefinitions == 0u || caps.maxQueryIssues == 0u ||
+      caps.maxQueryPolls == 0u || caps.maxTotalRecords == 0u ||
+      caps.maxTotalChunks == 0u || caps.maxRecordsPerChunk > caps.maxRecords ||
+      caps.maxRecords > caps.maxTotalRecords || caps.maxChunks > caps.maxTotalChunks ||
+      caps.maxQueryDefinitions > caps.maxObjects)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::InvalidBudget, counts);
 
   if (plan.controls.size() != plan.controlBytes.size())
     return detail::generalCpuReject(
         GeneralCpuAdmissionReason::OrderedControlUnsupported, counts);
   for (const auto& gamma : plan.bootstrapGamma) {
-    bool identity = gamma.empty() || gamma.size() == kRenderTapeGammaRampBytes;
-    for (std::size_t offset = 0u; identity && offset < gamma.size(); offset += 2u) {
-      std::uint16_t value = 0u;
-      std::memcpy(&value, gamma.data() + offset, sizeof(value));
-      identity = value == static_cast<std::uint16_t>(((offset / 2u) % 256u) << 8u);
+    bool supported = gamma.empty() || gamma.size() == kRenderTapeGammaRampBytes;
+    if (policy == GeneralCpuInputValidationPolicy::Legacy) {
+      for (std::size_t offset = 0u; supported && offset < gamma.size(); offset += 2u) {
+        std::uint16_t value = 0u;
+        std::memcpy(&value, gamma.data() + offset, sizeof(value));
+        supported = value == static_cast<std::uint16_t>(((offset / 2u) % 256u) << 8u);
+      }
     }
-    if (!identity)
+    if (!supported)
       return detail::generalCpuReject(GeneralCpuAdmissionReason::GammaUnsupported,
                                       counts);
   }
@@ -401,6 +566,11 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
               GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts,
               eventIndex);
         ++counts.queryDefinitions;
+        if (counts.queryDefinitions > caps.maxQueryDefinitions)
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::QueryDefinitionLimit, counts, eventIndex);
+        counts.queryCheckpoints += query.initialState == static_cast<std::uint32_t>(
+            RenderTapeQueryInitialState::CompletedEventCheckpoint);
       } else if (plan.definitions[event.index].fixed.identity.kind >
                  D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)
         return detail::generalCpuReject(GeneralCpuAdmissionReason::UnsupportedObject,
@@ -472,10 +642,18 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
                                             static_cast<std::uint32_t>(recordIndex));
         }
         if (record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
-            record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
+            record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
           ++counts.draws;
-        if (record.header.type == D9C_COMMAND_RECORD_QUERY_ISSUE)
+          if (counts.draws > caps.maxDraws)
+            return detail::generalCpuReject(GeneralCpuAdmissionReason::DrawLimit,
+                counts, eventIndex, event.index, static_cast<std::uint32_t>(recordIndex));
+        }
+        if (record.header.type == D9C_COMMAND_RECORD_QUERY_ISSUE) {
           ++counts.queryIssues;
+          if (counts.queryIssues > caps.maxQueryIssues)
+            return detail::generalCpuReject(GeneralCpuAdmissionReason::QueryIssueLimit,
+                counts, eventIndex, event.index, static_cast<std::uint32_t>(recordIndex));
+        }
       }
       break;
     }
@@ -499,6 +677,9 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
             GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts, eventIndex);
       ++referencedControls;
       ++counts.queryPolls;
+      if (counts.queryPolls > caps.maxQueryPolls)
+        return detail::generalCpuReject(GeneralCpuAdmissionReason::QueryPollLimit,
+                                        counts, eventIndex);
       break;
     }
     case RenderTapeEventType::PresentComplete:
@@ -555,7 +736,25 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
           .eventIndex = kGeneralCpuNoIndex,
           .chunkIndex = kGeneralCpuNoIndex,
           .recordIndex = kGeneralCpuNoIndex,
-          .counts = counts};
+          .counts = counts,
+          .inputCaps = caps};
+}
+
+}  // namespace detail
+
+inline GeneralCpuAdmissionResult admitGeneralCpuPlanImpl(
+    const GeneralPreflightPlan& plan,
+    const GeneralCpuAdmissionCaps& caps) noexcept {
+  return detail::admitGeneralCpuPlanWithPolicy(
+      plan, caps, detail::GeneralCpuInputValidationPolicy::Legacy);
+}
+
+inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
+    const GeneralPreflightPlan& plan,
+    const GeneralCpuAdmissionCaps& caps = {}) noexcept {
+  auto result = admitGeneralCpuPlanImpl(plan, caps);
+  result.inputCaps = caps;
+  return result;
 }
 
 }  // namespace dxmt9::d3d9::render_tape_runtime

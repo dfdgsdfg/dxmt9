@@ -43,6 +43,9 @@ struct D3D9PeStateBlockContext {
 
 struct D3D9PeBufferContext {
   D3D9DeviceImpl *device = nullptr;
+  void BeginRenderTapeOrderedControlForChild(const D9CWireObjectIdentity &) noexcept;
+  void BeginRenderTapeResourceMutationForChild(const D9CWireObjectIdentity &) noexcept;
+  void EndRenderTapeExternalEffectForChild() noexcept;
   HRESULT FlushPeRecorderForChild() noexcept;
   HRESULT FlushPeRecorderForBufferHazardForChild(
       const dxmt9::d3d9::pe::BufferRef &) noexcept;
@@ -74,6 +77,10 @@ struct D3D9PeBufferContext {
 
 struct D3D9PeSurfaceTextureContext {
   D3D9DeviceImpl *device = nullptr;
+  void BeginRenderTapeOrderedControlForChild(const D9CWireObjectIdentity &) noexcept;
+  void BeginRenderTapeResourceMutationForChild(const D9CWireObjectIdentity &) noexcept;
+  void EndRenderTapeExternalEffectForChild() noexcept;
+  void BeginRenderTapeVolumeUnlockForChild(D9CTexture *, std::uint32_t) noexcept;
   HRESULT FlushPeRecorderForChild() noexcept;
   PeRenderTapeChildResult GenerateMipmapsForChild(
       const dxmt9::d3d9::pe::TextureRef &) noexcept;
@@ -127,6 +134,8 @@ struct D3D9PeSurfaceTextureContext {
 
 struct D3D9PeQueryContext {
   D3D9DeviceImpl *device = nullptr;
+  void BeginRenderTapeOrderedControlForChild(const D9CWireObjectIdentity &) noexcept;
+  void EndRenderTapeExternalEffectForChild() noexcept;
   HRESULT FlushPeRecorderForChild() noexcept;
   bool IsChunkRecorderEnabledForChild() const noexcept;
   bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;

@@ -479,6 +479,7 @@ enum class RenderTapeObjectDefineValidationSubreason : std::uint8_t {
   SurfaceParentMismatch,
   DescriptorContentDisposition,
   ParentLifetime,
+  ProducedTextureAliasClosure,
 };
 
 struct RenderTapeObjectDefineValidationDetail {
@@ -502,6 +503,10 @@ struct RenderTapeObjectDefineValidationDetail {
   std::uint64_t descriptorExtentBytes = 0u;
   std::uint64_t descriptorExpectedExtentBytes = 0u;
   D9CWireObjectIdentity parentTexture{};
+  // Cold diagnostic data is authoritative only after the complete texture
+  // descriptor has passed canonical subresource validation.
+  bool hasTextureLevel0 = false;
+  D9CSurfaceDesc textureLevel0{};
 
   bool valid() const noexcept {
     return subreason != RenderTapeObjectDefineValidationSubreason::None;

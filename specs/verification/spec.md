@@ -210,8 +210,31 @@ promotion.
 The focused TLC evidence is intentionally reported separately from the full
 repository suite:
 
+`RenderTapeControlledCpuConsumer` binds R-HARN-REPLAY-9.18 to
+`cpuV4ConsumerStateValid` / `cpuV4ConsumerAdvance` and the controlled backend
+effect boundaries. Two source generations reuse one resident slot. Separate
+safety and progress configurations cover capacity/publication wakes,
+observe/submit/acknowledge/retire, closed-producer shutdown and join. Backend
+effects precede reducer confirmation, so failures preserve their actual phase.
+Quarantine cannot mint completion or successful cleanup. Progress assumes
+explicit weak fairness; the missing-publication-wake configuration must fail
+normal drain/join while retaining safety. This model excludes actual Metal,
+full resource-content semantics, allocator behavior and timing. Native
+consumer tests exercise the shared reducer and real threaded fake backend;
+real-queue adapter and unchanged full-input qualification remain separate gates.
+`dxmt9-render-tape-controlled-cpu-v4-integration-spec` additionally exercises
+real seeded setup, controlled arm, observed Compatibility replay and natural
+Present publication through separate CPU finalization. Two authenticated
+reference source obligations map to one actual source. Foreign arm identities,
+missing executor raw ACK, unfinished consumer and missing fixture join
+acknowledgment reject. The test passes 32 repetitions in
+`experiments/output/stkcop-v4-controlled-cpu-02/verification.md`; it does not
+qualify unchanged STALKER input, resource bytes, Metal, pixels or timing.
+
 | Configuration | Focused result |
 |---|---|
+| `RenderTapeControlledCpuConsumer.cfg` / `.progress.cfg` | 4,277 generated / 2,316 distinct states each; actual lifecycle, truthful quarantine, conditional normal drain/join and failure wake/exit/join pass |
+| `RenderTapeControlledCpuConsumer.missing-publication-wake.counterexample.cfg` | safety remains valid but `NormalDrainAndJoin` fails when notification is suppressed |
 | `RenderTapeEventCompletionBinding.cfg` | normal model: 15 generated/distinct states, no invariant violation |
 | `RenderTapeEventCompletionBinding.stale-identity.counterexample.cfg` | expected violation of `BoundMatchesPlan` |
 | `RenderTapeEventCompletionBinding.premature-reuse.counterexample.cfg` | expected violation of `NoReuseBeforeCompletion` |

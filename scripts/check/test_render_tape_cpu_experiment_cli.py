@@ -864,6 +864,114 @@ def native_general_mipmap_receipt_tests(module, provider, validator, runner, roo
                 assert digest == expected_digest
 
 
+def native_general_input_admission_receipt_tests(provider, root):
+    """Native input profiles are explicit and separate from source capacity."""
+    default_caps = {
+        "max_events": 2048, "max_objects": 512, "max_mutations": 1024,
+        "max_chunks": 128, "max_bootstrap_chunks": 128, "max_total_chunks": 128,
+        "max_records": 4096, "max_bootstrap_records": 4096,
+        "max_total_records": 8192, "max_records_per_chunk": 64,
+        "max_draws": 4096, "max_blobs": 2048, "max_blob_bytes": 256 * 1024 * 1024,
+        "max_query_definitions": 512, "max_query_issues": 4096,
+        "max_query_polls": 2048,
+    }
+    extended_caps = dict(default_caps, max_events=8192, max_objects=1024,
+                         max_mutations=8192, max_chunks=256,
+                         max_bootstrap_chunks=256, max_total_chunks=256,
+                         max_records=8192, max_bootstrap_records=8192,
+                         max_blobs=8192, max_blob_bytes=512 * 1024 * 1024,
+                         max_query_definitions=1024, max_query_issues=8192,
+                         max_query_polls=8192)
+    source_capacity = {"max_publications": 4096, "max_progress_steps": 4096}
+    execution = ("--grammar", "general-frame", "--resource-backend",
+                 "cpu-metal-resources", "--max-pending", "1", "--repeat", "2")
+
+    def invoke(events, *arguments, expected=0, blobs=()):
+        command = [str(provider), "--tape-experiment", str(events)]
+        for blob in blobs:
+            command.extend(("--blob", str(blob)))
+        command.extend(arguments)
+        result = subprocess.run(command, text=True, capture_output=True, timeout=30)
+        assert result.returncode == expected, (command, result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
+    missing = root / "missing-profile-events.bin"
+    invalid = invoke(missing, *execution, "--input-admission-profile", "future", expected=3)
+    assert invalid["status"] == "unsupported-input-admission-profile"
+    assert invalid["input_admission_profile"] == "future"
+    assert invalid["input_admission_caps"] is None
+    assert "input_counts" not in invalid and "iterations" not in invalid
+    assert invalid["source_capacity"] == source_capacity
+    bounded = invoke(missing, "--input-admission-profile", "extended", expected=3)
+    assert bounded["status"] == "unsupported-mode"
+    assert bounded["reason"] == "input-admission-profile-requires-general-frame"
+    assert bounded["input_admission_caps"] == extended_caps
+
+    small = root / "mipmap-source"
+    small_blobs = sorted(small.glob("blob-*.bin"))
+    baseline = None
+    for profile, expected_caps in ((None, default_caps), ("default", default_caps),
+                                   ("extended", extended_caps)):
+        selector = () if profile is None else ("--input-admission-profile", profile)
+        receipt = invoke(small / "events.bin", *execution, *selector, blobs=small_blobs)
+        assert receipt["status"] == "complete"
+        assert receipt["input_admission_profile"] == (profile or "default")
+        assert receipt["input_admission_caps"] == expected_caps
+        assert receipt["source_capacity"] == source_capacity
+        assert receipt["max_query_oracle_polls_per_query"] == 4
+        counts = receipt["input_counts"]
+        assert counts.keys() == {"events", "objects", "mutations", "chunks", "records",
+                                 "draws", "query_definitions", "query_issues", "query_polls"}
+        admission_counts = receipt["input_admission_counts"]
+        assert all(admission_counts[key] == value for key, value in counts.items())
+        assert admission_counts["total_chunks"] == (
+            admission_counts["chunks"] + admission_counts["bootstrap_chunks"])
+        assert admission_counts["total_records"] == (
+            admission_counts["records"] + admission_counts["bootstrap_records"])
+        signatures = []
+        for row in receipt["iterations"]:
+            assert row["input_admission_reason"] == "accepted"
+            assert row["input_admission_counts"] == admission_counts
+            assert row["input_admission_caps"] == expected_caps
+            assert row["source_demand"]["publications"] <= source_capacity["max_publications"]
+            assert row["source_demand"]["progress_steps"] <= source_capacity["max_progress_steps"]
+            assert row["source_publications"] == row["submitted"]
+            assert row["progress_steps"] <= row["source_demand"]["progress_steps"]
+            signatures.append((row["semantic_digest"], row["command_count"],
+                               row["draw_count"], row["source_publications"]))
+        signature = (counts, admission_counts, signatures)
+        if baseline is None:
+            baseline = signature
+        assert signature == baseline, (profile, signature, baseline)
+
+    # Admission-only evidence: the larger input reaches a deliberately missing
+    # identity sidecar, so this check never claims extended resource execution.
+    source = root / "admission-profile-source"
+    run(str(provider), "--write-general-cpu-admission-profile-fixture", str(source))
+    admission_only = execution + ("--source-boundary-mode", "capture-source",
+                                 "--identity", str(root / "missing-identity.bin"),
+                                 "--source-plan-sha256", "12" * 32)
+    blobs = sorted(source.glob("blob-*.bin"))
+    for profile, expected_caps, status in (
+            (None, default_caps, "unsupported-grammar"),
+            ("default", default_caps, "unsupported-grammar"),
+            ("extended", extended_caps, "identity-read-failed")):
+        selector = () if profile is None else ("--input-admission-profile", profile)
+        receipt = invoke(source / "events.bin", *admission_only, *selector,
+                         expected=3, blobs=blobs)
+        assert receipt["status"] == status, receipt
+        assert receipt["input_admission_profile"] == (profile or "default")
+        assert receipt["input_admission_caps"] == expected_caps
+        assert receipt["source_capacity"] == source_capacity
+        assert default_caps["max_events"] < receipt["input_counts"]["events"] <= 8192
+        assert "iterations" not in receipt
+        if profile == "extended":
+            assert receipt["input_admission_reason"] == "accepted"
+            assert receipt["input_counts"]["mutations"] > default_caps["max_mutations"]
+        else:
+            assert receipt["reason"] == receipt["input_admission_reason"] == "event-limit"
+
+
 def main():
     provider, validator, runner = map(pathlib.Path, sys.argv[1:])
     repo_root = pathlib.Path(__file__).resolve().parents[2]
@@ -880,6 +988,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dxmt9-cpu-tape-") as temporary:
         root = pathlib.Path(temporary)
         native_general_mipmap_receipt_tests(module, provider, validator, runner, root)
+        native_general_input_admission_receipt_tests(provider, root)
         source, bundle = root / "source", root / "bundle"
         run(str(provider), "--write-completion-fixture", str(source))
         pack = [sys.executable, str(runner), "pack", "--events", str(source / "events.bin"),

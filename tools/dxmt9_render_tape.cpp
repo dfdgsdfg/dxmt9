@@ -1,6 +1,7 @@
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_identity_v3.hpp"
+#include "device_c_render_tape_execution_topology_v1.hpp"
 #include "device_c_render_tape_projection.hpp"
 #include "device_c_render_tape_policy.hpp"
 #include "device_c_render_tape_cpu_window.hpp"
@@ -52,6 +53,10 @@ std::uint32_t identityVersion(std::span<const std::byte> bytes) noexcept {
 
 bool requireV2Identity(std::span<const std::byte> bytes) {
   if (identityVersion(bytes) == kRenderTapeIdentityVersion) return true;
+  if (identityVersion(bytes) == kRenderTapeIdentityV4Version) {
+    std::cerr << "render tape identity v4 is inspection-only; V4 execution is not enabled\n";
+    return false;
+  }
   std::cerr << "render tape execution and policy transforms require identity v2; "
                "identity v3 is inspection-only\n";
   return false;
@@ -510,6 +515,7 @@ void usage() {
   std::cerr << "usage: dxmt9-render-tape <validate|inspect> <tape.bin> "
                "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape identity <tape.bin> <identity.bin> "
+               "[--execution-topology <execution_topology.bin>] "
                "[--verified-blob <sha256>:<bytes>]...\n"
                "       dxmt9-render-tape policy-explore <tape.bin> "
                "<identity.bin> [--verified-blob <sha256>:<bytes>]...\n"
@@ -792,8 +798,8 @@ void writePolicyExplore(const RenderTapePolicyExploreResult& result) {
   std::cout << "]}\n";
 }
 
-// This writer is deliberately local to v3 inspection. In particular, it must
-// not change v2's existing numeric JSON contract. Full-width v3 wire integers
+// This writer is deliberately local to v3/v4 inspection. In particular, it must
+// not change v2's existing numeric JSON contract. Full-width wire integers
 // use decimal strings so ordinary JSON clients cannot round evidence IDs.
 class IdentityV3JsonObject {
 public:
@@ -830,6 +836,27 @@ public:
     key(name);
     writeInspectionIdentity(output_, value);
   }
+  void field(const char* name, const RenderTapeIdentityV4ReplaySourceIdentity& value) {
+    key(name);
+    IdentityV3JsonObject object(output_);
+    object.field("frame", value.frame);
+    object.field("source", value.source);
+    object.field("last_source", value.lastSource);
+    object.field("sequence", value.sequence);
+  }
+  void field(const char* name, const RenderTapeIdentityV4ReplayReceipt& value) {
+    key(name);
+    IdentityV3JsonObject object(output_);
+    object.field("identity", value.identity);
+    object.field("queue_sequence", value.queueSequence);
+    object.field("build_generation", value.buildGeneration);
+    object.field("source_generation", value.sourceGeneration);
+    object.field("storage_generation", value.storageGeneration);
+    object.field("kind", value.kind);
+    object.field("control_index", value.controlIndex);
+    object.field("command_count", value.commandCount);
+    object.field("reserved0", value.reserved0);
+  }
 
 private:
   void key(const char* name) {
@@ -861,6 +888,94 @@ void writeIdentityV3Rows(std::ostream& output, const char* name,
     write(object, rows[index]);
   }
   output << ']';
+}
+
+void writeIdentitySourceFields(IdentityV3JsonObject& object,
+                               const RenderTapeIdentityV3Source& row) {
+  object.field("source_ordinal", row.sourceOrdinal);
+  object.field("seq_id", row.seqId);
+  object.field("writer_capture_id", row.writerCaptureId);
+  object.field("writer_generation", row.writerGeneration);
+  object.field("storage_generation", row.storageGeneration);
+  object.field("publication_edge", row.publicationEdge);
+  object.field("submission_edge", row.submissionEdge);
+  object.field("completion_edge", row.completionEdge);
+  object.field("completed_sequence", row.completedSequence);
+  object.field("cut_event_ordinal", row.cutEventOrdinal);
+  object.field("command_count", row.commandCount);
+  object.field("cut_kind", row.cutKind);
+  object.field("cut_record", row.cutRecord);
+  object.field("reserved0", row.reserved0);
+  object.field("phase", identityV3PhaseName(renderTapeIdentityV3SourcePhase(row)));
+}
+
+void writeIdentityV4SharedRows(std::ostream& output, const RenderTapeIdentityV4View& view) {
+  writeIdentityV3Rows(output, "initializers", view.initializers,
+      [](IdentityV3JsonObject& object, const RenderTapeIdentityV3Initializer& row) {
+        object.field("sequence", row.sequence);
+        object.field("epoch", row.epoch);
+        object.field("publication_edge", row.publicationEdge);
+        object.field("submission_edge", row.submissionEdge);
+        object.field("completion_edge", row.completionEdge);
+        object.field("completed_sequence", row.completedSequence);
+        object.field("cut_event_ordinal", row.cutEventOrdinal);
+        object.field("cut_kind", row.cutKind);
+        object.field("cut_record", row.cutRecord);
+        object.field("reserved0", row.reserved0);
+        object.field("reserved1", row.reserved1);
+        object.field("phase", identityV3PhaseName(renderTapeIdentityV3InitializerPhase(row)));
+      });
+  writeIdentityV3Rows(output, "dispositions", view.dispositions,
+      [](IdentityV3JsonObject& object, const RenderTapeIdentityV3Disposition& row) {
+        object.field("event_ordinal", row.eventOrdinal);
+        object.field("first_record", row.firstRecord);
+        object.field("record_count", row.recordCount);
+        object.field("kind", row.kind);
+        object.field("command_index", row.commandIndex);
+        object.field("first_subdraw", row.firstSubdraw);
+        object.field("subdraw_count", row.subdrawCount);
+        object.field("coordinator_index", row.coordinatorIndex);
+        object.field("reserved0", row.reserved0);
+      });
+  writeIdentityV3Rows(output, "coordinators", view.coordinators,
+      [&](IdentityV3JsonObject& object, const RenderTapeIdentityV4Coordinator& row) {
+        object.field("admission_edge", row.admissionEdge);
+        object.field("authority", row.authority);
+        object.field("reserved0", row.reserved0);
+        output << ",\"provenance\":";
+        IdentityV3JsonObject provenance(output);
+        const auto& p = row.provenance;
+        provenance.field("event_ordinal", p.eventOrdinal);
+        provenance.field("raw_ordinal", p.rawOrdinal);
+        provenance.field("build_generation", p.buildGeneration);
+        provenance.field("dispatch_edge", p.dispatchEdge);
+        provenance.field("release_ordinal", p.releaseOrdinal);
+        provenance.field("release_generation", p.releaseGeneration);
+        provenance.field("query_identity", p.queryIdentity);
+        provenance.field("issue_cycle", p.issueCycle);
+        provenance.field("issue_ordinal", p.issueOrdinal);
+        provenance.field("device_epoch", p.deviceEpoch);
+        provenance.field("writer_capture_id", p.writerCaptureId);
+        provenance.field("writer_generation", p.writerGeneration);
+        provenance.field("storage_generation", p.storageGeneration);
+        provenance.field("prefix_sequence", p.prefixSequence);
+        provenance.field("prefix_initializer", p.prefixInitializer);
+        provenance.field("prefix_initializer_epoch", p.prefixInitializerEpoch);
+        provenance.field("record_index", p.recordIndex);
+        provenance.field("record_type", p.recordType);
+        provenance.field("flags", p.flags);
+        provenance.field("query_type", p.queryType);
+        provenance.field("dispatch_result", p.dispatchResult);
+        provenance.field("release_action", p.releaseAction);
+        provenance.field("release_writer", p.releaseWriter);
+        provenance.field("prefix_kind", p.prefixKind);
+        provenance.field("source_index", p.sourceIndex);
+        provenance.field("initializer_index", p.initializerIndex);
+        provenance.field("command_end", p.commandEnd);
+        provenance.field("observation", p.observation);
+        provenance.field("reserved0", p.reserved0);
+        provenance.field("reserved1", p.reserved1);
+      });
 }
 
 void writeIdentityV3(const RenderTapeIdentityV3View& view) {
@@ -1005,6 +1120,137 @@ void writeIdentityV3(const RenderTapeIdentityV3View& view) {
   output << "}\n";
 }
 
+void writeIdentityV4(const RenderTapeIdentityV4View& view,
+                     const RenderTapeExecutionTopologyV1View& topology) {
+  auto& output = std::cout;
+  output << "{\"schema\":\"" << kRenderTapeIdentityV4Schema
+         << "\",\"valid\":true,\"pair_valid\":true,\"inspection_only\":true,"
+            "\"execution_supported\":false,\"production_qualified\":false,"
+            "\"header\":";
+  {
+    IdentityV3JsonObject object(output);
+    const auto& h = view.header;
+    object.field("magic", h.magic);
+    object.field("events_bytes", h.eventsBytes);
+    object.field("frame_id", h.frameId);
+    object.field("present_ordinal", h.presentOrdinal);
+    object.field("capture_token", h.captureToken);
+    object.field("events_digest", encodeDigest(h.eventsDigest));
+    object.field("version", h.version);
+    object.field("header_size", h.headerSize);
+    object.field("capture_epoch", h.captureEpoch);
+    object.field("queue", h.queue);
+    object.field("baseline_sequence", h.baselineSequence);
+    object.field("baseline_initializer", h.baselineInitializer);
+    object.field("baseline_completed_sequence", h.baselineCompletedSequence);
+    object.field("initializer_epoch", h.initializerEpoch);
+    object.field("baseline_completed_initializer", h.baselineCompletedInitializer);
+    object.field("baseline_completion_edge", h.baselineCompletionEdge);
+    object.field("baseline_kind", h.baselineKind);
+    object.field("authority", h.authority);
+    object.field("sources", h.sources);
+    object.field("initializers", h.initializers);
+    object.field("commands", h.commands);
+    object.field("dispositions", h.dispositions);
+    object.field("coordinators", h.coordinators);
+    object.field("settlements", h.settlements);
+    object.field("attempts", h.attempts);
+    object.field("required_execution_topology_version", h.requiredExecutionTopologyVersion);
+    object.field("reserved0", h.reserved0);
+    object.field("reserved1", h.reserved1);
+    object.field("reserved2", h.reserved2);
+    object.field("reserved3", h.reserved3);
+    object.field("coordinator_domain", h.coordinatorDomain);
+    object.field("reserved4", h.reserved4);
+  }
+  writeIdentityV3Rows(output, "sources", view.sources,
+      [&](IdentityV3JsonObject& object, const RenderTapeIdentityV4Source& row) {
+        object.field("raw_ordinal", row.rawOrdinal);
+        object.field("publication_build_generation", row.publicationBuildGeneration);
+        object.field("publication_control_index", row.publicationControlIndex);
+        object.field("reserved0", row.reserved0);
+        output << ",\"lifecycle\":";
+        IdentityV3JsonObject lifecycle(output);
+        writeIdentitySourceFields(lifecycle, row.lifecycle);
+      });
+  writeIdentityV4SharedRows(output, view);
+  writeIdentityV3Rows(output, "commands", view.commands,
+      [](IdentityV3JsonObject& object, const RenderTapeIdentityV4PhysicalCommand& row) {
+        object.field("source_index", row.sourceIndex);
+        object.field("physical_command_index", row.physicalCommandIndex);
+        object.field("kind", row.kind);
+        object.field("draw_count", row.drawCount);
+        object.field("coordinator_index", row.coordinatorIndex);
+        object.field("reserved0", row.reserved0);
+      });
+  writeIdentityV3Rows(output, "replay_settlements", view.settlements,
+      [](IdentityV3JsonObject& object, const RenderTapeIdentityV4RawSettlement& row) {
+        object.field("event_ordinal", row.eventOrdinal);
+        object.field("raw_ordinal", row.rawOrdinal);
+        object.field("replay_edge", row.replayEdge);
+        object.field("record_count", row.recordCount);
+        object.field("reserved0", row.reserved0);
+      });
+  writeIdentityV3Rows(output, "replay_attempts", view.attempts,
+      [](IdentityV3JsonObject& object, const RenderTapeIdentityV4ReplayAttempt& row) {
+        object.field("event_ordinal", row.eventOrdinal);
+        object.field("raw_ordinal", row.rawOrdinal);
+        object.field("attempt_generation", row.attemptGeneration);
+        object.field("begin_edge", row.beginEdge);
+        object.field("terminal_edge", row.terminalEdge);
+        object.field("effect_edge", row.effectEdge);
+        object.field("identity", row.identity);
+        object.field("receipt", row.receipt);
+        object.field("first_record", row.firstRecord);
+        object.field("record_count", row.recordCount);
+        object.field("outcome", row.outcome);
+        object.field("staged_command_count", row.stagedCommandCount);
+      });
+  output << ",\"execution_topology\":{\"schema\":\""
+         << kRenderTapeExecutionTopologyV1Schema << "\",\"valid\":true,\"header\":";
+  {
+    IdentityV3JsonObject object(output);
+    const auto& h = topology.header;
+    object.field("magic", h.magic);
+    object.field("identity_bytes", h.identityBytes);
+    object.field("events_bytes", h.eventsBytes);
+    object.field("capture_token", h.captureToken);
+    object.field("capture_epoch", h.captureEpoch);
+    object.field("queue", h.queue);
+    object.field("identity_digest", encodeDigest(h.identityDigest));
+    object.field("events_digest", encodeDigest(h.eventsDigest));
+    object.field("version", h.version);
+    object.field("header_size", h.headerSize);
+    object.field("plans", h.plans);
+    object.field("placements", h.placements);
+    object.field("reserved0", h.reserved0);
+    object.field("reserved1", h.reserved1);
+  }
+  writeIdentityV3Rows(output, "plans", topology.plans,
+      [](IdentityV3JsonObject& object, const RenderTapeExecutionTopologyV1Plan& row) {
+        object.field("plan_id", row.planId);
+        object.field("acceptance_edge", row.acceptanceEdge);
+        object.field("route", row.route);
+        object.field("fallback_reason", row.fallbackReason);
+        object.field("first_placement", row.firstPlacement);
+        object.field("placement_count", row.placementCount);
+        object.field("executed_count", row.executedCount);
+        object.field("reserved0", row.reserved0);
+      });
+  writeIdentityV3Rows(output, "placements", topology.placements,
+      [](IdentityV3JsonObject& object, const RenderTapeExecutionTopologyV1Placement& row) {
+        object.field("plan_index", row.planIndex);
+        object.field("command_index", row.commandIndex);
+        object.field("outcome", row.outcome);
+        object.field("execution_ordinal", row.executionOrdinal);
+        object.field("dag_pass_index", row.dagPassIndex);
+        object.field("pass_kind", row.passKind);
+        object.field("omission_reason", row.omissionReason);
+        object.field("reserved0", row.reserved0);
+      });
+  output << "}}\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1031,6 +1277,7 @@ int main(int argc, char** argv) {
     RenderTapeDigest outputDigest{};
     const char* inputPath = argv[2];
     const char* identityPath = nullptr;
+    const char* executionTopologyPath = nullptr;
     const char* outputPath = nullptr;
     const char* outputIdentityPath = nullptr;
     int optionStart = 3;
@@ -1068,6 +1315,10 @@ int main(int argc, char** argv) {
       const std::string_view option(argv[i]);
       if (option == "--verified-blob" && i + 1 < argc) {
         appendVerifiedBlob(catalogue, argv[i + 1]);
+        i += 2;
+      } else if (command == "identity" && option == "--execution-topology" &&
+                 !executionTopologyPath && i + 1 < argc) {
+        executionTopologyPath = argv[i + 1];
         i += 2;
       } else if (command == "reduce" && option == "--select-command-event" &&
                  i + 1 < argc) {
@@ -1162,6 +1413,35 @@ int main(int argc, char** argv) {
     if (command == "identity") {
       const auto bytes = readFile(inputPath);
       const auto identity = readFile(identityPath);
+      if (identityVersion(identity) == kRenderTapeIdentityV4Version) {
+        if (!executionTopologyPath) {
+          std::cerr << "render tape identity v4 requires execution topology companion\n";
+          return 1;
+        }
+        RenderTapeIdentityV4View view;
+        const auto identityStatus = validateRenderTapeIdentityV4(
+            bytes, catalogue, identity, &view, true);
+        if (identityStatus != RenderTapeIdentityV4Status::Valid) {
+          std::cerr << "render tape identity v4 failed status="
+                    << static_cast<std::uint32_t>(identityStatus) << '\n';
+          return 1;
+        }
+        const auto topology = readFile(executionTopologyPath);
+        RenderTapeExecutionTopologyV1View topologyView;
+        const auto topologyStatus = validateRenderTapeExecutionTopologyV1(
+            bytes, catalogue, identity, topology, &topologyView);
+        if (topologyStatus != RenderTapeExecutionTopologyV1Status::Valid) {
+          std::cerr << "render tape identity v4 topology validation failed status="
+                    << static_cast<std::uint32_t>(topologyStatus) << '\n';
+          return 1;
+        }
+        writeIdentityV4(view, topologyView);
+        return 0;
+      }
+      if (executionTopologyPath) {
+        std::cerr << "render tape orphan execution topology requires identity v4\n";
+        return 1;
+      }
       if (identityVersion(identity) == kRenderTapeIdentityV3Version) {
         RenderTapeIdentityV3View view;
         const auto status = validateRenderTapeIdentityV3(

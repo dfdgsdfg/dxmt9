@@ -6,6 +6,7 @@
 // geometry-trace recorder.
 
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_draw_fetch_address.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
@@ -1436,38 +1437,26 @@ inline bool expandIndexedStreamToFlatVertexBytes(std::span<const u8> sourceBytes
     return false;
   }
 
-  const std::size_t indexSize = indexType == core::IndexType::UInt16 ? sizeof(u16) : sizeof(u32);
-  const std::size_t firstIndexByte = static_cast<std::size_t>(startIndex) * indexSize;
-  outBytes.assign(static_cast<std::size_t>(vertexCount) * sourceStride, 0);
+  const std::size_t indexSize = encoderIndexElementSize(indexType);
+  outBytes.assign(encoderSourceRowsByteSize(vertexCount, sourceStride), 0);
 
   for (u64 i = 0; i < vertexCount; ++i) {
-    i32 vertexIndex = baseVertexIndex;
-    const std::size_t indexOffset = firstIndexByte + static_cast<std::size_t>(i) * indexSize;
-    if (indexType == core::IndexType::UInt16) {
-      if (indexOffset + sizeof(u16) > indexBytes.size()) {
-        return false;
-      }
-      u16 index = 0;
-      std::memcpy(&index, indexBytes.data() + indexOffset, sizeof(index));
-      vertexIndex += static_cast<i32>(index);
-    } else {
-      if (indexOffset + sizeof(u32) > indexBytes.size()) {
-        return false;
-      }
-      u32 index = 0;
-      std::memcpy(&index, indexBytes.data() + indexOffset, sizeof(index));
-      vertexIndex += static_cast<i32>(index);
+    const std::size_t indexOffset = encoderIndexByteOffset<std::size_t>(startIndex, i, indexSize);
+    if (indexOffset + indexSize > indexBytes.size()) {
+      return false;
     }
+    const i32 vertexIndex = encoderIndexedSourceVertex(baseVertexIndex,
+        decodeEncoderIndexValue(indexBytes.data() + indexOffset, indexType));
 
     if (vertexIndex < 0) {
       return false;
     }
-    const std::size_t sourceOffset =
-        sourceBase + static_cast<std::size_t>(vertexIndex) * sourceStride;
+    const std::size_t sourceOffset = encoderSourceRowByteOffset(sourceBase,
+        static_cast<u64>(vertexIndex), sourceStride);
     if (sourceOffset + sourceStride > sourceBytes.size()) {
       return false;
     }
-    std::memcpy(outBytes.data() + static_cast<std::size_t>(i) * sourceStride,
+    std::memcpy(outBytes.data() + encoderSourceRowsByteSize(i, sourceStride),
                 sourceBytes.data() + sourceOffset,
                 sourceStride);
   }

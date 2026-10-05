@@ -48,9 +48,7 @@ bool shouldInitializeTextureWithZero(const core::TextureDesc& desc) {
 bool cpuReadyTapeDirectReplayEnabled() noexcept {
   static const bool enabled = [] {
     return resolveCpuReadyTapeDirectReplayEnabled(
-        std::getenv("DXMT9_CPU_READY_TAPE"),
-        std::getenv("DXMT9_RENDER_TAPE_CAPTURE"),
-        std::getenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT"));
+        std::getenv("DXMT9_CPU_READY_TAPE"));
   }();
   return enabled;
 }

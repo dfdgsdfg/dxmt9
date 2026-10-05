@@ -15,6 +15,8 @@ struct ReplaySourcePublicationReceipt;
 
 namespace dxmt9::d3d9 {
 
+struct ReplayTransactionState;
+
 inline constexpr std::int32_t kCommandChunkDecodeFailure =
     std::numeric_limits<std::int32_t>::min();
 
@@ -183,6 +185,74 @@ struct ProviderReplaySourceConsumer {
   bool (*settled)(void*, const ProviderReplaySourceSettlement&) noexcept = nullptr;
 };
 
+// Cold v3 execution observation. The original full raw, transaction, sink and
+// retained wrapper/snapshot owners stay live across every callback. A record
+// callback may qualify an authenticated cut, but never replaces dispatch.
+struct ProviderReplayRecordConsumer {
+  void* context = nullptr;
+  bool (*eventStarted)(void*, std::uint64_t, std::uint32_t) noexcept = nullptr;
+  bool (*transactionStarted)(void*, const ReplayTransactionState&) noexcept = nullptr;
+  bool (*transactionCommitted)(void*, const ReplayTransactionState&) noexcept = nullptr;
+  bool (*beforeRecord)(void*, std::uint32_t, std::uint32_t) noexcept = nullptr;
+  bool (*beforeDispatch)(void*, std::uint32_t, std::uint32_t) noexcept = nullptr;
+  bool (*recordDispatched)(void*, std::uint32_t, std::uint32_t,
+                           std::int32_t) noexcept = nullptr;
+  bool (*eventSettled)(void*, std::uint64_t, std::uint32_t) noexcept = nullptr;
+};
+
+// Independent cold V4 observation. Local capture credentials come from the
+// actual arm receipt, never the captured tape's queue/raw IDs. rawStarted is
+// required to authenticate eventOrdinal/count against the executor's admitted
+// owned plan before observations begin. All callbacks borrow synchronously;
+// rejection fails qualification only, never renderer dispatch or its HRESULT.
+// Callbacks must not re-enter replay, publish sources, or alter queue routing.
+// They execute outside capture admission/root locks; synchronous cancellation
+// revokes later observations and qualification without changing replay effects.
+struct ProviderReplayObservationV4 {
+  std::uint64_t captureToken = 0u;
+  std::uint64_t captureEpoch = 0u;
+  std::uint64_t queue = 0u;
+  std::uint64_t eventOrdinal = 0u;
+  void* context = nullptr;
+  bool (*rawStarted)(void*, std::uint64_t originalEvent,
+      std::uint64_t localRaw, std::uint32_t count) noexcept = nullptr;
+  bool (*beforeRecord)(void*, std::uint32_t index, std::uint32_t type) noexcept = nullptr;
+  bool (*beforeDispatch)(void*, std::uint32_t index, std::uint32_t type) noexcept = nullptr;
+  bool (*recordDispatched)(void*, std::uint32_t index, std::uint32_t type,
+      std::int32_t result) noexcept = nullptr;
+  bool (*rawSettled)(void*, std::uint64_t localRaw, std::uint32_t count,
+      bool succeeded) noexcept = nullptr;
+};
+
+// Separate from the actual renderer result and present only on the new cold
+// entry. Ledger settlement is not publication, submission or GPU completion.
+struct ProviderReplayObservationV4Result {
+  bool captureAccepted = false;
+  bool qualificationSucceeded = false;
+  bool ledgerSettlementObserved = false;
+  std::uint64_t localRawOrdinal = 0u;
+};
+
+// Version selection, not live observer admission, owns this legacy veto.
+// Once V4 is selected, stale/revoked capture tags remain neutral metadata.
+constexpr bool legacyRenderTapeCaptureRouteRequested(
+    bool captureTagged, bool v4Selected) noexcept {
+  return captureTagged && !v4Selected;
+}
+
+// Used only by the original record walker. Outside the synchronous cold
+// entry below these hooks are inert; no callback or span survives that entry.
+bool providerReplayRecordConsumerEnabled() noexcept;
+bool observeProviderReplayTransactionStarted(const ReplayTransactionState&) noexcept;
+bool observeProviderReplayTransactionCommitted(const ReplayTransactionState&) noexcept;
+bool observeProviderReplayRecordBefore(std::uint32_t recordIndex,
+                                       std::uint32_t recordType) noexcept;
+bool observeProviderReplayRecordAfter(std::uint32_t recordIndex,
+                                      std::uint32_t recordType,
+                                      std::int32_t result) noexcept;
+bool observeProviderReplayRecordDispatch(std::uint32_t recordIndex,
+                                         std::uint32_t recordType) noexcept;
+
 bool validateProviderReplayRecordRanges(
     std::uint32_t totalRecords,
     std::span<const ProviderReplayRecordRange> ranges) noexcept;
@@ -203,6 +273,17 @@ std::int32_t replayPrevalidatedResolvedCommandChunk(
     std::span<void* const> resolvedObjects,
     ProviderReplayPolicy policy = ProviderReplayPolicy::Historical) noexcept;
 
+// Full original raw and unchanged normal policy/planner route. Unlike the V3
+// record consumer, this does not force Compatibility, split source ranges,
+// seal leases, or request publication. Stale arms/callback rejection appear
+// only in observationResult; valid replay retains its real renderer HRESULT.
+std::int32_t replayPrevalidatedResolvedCommandChunkObservedV4(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects, ProviderReplayPolicy policy,
+    const ProviderReplayObservationV4& observation,
+    ProviderReplayObservationV4Result& observationResult) noexcept;
+
 std::int32_t replayPrevalidatedResolvedCommandChunkAtRecordBoundaries(
     D9CDevice* device, std::span<const std::byte> bytes,
     const CommandChunkEnvelope& envelope,
@@ -222,5 +303,16 @@ std::int32_t replayPrevalidatedResolvedCommandChunkBySources(
     ProviderReplayPolicy policy,
     std::span<const ProviderReplayRecordRange> ranges,
     ProviderReplaySourceConsumer consumer = {}) noexcept;
+
+// Original-byte, full-raw v3 compatibility execution. Event settlement does
+// not publish the ordinary writer: one writer may span canonical events.
+// ProductionSlot is deliberately rejected until its source-wide planner can
+// preserve the same publication cuts without per-record lease sealing.
+std::int32_t replayPrevalidatedResolvedCommandChunkV3(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    ProviderReplayPolicy policy,
+    ProviderReplayRecordConsumer consumer) noexcept;
 
 }  // namespace dxmt9::d3d9
