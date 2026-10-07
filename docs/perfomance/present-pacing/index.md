@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H453](present-pacing-api-residency.453.md) completes a reload-safe API-residency
+diagnostic. Measured body bounds are below worker CPU in this instrumented run,
+but 249k–318k root calls/s make observer perturbation material and unqualified.
+No default-path owner ranking or large removable-cost claim follows. Runtime
+source and staged x86 images are restored to baseline.
+
+[H452](present-pacing-primary-clock-qualification.452.md) rejects deployed Wine
+thread-time APIs for Primary attribution: a sleeping caller is charged another
+thread's CPU, while a real thread handle reports zero. Native CPU remains the
+authority. An API-residency allocation bound is arithmetic-checked, but no
+runtime bound or largest-owner ranking is established.
+
 [H451](present-pacing-run-construction-removal.451.md) directly constructs owned
 compatibility runs in an isolated experiment. Identical-input body CPU medians
 fall 1.53% on ARM and 1.00% on Rosetta (about 1 ms per capture), with unchanged

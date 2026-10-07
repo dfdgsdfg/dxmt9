@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H453](present-pacing-api-residency.453.md) obtains matched native CPU and
+reload-safe API residency. Late diagnostic API-body bounds are 0.270–0.289 core
+against about 0.51 core per worker, but scope overhead and OFF/ON perturbation
+remain unqualified. Do not generalize this to default-path PE CPU or removable
+cost. The next useful discriminator is a matched backend CPU comparison, not
+another unpriced small-copy candidate.
+
+[H452](present-pacing-primary-clock-qualification.452.md) rules out using
+`GetThreadTimes`/`QueryThreadCycleTime` to close Primary's CPU split on the actual
+Wine runtime. Calibrated native CPU plus qualified non-overlapping API residency
+can bound diagnostic API-body CPU as exercised in H453; boundary and observer
+uncertainty still prevent a default-path owner verdict.
+
 [H451](present-pacing-run-construction-removal.451.md) tests direct owned-run
 construction on unchanged capture29: about 1 ms less body process CPU, or
 1.53% ARM / 1.00% Rosetta median reduction. Within-architecture logical and route
