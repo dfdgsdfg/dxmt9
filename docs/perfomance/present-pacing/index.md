@@ -4,12 +4,40 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-10-07
+updated: 2026-10-08
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H472](present-pacing-normalized-clock.472.md) qualifies a hardware-frequency
+normalization on this host's synthetic intervals.
+[H473](present-pacing-root-clock-bridge.473.md) then verifies a separate
+PE32/PE64 diagnostic crossing on the caller's native thread, leaving renderer
+images unchanged. This supplies a candidate root clock, not complete Primary
+attribution, default transfer or a removable CPU budget.
+
+[H471](present-pacing-posix-clock-recheck.471.md) reproduces the Rosetta POSIX
+thread-clock units failure on the current OS: about 200 ms native CPU appears
+as 4.8 ms. It is not adopted as a shortcut around H470's coarse counter.
+
+[H470](present-pacing-root-clock-feasibility.470.md) tests the native libproc
+counter at short root-like intervals without running Wine. Observed 1 us delta
+granularity and per-sample observer charge leave an uncorrected short-root
+estimator unqualified; no PE clock bridge is added. Coarse thread totals remain
+valid evidence within their existing scope.
+
+[H469](present-pacing-tail-visual.469.md) retains 13 OFF/ON tail-image pairs
+without obvious sampled whole-building loss. Screenshot-time camera envelopes
+are too broad for qualified correspondence; temporal correctness remains
+indeterminate. These correctness-only runs supply no performance values.
+
+[H468](present-pacing-visibility-budget.468.md) closes the corrected-provider
+OFF/ON/ON/OFF comparison. Both directions show lower Encode CPU, but the OFF
+repeat fails the declared stability gate. The observed 4.92–7.84 ms/frame
+difference is not an accepted removable budget; no extra performance repeats
+or maximum-owner inference follow from it.
 
 [H467](present-pacing-default-unwind-feasibility.467.md) rejects the bounded
 unchanged-default CPU ancestry route: the modeled export fails and raw Primary
