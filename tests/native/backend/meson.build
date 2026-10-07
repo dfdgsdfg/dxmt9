@@ -1430,6 +1430,20 @@ render_pass_actions_spec = executable(
 
 test('dxmt9-render-pass-actions-spec', render_pass_actions_spec,
      env: dxmt9_native_test_env_vars)
+test('dxmt9-retired-depth-discard-spec', render_pass_actions_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1'])
+
+publication_depth_store_metal_spec = executable(
+  'dxmt9-publication-depth-store-metal-spec', 'publication_depth_store_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  objcpp_args: ['-fobjc-arc'],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-publication-depth-store-metal-spec', publication_depth_store_metal_spec,
+  env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=0'],
+  is_parallel: false, timeout: 60)
 
 query_preserved_pass_spec = executable(
   'dxmt9-query-preserved-pass-spec', 'query_preserved_pass_spec.cpp',

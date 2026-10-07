@@ -104,21 +104,23 @@ them.
 ### 3.1 Depth/stencil DontCare-store (`R-BACK-15.7`)
 
 A depth or stencil attachment may use `MTLStoreActionDontCare` on render
-pass close when no subsequent render pass within the same encoder-active
-window samples or reads from it.
+pass close only when an observed overwrite proves the previous contents dead
+before any later read. Absence of a read in a bounded encoder window is not
+such a proof.
 
 The conservative implementation must use `MTLStoreActionStore` (per the
 default rule) unless the encoder can prove the attachment is not live-out.
 Proofs that satisfy this requirement:
 
-- The next pending operation that touches the depth/stencil texture is a
-  `Clear` on the same handle. The previous contents are immediately
-  discarded; storing them is wasted bandwidth.
-- The next pending operation is a `SurfaceCopy` / `Readback` whose source
-  is a different texture (i.e., the depth/stencil is unread).
-- A scene-end signal (e.g., `EndScene`, present, swapchain reset) is
-  pending and the application has not bound the depth/stencil for sampling
-  in any pass since the last clear.
+- The next pending operation that touches the exact attachment aspect is a
+  full `Clear` on the same handle, with no intervening read. Depth-only and
+  stencil-only clears do not prove the other aspect dead; partial clears do
+  not prove either entire aspect dead.
+
+An unrelated copy/readback, `EndScene`, `Present`, queue publication, command
+buffer completion or session finalization is not an overwrite proof. In
+particular, a command-limit split may hide a depth/stencil consumer in the
+next chunk even when the current chunk contains no Present.
 
 If none of those proofs are available, the depth/stencil store action must
 remain `MTLStoreActionStore`.

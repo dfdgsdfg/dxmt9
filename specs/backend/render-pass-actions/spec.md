@@ -244,6 +244,14 @@ This shortcut is `R-BACK-15.7` minus the "next op is a copy" branch; it
 catches the most common SFIV pattern (per-pass scene depth, cleared at
 next pass start) without requiring a copy-record walk.
 
+Chunk-end absence is always unknown, including finalized (non-deferred)
+sessions without a Present. `depthStoreProofForLookahead` returns
+`BlockNoLookahead` / `SuffixExhausted`, not `AllowDeadNoPresent`. The latter
+counter value remains historical vocabulary, not an emitted depth proof.
+`DXMT9_AGGRESSIVE_DEPTH_DONTCARE` is retired: no runtime switch may restore
+the no-touch-implies-dead heuristic. The same full-clear proof continues to
+remove genuinely dead stores without disabling command-limit publication.
+
 ### 4.3 Same-pass DrawRun prefix
 
 A DrawRun that follows the pass-opening DrawRun is not a live-out use when all
@@ -342,6 +350,7 @@ sequenceDiagram
 | `R-BACK-15.8` color DontCare-store on overwrite | Same spec — color RT then StretchRect dst. |
 | `R-BACK-15.7` / `R-BACK-15.8` reordered Store proof | Same spec — a complete command permutation moves a same-pass draw before a source-order clear; assert replay-order blocking without active-pass context, same-pass-prefix skipping with context, replay-ordinal distance, and defensive fallback for an invalid index. |
 | `R-BACK-15.9` no cross-chunk look-ahead | Same spec — chunk ends without proof, must Store. |
+| `R-BACK-15.7` / `R-BACK-15.9` publication-cut refinement | `render_pass_actions_spec.cpp::testPublicationCutPreservesUnobservedDepthUse` exhausts 6,250 trace/prefix/aspect cases using the production proof, with a negative control for the retired heuristic. `publication_depth_store_metal_spec.mm` uses production prepared descriptors and ordinary actions: separate-CB depth/stencil continuation equals serial BGRA8 readback and an independent expected image under Metal validation. This fixture excludes queue scheduling/resource retirement. |
 | `R-BACK-15.10`–`15.12` counters | `tests/native/backend/allocation_counter_spec.cpp` extension or new — assert keys present, sums match. |
 | `R-BACK-15.13`–`15.15` safety invariants | Same spec — present source / lock / MSAA resolve forces Store. |
 | `R-BACK-15.16` test coverage | Spec lands the test fixture above. |

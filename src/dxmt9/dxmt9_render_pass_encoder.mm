@@ -47,15 +47,9 @@ bool clearMatchesDepthStencilAttachment(const std::optional<ClearDesc>& clear, H
 
 // R-BACK-15.7 / spec section 4.2: depth/stencil DontCare-store look-ahead.
 // Walks the remaining records in the current chunk starting from
-// `startCommandIndex + 1` and returns true when one of two proofs holds:
-//
-//   1. The next record that touches `depthHandle` is a Clear of that
-//      handle (the original G3 simple-form shortcut).
-//   2. The depth handle never reappears in the rest of the chunk AND
-//      no Present was seen during the walk (H1 broadening, R-BACK-15.7
-//      end-of-chunk fall-through). R-BACK-15.9 still applies — no
-//      cross-chunk look-ahead — but within the current chunk the depth
-//      is provably dead, so DontCare-store is safe.
+// `startCommandIndex + 1`. Only an observed full Clear of the matching
+// aspect can prove its previous contents dead. Exhausting a chunk or even
+// a finalized EncodeSession says nothing about the next publication's use.
 //
 // Any prior live read or surface op on the handle (Readback /
 // SurfaceCopy / StretchRect / ColorFill source-or-dest, a DrawRun that
@@ -254,27 +248,16 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     }
     return Proof::BlockNoLookahead;
   }
-  // R-BACK-15.7 end-of-chunk fall-through. Default keeps the defensive
-  // sawPresent guard: a Present in this chunk implies the frame may
-  // persist depth state across the chunk boundary (cross-frame shadow
-  // map / depth-test reuse), so we Store. Setting
-  // DXMT9_AGGRESSIVE_DEPTH_DONTCARE=1 drops the guard so the look-ahead
-  // returns DontCare whenever the depth handle does not reappear in
-  // the chunk, even when a Present is present. Empirically this is the
-  // SFIV win path (Present-per-chunk pattern zeroes the conservative
-  // form). Use only on workloads known not to read depth across
-  // frames; depth-as-shadow-map within the same chunk is still
-  // protected by the texture-sample scan above.
-  static const bool aggressive = []() {
-    if (const char* v = std::getenv("DXMT9_AGGRESSIVE_DEPTH_DONTCARE")) {
-      return v[0] != '\0' && v[0] != '0';
-    }
-    return false;
-  }();
-  if (aggressive) {
-    return Proof::AllowDeadNoPresent;
+  // R-BACK-15.9: a publication boundary is not an attachment lifetime
+  // boundary. In particular, DrawLimit can hide the next depth/stencil read
+  // even when this chunk has no Present and its session is finalized.
+  if (sawPresent) {
+    return Proof::BlockPresent;
   }
-  return sawPresent ? Proof::BlockPresent : Proof::AllowDeadNoPresent;
+  if (noLookaheadCause) {
+    *noLookaheadCause = perf::RenderPassNoLookaheadCause::SuffixExhausted;
+  }
+  return Proof::BlockNoLookahead;
 }
 
 perf::RenderPassDepthStoreProof depthStoreProofForLookahead(

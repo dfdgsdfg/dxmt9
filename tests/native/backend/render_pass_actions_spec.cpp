@@ -256,18 +256,15 @@ void testDefaultsLoadAndStore() {
   checkEq(applyColorLoadPolicy(in), WMTLoadActionDontCare,
           "post-Present discard precedes Render Tape exact preservation");
 
-  // Depth side: with no further records on the depth handle and no
-  // Present in the rest of the chunk, the H1 end-of-chunk fall-through
-  // (R-BACK-15.7 broadening) lets the look-ahead prove the depth is
-  // dead within this chunk → DontCare-store is safe (returns true).
+  // A bounded chunk without a later touch does not prove depth is dead.
   ChunkSlot slot;
   Handle depth{0xD000u};
   appendDrawRunWithDepth(slot, depth);
-  check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
-        "R-BACK-15.7 end-of-chunk with no Present allows DontCare-store");
+  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "R-BACK-15.9 end-of-chunk with no Present preserves depth");
   checkEq(dxmt9::encoders::depthStoreProofForLookahead(slot, 0u, depth),
-          DepthProof::AllowDeadNoPresent,
-          "R-BACK-15.7 end-of-chunk proof is dead/no-present");
+          DepthProof::BlockNoLookahead,
+          "R-BACK-15.9 suffix exhaustion is not a live-out proof");
 }
 
 void testClearPrecedesDontCare() {
@@ -314,12 +311,7 @@ void testDepthDontCareStoreOnNextClear() {
   check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
         "R-BACK-15.7 next-op-is-clear on depth handle → DontCare-store");
 
-  // A clear that targets a DIFFERENT depth handle must NOT trigger the
-  // simple-form shortcut by itself. Append a Present so the H1
-  // end-of-chunk fall-through stays defensive (otherwise depthA would
-  // be deemed dead within the chunk and DontCare would be allowed via
-  // R-BACK-15.7's broadening — a separate proof, not the next-op
-  // shortcut under test here).
+  // A different-handle clear is not proof, including a suffix with Present.
   ChunkSlot otherSlot;
   Handle depthA{0xDA00u};
   Handle depthB{0xDB00u};
@@ -340,11 +332,8 @@ void testDepthDontCareStoreOnNextClear() {
 }
 
 void testColorDontCareStoreOnNextClear() {
-  // Color StoreActionDontCare is intentionally narrower than depth by
-  // default: only the next-touch-is-clear proof is allowed. Dead-at-end
-  // broadening exists only behind DXMT9_AGGRESSIVE_COLOR_DONTCARE, because
-  // color surfaces are commonly presented, sampled, or reused across chunk
-  // boundaries.
+  // The default color policy likewise requires an observed full clear.
+  // The separate aggressive-color diagnostic is not enabled by this test.
   ChunkSlot slot;
   Handle color{0xC007u};
   appendDrawRunWithColor(slot, color);
@@ -854,11 +843,7 @@ void testDepthForcedStoreOnNextRead() {
   check(!dxmt9::encoders::nextDepthOperationIsClear(fillSlot, 0u, depth),
         "R-BACK-15.15 color fill into depth handle forces Store");
 
-  // R-BACK-15.13 defensive Store on Present at end-of-chunk: the slot
-  // ends with a Present and no later Clear on the depth handle, so the
-  // H1 end-of-chunk fall-through (R-BACK-15.7 broadening) must remain
-  // defensive — a Present implies the frame may persist depth state
-  // across the chunk boundary.
+  // R-BACK-15.13: Present does not end the depth attachment lifetime.
   ChunkSlot presentSlot;
   appendDrawRunWithDepth(presentSlot, depth);
   appendPresent(presentSlot, depth);
@@ -944,42 +929,29 @@ void testDepthShadowMapSampleForcesStore() {
 }
 
 void testNoCrossChunkLookahead() {
-  // R-BACK-15.9 still applies: the look-ahead never crosses the chunk
-  // boundary. H1 (R-BACK-15.7 broadening) refines the end-of-chunk
-  // answer based on whether a Present was seen — Present means defer
-  // to defensive Store; no Present means the depth is dead within the
-  // chunk so DontCare-store is safe.
-
-  // No Present, no further records: depth is dead within the chunk →
-  // DontCare-store allowed (was defensive Store before H1).
+  // R-BACK-15.9: publication boundaries do not establish attachment death.
   ChunkSlot slot;
   Handle depth{0xD009u};
   appendDrawRunWithDepth(slot, depth);
   // Slot ends here — no clear, no copy, no read, no present.
-  check(dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
-        "R-BACK-15.7 end-of-slot with no Present allows DontCare-store");
+  check(!dxmt9::encoders::nextDepthOperationIsClear(slot, 0u, depth),
+        "R-BACK-15.9 end-of-slot with no Present requires Store");
 
-  // No Present, only unrelated records: same fall-through outcome —
-  // the depth handle never reappears, so DontCare-store is safe.
+  // Unrelated records provide no proof about this attachment.
   ChunkSlot mixedSlot;
   Handle depthA{0xDA09u};
   Handle depthB{0xDB09u};
   appendDrawRunWithDepth(mixedSlot, depthA);
   appendDrawRunWithDepth(mixedSlot, depthB);  // unrelated handle
-  check(dxmt9::encoders::nextDepthOperationIsClear(mixedSlot, 0u, depthA),
-        "R-BACK-15.7 end-of-slot with only unrelated records allows DontCare");
+  check(!dxmt9::encoders::nextDepthOperationIsClear(mixedSlot, 0u, depthA),
+        "R-BACK-15.9 unrelated suffix requires Store");
 
-  // The look-ahead's `startCommandIndex` parameter is exclusive — if
-  // the only matching clear is at-or-before the start index, the walk
-  // sees no further depth records but also no Present, so the H1
-  // fall-through still allows DontCare-store. The point of the test is
-  // that we do not look backward to find the clear; the proof here
-  // comes from R-BACK-15.7 broadening, not the simple-form shortcut.
+  // The start is exclusive: a past Clear cannot discard later writes.
   ChunkSlot backwardSlot;
   Handle depthC{0xDC09u};
   appendClearOnDepth(backwardSlot, depthC);
   appendDrawRunWithDepth(backwardSlot, depthC);
-  check(dxmt9::encoders::nextDepthOperationIsClear(backwardSlot, 1u, depthC),
+  check(!dxmt9::encoders::nextDepthOperationIsClear(backwardSlot, 1u, depthC),
         "R-BACK-15.9 look-ahead does not see records before start index");
 
   // H1 defensive case: Present in middle of slot → end-of-chunk
@@ -1056,7 +1028,7 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
               std::span<const LookaheadSource>(
                   boundedDepthSources.data(), boundedDepthSources.size()),
               depth),
-          DepthProof::AllowDeadNoPresent,
+          DepthProof::BlockNoLookahead,
           "R-BACK-2.48 selected suffix respects bounded depth source ranges");
   checkEq(dxmt9::encoders::depthStoreProofForLookahead(
               std::span<const LookaheadSource>(
@@ -1647,10 +1619,67 @@ void testDepthShadowMapBit3() {
         "H1 stale textures[3] with mask bit clear does not force Store");
 }
 
+// Bounded refinement: an arbitrary publication cut hides a suffix, not the
+// lifetime of the attachment. Exercise the production proof over every prefix
+// of four operations on two surfaces and both depth/stencil aspects.
+void testPublicationCutPreservesUnobservedDepthUse() {
+  using namespace dxmt9::encoders;
+  const Handle depth{0xD447u};
+  const Handle other{0xE447u};
+  std::size_t cases = 0;
+  std::size_t oldRuleCounterexamples = 0;
+  for (unsigned trace = 0; trace < 625; ++trace) {
+    ChunkSlot slot;
+    std::array<unsigned, 4> ops{};
+    auto remaining = trace;
+    for (auto& op : ops) {
+      op = remaining % 5u;
+      remaining /= 5u;
+      switch (op) {
+      case 0: appendDrawRunWithDepth(slot, other); break;
+      case 1: appendClearOnDepthAspect(slot, depth, true, false); break;
+      case 2: appendClearOnDepthAspect(slot, depth, false, true); break;
+      case 3: appendDrawRunWithDepth(slot, depth); break;
+      case 4: appendClearOnDepthAspect(slot, depth, true, true, true); break;
+      }
+    }
+    for (std::size_t visible = 0; visible <= ops.size(); ++visible) {
+      const LookaheadSource source{
+          .slot = &slot, .firstCommandIndex = 0u, .commandEndIndex = visible};
+      for (bool stencil : {false, true}) {
+        bool mayDiscard = false;
+        bool touched = false;
+        for (std::size_t i = 0; i < visible; ++i) {
+          if (ops[i] == 0u) continue;
+          touched = true;
+          mayDiscard = ops[i] == (stencil ? 2u : 1u);
+          break;
+        }
+        const auto proof = depthStoreProofForLookahead(
+            std::span(&source, 1u), depth, nullptr, {}, {},
+            stencil ? LateRenderPassStoreAspect::Stencil
+                    : LateRenderPassStoreAspect::Depth);
+        const bool discarded = proof == DepthProof::AllowNextClear ||
+                               proof == DepthProof::AllowDeadNoPresent;
+        checkEq(discarded, mayDiscard,
+                "publication cut cannot turn an unseen future use into dead depth/stencil");
+        // Negative control: the retired no-touch => dead rule loses a live
+        // value when the first unseen operation reads this attachment.
+        if (!touched && visible < ops.size() && ops[visible] == 3u)
+          ++oldRuleCounterexamples;
+        ++cases;
+      }
+    }
+  }
+  checkEq(cases, std::size_t{6250}, "exhaustive publication-cut coverage");
+  check(oldRuleCounterexamples != 0u, "old suffix rule has live-use counterexamples");
+}
+
 }  // namespace
 
 int main() {
   try {
+    testPublicationCutPreservesUnobservedDepthUse();
     for (bool queryPreserved : {false, true}) {
       for (bool observer : {false, true}) {
         checkEq(dxmt9::encoders::renderPassStoreProofRequired(queryPreserved, observer),
@@ -1660,7 +1689,6 @@ int main() {
     // Tape-only preservation is deliberately not an input to this predicate.
     check(dxmt9::encoders::renderPassStoreProofRequired(false, false),
           "tape-only late-store still requires proof");
-    unsetenv("DXMT9_AGGRESSIVE_DEPTH_DONTCARE");
     unsetenv("DXMT9_AGGRESSIVE_COLOR_DONTCARE");
     testDefaultsLoadAndStore();
     testClearPrecedesDontCare();

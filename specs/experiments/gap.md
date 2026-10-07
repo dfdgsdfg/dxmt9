@@ -11,6 +11,15 @@ tags: [specs, gap, experiments]
 
 ### Qualification scope: cold conditional policy experiments
 
+**Production promotion exclusion:** H447 repairs the depth/stencil publication-cut
+bug exposed by H446, with reduced ordinary-policy native/Metal regression tests
+and recovered observer-OFF L64 sampled geometry. Existing V4 qualification uses
+the authenticated exact attachment-action profile; it is not full normal-policy
+qualification. Retain the historical cold evidence, but refresh image-bound
+CPU/GPU gates and performance measurements on the repaired binary before L64
+promotion or equivalent-rendering FPS claims.
+See [H447](../../docs/perfomance/present-pacing/present-pacing-l64-depth-publication-fix.447.md).
+
 R-HARN-REPLAY-8.3/8.5/8.7/8.9 admit the declared fresh-device domain with
 paired original-keyed effective-field equality, original Metal query/pixel
 qualification and image-bound observer-light CPU measurements. They do not

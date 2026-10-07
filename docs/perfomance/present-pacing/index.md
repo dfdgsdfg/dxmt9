@@ -4,12 +4,35 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-17
+updated: 2026-10-07
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H447](present-pacing-l64-depth-publication-fix.447.md) fixes the default
+depth/stencil chunk-end discard: absence in a bounded suffix is not attachment
+death. A 6,250-case production refinement and ordinary-policy Metal split/serial
+readback pass; repaired L64 and limit-0 sampled scenes restore ground/buildings.
+No FPS claim or L64 default promotion; refresh repaired-image qualification.
+
+[H446](present-pacing-l64-observer-off-repro.446.md) reproduces missing geometry
+with observers OFF and foreground restored during loading; limit 0 shows
+normal buildings/ground in the control capture. Exact Tape attachment policy
+is a narrower qualification than production action selection. H447 supplies
+the reduced cause/fix; this leaf preserves the pre-fix reproduction.
+
+[H445](present-pacing-l64-wild-diagnostic.445.md) blocks L64 promotion:
+production diagnostics add 22,399 DrawLimit publications and show persistent
+missing geometry. Native CPU traces are valid observations, not accepted
+equivalent-work savings. Reproduce observer-OFF with controlled foreground
+before further performance conclusions.
+
+[H444](present-pacing-l64-wild-abba.444.md) tests L64 on production STALKER
+with observer-OFF ABBA: average FPS rises 2.20%/1.77% in the two orders,
+but tail results are mixed and visual/foreground qualification is absent.
+No default promotion or single-thread CPU attribution.
 
 [H443](present-pacing-v4-final-grouping.443.md) closes current-image grouping:
 L0/L3/L64 paired original CPU/GPU gates and 180 balanced observer-light CPU

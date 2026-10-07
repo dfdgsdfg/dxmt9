@@ -11,6 +11,16 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-VERIF-1.5–1.8 / R-BACK-15 attachment actions: **publication-cut repair**.
+H446's L64 missing geometry exposed the default depth/stencil no-touch/no-Present
+fallthrough: chunk/session exhaustion was incorrectly treated as attachment
+death. H447 preserves unknown live-out contents, with a failing-before/passing-after
+6,250-case production-predicate refinement and ordinary-policy Metal split/serial
+exact depth/stencil readback. Repaired observer-OFF L64 and limit-0 sampled
+scenes restore buildings/ground. Complete normal-policy captured-frame coverage
+and repaired-image performance qualification remain open; no L64 promotion.
+See [H447](../../docs/perfomance/present-pacing/present-pacing-l64-depth-publication-fix.447.md).
+
 R-BACK-12.9–12.12 / R-VERIF-1.5–1.8: direct uniform binding now includes
 immutable source/segment/state-row identity in addition to fixed payload
 identity. This closes hot-only RS/TSS/viewport invalidation omitted by the
