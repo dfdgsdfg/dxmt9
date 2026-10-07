@@ -23,6 +23,13 @@ site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)
 
+[H461](../../docs/perfomance/present-pacing/present-pacing-occlusion-stretch-oracle.461.md)
+closes the bounded explicit StretchRect failure below: non-anisotropic sampler
+initialization and resolved-source binding now pass 36 exact-green scaled
+copies across the six arm64 policies and 1x/2x/4x sources. Direct query-pass
+resolve checks remain separate. Public PE, nonuniform/partial coverage,
+stale-resolve sequences, x86_64 and wild performance remain unqualified.
+
 [H459](../../docs/perfomance/present-pacing/present-pacing-occlusion-msaa-oracle.459.md)
 extends the same six arm64 fixtures to actual 2x/4x attachments: exact
 2048/4096 visible samples, stencil accept/reject/accept, depth preservation and

@@ -98,6 +98,30 @@ whole-scene counter census claim.
 
 ## Decision
 
+An all-thread follow-up finds an unresolved default-path owner. For the
+baseline process `[48711,1791378332,542323]`, contained/enclosing CPU snapshots
+of its own 102–110 s window give these deterministic interval bounds:
+
+| Native handle | Recorded identity | CPU seconds |
+|---|---|---:|
+| `17248866528` | Unnamed | 7.000527–7.934931 |
+| `17256009952` | `dxmt9-encode` | 4.310062–4.926728 |
+| `17257619680` | Unnamed | 4.212729–4.801639 |
+
+The first unnamed lower bound exceeds Encode's upper bound. The second
+unnamed interval overlaps Encode. Each is unique and monotone through 18
+surrounding snapshots, but H460 has no same-run Darwin-TID/stack/guest identity
+join for them. H454's run-local Replay join must not be transferred by repeated
+numeric handle values. Handle zero is duplicated and transient threads are
+not a complete census. These facts rule out declaring overall Encode
+dominance from the Primary marker result. Main independently reproduced the
+three baseline interval bounds from the archived snapshots.
+
+[H462](present-pacing-default-thread-identity.462.md) subsequently establishes
+fresh same-run joins: the unnamed leader is an X-Ray helper and the second is
+Replay. This does not retroactively turn H460's repeated handles into joins,
+nor qualify transfer of the Primary marker bound to default execution.
+
 Stop expanding Primary instrumentation for the next optimization decision.
 H460 is sufficient to reject treating the entire mixed Primary CPU total as
 PE cost, but not sufficient to declare Encode the largest default-path owner.

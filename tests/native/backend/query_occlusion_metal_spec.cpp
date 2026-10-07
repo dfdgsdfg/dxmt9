@@ -176,6 +176,36 @@ void run(bool benchmark = false, MultiSampleType samples = MultiSampleType::None
     }
   readback->unlockRect();
 
+  if (!benchmark) {
+    // Keep this separate from the direct query-pass readback above: a stretch
+    // pass must not repair or mask a missing resolve in that oracle.
+    auto stretched = device->createSurface(
+        {16, 16, Format::A8R8G8B8, Pool::Default, UsageRenderTarget, true, false});
+    auto stretchReadback = device->createSurface(
+        {16, 16, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
+    check(bool(stretched) && bool(stretchReadback), "stretch oracle surfaces");
+    for (const bool linear : {false, true}) {
+      // Scaling excludes the raw texture-copy shortcut even at sample count 1.
+      check(device->stretchRect(device->swapChain()->backBuffer(), nullptr,
+                                stretched, nullptr, linear) == D3D_OK,
+            "explicit filtered stretch after query completion");
+      check(device->getRenderTargetData(stretched, stretchReadback) == D3D_OK,
+            "read completed stretch destination");
+      const auto stretchedPixels = stretchReadback->lockRect(nullptr, 0);
+      check(stretchedPixels.data && stretchedPixels.pitch >= 64, "stretch readback bytes");
+      for (unsigned y = 0; y != 16; ++y)
+        for (unsigned x = 0; x != 16; ++x) {
+          const auto* p = static_cast<const u8*>(stretchedPixels.data) +
+                          y * stretchedPixels.pitch + x * 4;
+          check(p[0] == 0 && p[1] == 255 && p[2] == 0 && p[3] == 255,
+                "nearest/linear stretch preserves exact green samples");
+        }
+      stretchReadback->unlockRect();
+      std::cout << "stretch sample-count=" << sampleTotal << " linear=" << linear
+                << " exact-green passed\n";
+    }
+  }
+
   if (benchmark) {
     std::array<std::shared_ptr<Query>, 8> queries;
     for (auto& q : queries) q = device->createQuery(QueryType::Occlusion);

@@ -108,6 +108,11 @@ Scaled copies use a render pass targeting the destination texture:
   `srcRect`.
 - Select nearest filtering for `D3DTEXF_NONE` and `D3DTEXF_POINT`; select linear
   filtering for `D3DTEXF_LINEAR`.
+- The non-anisotropic sampler uses `maxAnisotropy = 1`, not zero.
+- For multisample render sources, sample the associated single-sample resolve
+  produced by the preceding render pass. Do not bind multisample storage to
+  the stretch shader's `texture2d` input. This selection does not replace the
+  preceding pass's resolve/store and ordering obligations.
 
 Pipeline state is cached by destination pixel format, source sampling class, and any
 shader variant needed for texture type or format handling. The pass has no depth or

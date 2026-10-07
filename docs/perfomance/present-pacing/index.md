@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H462](present-pacing-default-thread-identity.462.md) joins the unnamed CPU
+leader to the known X-Ray helper yield protocol and independently identifies
+Replay. In a common late subinterval Encode costs 4.222 s versus Replay
+4.107 s; the narrow worker difference is not whole-pipeline headroom. Default
+Primary renderer attribution and a validated removable budget remain open.
+
+[H461](present-pacing-occlusion-stretch-oracle.461.md) fixes invalid stretch
+sampler anisotropy and multisample-source binding. Six native arm64 policies
+pass 36 exact-green scaled stretch cases; Wine and performance are unmeasured.
+
 [H460](present-pacing-primary-inplace-bound.460.md) records a conditional
 diagnostic Primary renderer upper of 3.48 s versus an Encode lower of 4.08 s
 in the same tail window. Matched baseline results do not establish default

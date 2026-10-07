@@ -26,6 +26,7 @@ WMT::Reference<WMT::SamplerState> makeLinearOrNearestSampler(WMT::Reference<WMT:
   info.min_filter = f;
   info.mag_filter = f;
   info.mip_filter = WMTSamplerMipFilterNotMipmapped;
+  info.max_anisotroy = 1;
   info.s_address_mode = WMTSamplerAddressModeClampToEdge;
   info.t_address_mode = WMTSamplerAddressModeClampToEdge;
   info.r_address_mode = WMTSamplerAddressModeClampToEdge;
@@ -300,7 +301,10 @@ void encodeStretchRect(WMT::CommandBuffer& commandBuffer,
     return;
   }
   encoder.setRenderPipelineState(pipeline);
-  encoder.setFragmentTexture(WMT::Texture{src->texture.handle}, 0);
+  // The stretch shader samples texture2d, just as readback consumes the
+  // completed pass's single-sample resolve rather than multisample storage.
+  encoder.setFragmentTexture(
+      WMT::Texture{src->resolveTexture ? src->resolveTexture.handle : src->texture.handle}, 0);
   auto sampler = makeLinearOrNearestSampler(device, stretch.linear);
   if (sampler) encoder.setFragmentSamplerState(sampler, 0);
   encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
