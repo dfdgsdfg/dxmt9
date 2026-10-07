@@ -11,6 +11,23 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H476](present-pacing-root-reader.476.md) qualifies a bounded ARM-host live
+reader against the PE32/PE64 scope writers. Coherent inactive endpoints avoid
+partial-root accounting; actual game/frame/worker joins and default transfer
+remain to be measured. The first reader's missing emitted ISB is preserved as
+a code-generation correction, not hidden by a replacement performance run.
+
+[H475](present-pacing-root-objects.475.md) connects that accumulator to actual
+PE32/PE64 D3D9 objects: full concrete-table/export closure, identity, Release,
+reload and process-private COW gates pass. Runtime/source defaults stay intact;
+concurrent window reading and default-path CPU attribution are still open.
+
+[H474](present-pacing-root-observer.474.md) qualifies isolated outer-call raw
+CPU aggregation through the H473 clock: PE32/PE64 nesting, reload, caller/peer
+isolation and fault rejection pass. Reuse H460's 338 public-entry outer thunks
+for full original-function coverage; actual-object integration, concurrent
+window reads, default transfer and removable CPU remain open.
+
 [H472](present-pacing-normalized-clock.472.md) qualifies a hardware-frequency
 normalization on this host's synthetic intervals.
 [H473](present-pacing-root-clock-bridge.473.md) then verifies a separate
