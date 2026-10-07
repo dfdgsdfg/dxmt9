@@ -21,7 +21,7 @@ struct Gate {
   WMT::Reference<WMT::SharedEvent> event;
   ~Gate() { if (event) event.signalValue(1); }
 };
-void run(bool benchmark = false) {
+void run(bool benchmark = false, MultiSampleType samples = MultiSampleType::None) {
   Factory factory(BackendLimits{});
   PresentParameters params{};
   params.backBufferWidth = params.backBufferHeight = 32;
@@ -29,11 +29,25 @@ void run(bool benchmark = false) {
   params.windowed = true;
   params.enableAutoDepthStencil = true;
   params.autoDepthStencilFormat = Format::D24S8;
+  params.multiSampleType = samples;
   auto device = factory.createDevice(0, params);
   check(bool(device), "create real core device");
   check(device->upperDevice()->usesMetalOcclusion(), "actual GPU provider enabled");
   auto& queue = device->upperDevice()->queue();
   check(queue.valid() && queue.started(), "real Metal queue");
+  const auto sampleTotal = samples == MultiSampleType::None ? 1u : u32(samples);
+  const auto expectedFull = 1024u * sampleTotal;
+  if (sampleTotal > 1) {
+    check(queue.device().supportsTextureSampleCount(sampleTotal), "requested MSAA supported");
+    const auto* color = queue.pool().findSurface(device->swapChain()->backBuffer()->handle().value);
+    const auto* depth = queue.pool().findSurface(device->swapChain()->depthStencilSurface()->handle().value);
+    check(color && depth && color->desc.multiSampleType == samples &&
+              depth->desc.multiSampleType == samples && color->resolveTexture &&
+              WMT::Texture{color->texture.handle}.textureType() == WMTTextureType2DMultisample &&
+              WMT::Texture{depth->texture.handle}.textureType() == WMTTextureType2DMultisample &&
+              WMT::Texture{color->resolveTexture.handle}.textureType() == WMTTextureType2D,
+          "oracle uses actual multisample color/depth and a separate resolve texture");
+  }
   const auto set = [&](u32 state, u32 value) {
     check(device->setRenderState(state, value) == D3D_OK, "set state");
   };
@@ -103,7 +117,7 @@ void run(bool benchmark = false) {
     issue(a, true); draw(); issue(a, false);
     const auto retained = result(a);
     std::cout << "retained-depth samples=" << retained << '\n';
-    check(retained == 1024, "query source boundaries preserve prior depth contents");
+    check(retained == expectedFull, "query source boundaries preserve prior depth samples");
   }
   const auto storesAfter = dxmt9::perf::test::snapshotRenderPassStoreAccounting();
   // DontCare contents can survive by accident on a particular GPU. Check the
@@ -121,8 +135,8 @@ void run(bool benchmark = false) {
   set(RS_Z_ENABLE, 0);
   issue(a, true); draw(); issue(a, false);
   const auto full = result(a);
-  std::cout << "full-screen samples=" << full << '\n';
-  check(full == 1024, "visible query counts pixels, not two primitives");
+  std::cout << "full-screen sample-count=" << sampleTotal << " samples=" << full << '\n';
+  check(full == expectedFull, "visible query counts all samples, not primitives or resolved pixels");
   set(RS_COLOR_WRITE_ENABLE, 0);
   issue(a, true); draw(); issue(a, false);
   check(result(a) == full, "color/depth-write-disabled query still counts visibility");
@@ -145,7 +159,12 @@ void run(bool benchmark = false) {
         "restore stream after UP draws");
   auto readback = device->createSurface(
       {32, 32, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
-  check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+  const auto readCompletedColor = [&] {
+    // Core readback selects the pass's resolveTexture for MSAA. Do not insert
+    // a separate StretchRect pass that could mask a missing query-pass resolve.
+    return device->getRenderTargetData(device->swapChain()->backBuffer(), readback);
+  };
+  check(readCompletedColor() == D3D_OK,
         "readback only after completed result");
   const auto pixels = readback->lockRect(nullptr, 0);
   check(pixels.data && pixels.pitch >= 128, "readback bytes");
@@ -193,7 +212,7 @@ void run(bool benchmark = false) {
       else
         check(after.published-before.published == 16, "reference burst publishes sixteen sources");
     }
-    check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+    check(readCompletedColor() == D3D_OK,
           "burst final readback");
     const auto finalPixels = readback->lockRect(nullptr, 0);
     check(finalPixels.data && finalPixels.pitch >= 128, "burst final bytes");
@@ -249,7 +268,7 @@ void run(bool benchmark = false) {
             stencilStoresAfter.stencilDontCare == stencilStoresBefore.stencilDontCare &&
             stencilStoresAfter.colorDontCare == stencilStoresBefore.colorDontCare,
         "unqueried stencil writer and readers use preserving Store actions");
-  check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+  check(readCompletedColor() == D3D_OK,
         "read prior color after completed stencil queries");
   const auto preservedPixels = readback->lockRect(nullptr, 0);
   check(preservedPixels.data && preservedPixels.pitch >= 128, "preserved color bytes");
@@ -293,7 +312,7 @@ void run(bool benchmark = false) {
     std::cout << "query-window appended sources=" << joined << '\n';
     check(joined != 0, "GPU oracle must exercise actual source CB composition");
   }
-  check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+  check(readCompletedColor() == D3D_OK,
         "read back the actually composed query window");
   const auto joinedPixels = readback->lockRect(nullptr, 0);
   check(joinedPixels.data && joinedPixels.pitch >= 128, "composed readback bytes");
@@ -549,6 +568,8 @@ int main(int argc, char** argv) {
       std::cout << "query occlusion Metal snapshot oracle passed\n";
     } else {
       run();
+      run(false, MultiSampleType::Two);
+      run(false, MultiSampleType::Four);
       std::cout << "query occlusion Metal oracle passed\n";
     }
     return 0;

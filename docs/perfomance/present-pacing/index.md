@@ -11,6 +11,23 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H460](present-pacing-primary-inplace-bound.460.md) records a conditional
+diagnostic Primary renderer upper of 3.48 s versus an Encode lower of 4.08 s
+in the same tail window. Matched baseline results do not establish default
+transfer; fixed-PRNG and emitted-barrier assumptions remain explicit. The next
+decision targets real occlusion correctness and observer-OFF acceptance, not
+further expansion of Primary instrumentation.
+
+[H459](present-pacing-occlusion-msaa-oracle.459.md) adds actual 2x/4x sample
+counts, depth/stencil preservation and query-pass resolved-pixel checks across
+six arm64 policies. Separate StretchRect preparation exposes a sampler
+validation failure; neither complete MSAA support nor CPU/FPS promotion follows.
+
+[H458](present-pacing-primary-interposer-rejection.458.md) rejects the cloned-vptr
+observer after actual texture binding fails: optimized final-class dynamic_cast
+compares original vtable addresses, despite preserved RTTI. Baseline passes the
+same reduced fixture. No STALKER attribution uses this diagnostic.
+
 [H457](present-pacing-clockless-primary-prototype.457.md) qualifies a clockless
 outer-call marker prototype, typed full-table compilation and a conservative
 sampling reducer. It is not installed in STALKER and does not yet rank Primary

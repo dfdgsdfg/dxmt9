@@ -23,6 +23,16 @@ site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)
 
+[H459](../../docs/perfomance/present-pacing/present-pacing-occlusion-msaa-oracle.459.md)
+extends the same six arm64 fixtures to actual 2x/4x attachments: exact
+2048/4096 visible samples, stencil accept/reject/accept, depth preservation and
+green/prior-magenta resolved pixels pass. Core readback consumes the query
+pass's resolved storage after polling completion. A separate explicit
+StretchRect preparation fails Metal sampler validation (`maxAnisotropy=0`)
+and remains unqualified. Sample masks/partial coverage, PE/fault breadth,
+whole-scene behavior and observer-OFF performance remain open; no runtime
+transition or default changes.
+
 [H456](../../docs/perfomance/present-pacing/present-pacing-occlusion-stencil-color-oracle.456.md)
 adds a bounded single-sample stencil/color GPU oracle after H455's repeated
 tail Encode CPU effect. An unqueried Replace writer and three read-only query

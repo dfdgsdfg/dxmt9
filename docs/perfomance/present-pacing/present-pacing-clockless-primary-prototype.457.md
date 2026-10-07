@@ -11,6 +11,11 @@ related: present-pacing-api-residency.453.md; present-pacing-completed-workload-
 
 # A lower-cost route to Primary attribution, not an attribution result
 
+**Follow-up:** [H458](present-pacing-primary-interposer-rejection.458.md) rejects
+the cloned-vtable integration on actual optimized objects. The synthetic
+results below remain calibration evidence, not permission to deploy that
+observer into STALKER.
+
 H455 leaves the largest default dxmt9 single-thread owner unresolved because
 Primary includes game, Wine, PE and synchronous Unix work. H453's per-call QPC
 and locked increments perturb the workload and omit original function edges.
