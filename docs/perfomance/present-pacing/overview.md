@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H454](present-pacing-backend-cpu-camera.454.md) finds a substantial worker CPU
+demand difference in a camera-qualified late scene: Replay 21.35 and Encode
+22.26 ms/rendered frame, versus D9VK cs 4.24–4.27 and submit 2.75–2.76 ms.
+These are differently divided responsibilities, not a removable-cost estimate.
+Default visibility semantics still differ; count completed game submissions
+before attributing the gap to per-draw overhead or another small copy.
+
 [H453](present-pacing-api-residency.453.md) obtains matched native CPU and
 reload-safe API residency. Late diagnostic API-body bounds are 0.270–0.289 core
 against about 0.51 core per worker, but scope overhead and OFF/ON perturbation

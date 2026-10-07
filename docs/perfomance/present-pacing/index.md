@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H454](present-pacing-backend-cpu-camera.454.md) compares native CPU using an
+external engine clock and camera trajectory. A qualified late interval costs
+about 21–22 CPU ms/frame in each dxmt9 Replay/Encode worker; D9VK named workers
+consume much less, but stage responsibilities and actual draw/query counts
+are not equivalent. Completed-frame submission census is the next discriminator.
+
 [H453](present-pacing-api-residency.453.md) completes a reload-safe API-residency
 diagnostic. Measured body bounds are below worker CPU in this instrumented run,
 but 249k–318k root calls/s make observer perturbation material and unqualified.
