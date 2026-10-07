@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H457](present-pacing-clockless-primary-prototype.457.md) qualifies a clockless
+outer-call marker prototype, typed full-table compilation and a conservative
+sampling reducer. It is not installed in STALKER and does not yet rank Primary
+against Encode or qualify transfer to default code.
+
+[H456](present-pacing-occlusion-stencil-color-oracle.456.md) adds exact stencil
+accept/reject/accept and prior-color preservation across query cuts. Six arm64
+Metal policy fixtures pass; this qualifies a bounded part of H455's candidate,
+not MSAA, full-scene correctness, default promotion or maximum CPU ownership.
+
 [H455](present-pacing-completed-workload-visibility.455.md) observes excess
 default native submissions at three closely matched late camera states.
 A same-binary real-visibility diagnostic reduces named Encode CPU in the tail:

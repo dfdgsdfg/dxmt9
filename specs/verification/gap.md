@@ -23,6 +23,14 @@ site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)
 
+[H456](../../docs/perfomance/present-pacing/present-pacing-occlusion-stencil-color-oracle.456.md)
+adds a bounded single-sample stencil/color GPU oracle after H455's repeated
+tail Encode CPU effect. An unqueried Replace writer and three read-only query
+windows require exact 1024/0/1024 samples under changing stencil references,
+positive Store accounting and exact prior magenta pixels. Six arm64 policy
+fixtures pass. Actual MSAA, public PE breadth, faults, full-scene equivalence
+and default-path CPU ownership remain unclosed; this is not promotion evidence.
+
 `QueryOcclusionResults` covers bounded result ownership, issue identity,
 once-only contributions and fail-closed completion, not attachment bytes or
 Store semantics. [H320](../../docs/perfomance/present-pacing/present-pacing-occlusion-timeline-stateblock.320.md)

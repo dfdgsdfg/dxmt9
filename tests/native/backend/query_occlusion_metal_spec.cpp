@@ -207,6 +207,65 @@ void run(bool benchmark = false) {
     return;
   }
 
+  // An unqueried stencil writer must survive BEGIN, and query-only readers
+  // must preserve both stencil and the prior color through subsequent ENDs.
+  // Vary the reference against one written value, including the original
+  // clear value. A broken constant reference must not pass both writer/reader.
+  const auto stencilStoresBefore = dxmt9::perf::test::snapshotRenderPassStoreAccounting();
+  ClearDesc stencilInitial{};
+  stencilInitial.clearColor = stencilInitial.clearStencil = true;
+  stencilInitial.color = {1, 0, 1, 1};
+  stencilInitial.stencil = 0x33;
+  check(device->clear(stencilInitial) == D3D_OK, "initial stencil and magenta color");
+  set(RS_Z_ENABLE, 0);
+  set(RS_Z_WRITE_ENABLE, 0);
+  set(RS_ALPHA_TEST_ENABLE, 0);
+  set(RS_COLOR_WRITE_ENABLE, 0);
+  set(RS_STENCIL_ENABLE, 1);
+  set(RS_TWO_SIDED_STENCIL_MODE, 0);
+  set(RS_STENCIL_MASK, 0xff);
+  set(RS_STENCIL_WRITEMASK, 0xff);
+  set(RS_STENCIL_REF, 0x5a);
+  set(RS_STENCIL_FUNC, u32(CompareFunc::Always));
+  set(RS_STENCIL_FAIL, u32(StencilOp::Keep));
+  set(RS_STENCIL_ZFAIL, u32(StencilOp::Keep));
+  set(RS_STENCIL_PASS, u32(StencilOp::Replace));
+  draw();
+  set(RS_STENCIL_PASS, u32(StencilOp::Keep));
+  set(RS_STENCIL_WRITEMASK, 0);
+  for (unsigned i = 0; i != 3; ++i) {
+    const bool accept = i != 1;
+    set(RS_STENCIL_FUNC, u32(CompareFunc::Equal));
+    set(RS_STENCIL_REF, accept ? 0x5a : 0x33);
+    issue(a, true); draw(); issue(a, false);
+    const auto samples = result(a);
+    std::cout << "retained-stencil reader=" << i << " samples=" << samples << '\n';
+    check(samples == (accept ? full : 0),
+          "query cuts preserve stencil accept/reject/accept without rewriting it");
+  }
+  const auto stencilStoresAfter = dxmt9::perf::test::snapshotRenderPassStoreAccounting();
+  check(stencilStoresAfter.stencilStore >= stencilStoresBefore.stencilStore + 4 &&
+            stencilStoresAfter.colorStore >= stencilStoresBefore.colorStore + 4 &&
+            stencilStoresAfter.stencilDontCare == stencilStoresBefore.stencilDontCare &&
+            stencilStoresAfter.colorDontCare == stencilStoresBefore.colorDontCare,
+        "unqueried stencil writer and readers use preserving Store actions");
+  check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+        "read prior color after completed stencil queries");
+  const auto preservedPixels = readback->lockRect(nullptr, 0);
+  check(preservedPixels.data && preservedPixels.pitch >= 128, "preserved color bytes");
+  for (unsigned y = 0; y != 32; ++y)
+    for (unsigned x = 0; x != 32; ++x) {
+      const auto* p = static_cast<const u8*>(preservedPixels.data) +
+          y * preservedPixels.pitch + x * 4;
+      check(p[0] == 255 && p[1] == 0 && p[2] == 255 && p[3] == 255,
+            "query-only stencil windows preserve exact prior magenta pixels");
+    }
+  readback->unlockRect();
+  std::cout << "query-cut stencil/color oracle passed\n";
+  set(RS_STENCIL_ENABLE, 0);
+  set(RS_STENCIL_WRITEMASK, 0xff);
+  set(RS_COLOR_WRITE_ENABLE, 15);
+
   // Simultaneous scopes, separate pass contributions and publication cuts.
   // Readback above has drained all prior sources. Every source published in
   // this interval is scoped, so an appended head proves queried CB sharing.
