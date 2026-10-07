@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H455](present-pacing-completed-workload-visibility.455.md) breaks the equal-work
+assumption at three late observed camera states: default native draw counts
+are 1.60–1.75x D9VK's. A separate OFF/real-visibility ON pair shows lower late
+submission counts and named Encode CPU (24.41 to 22.26–22.56 ms/frame;
+29.74 to 25.03–25.15 in the last qualified CPU region). These are sparse samples
+and diagnostic effects, not a full-window census, FPS gain or promotion.
+Reversing execution order reproduces the last region's Encode CPU reduction
+(30.96 to 24.85–24.92 ms/frame), with visible same-policy drift; the reverse
+80–95 s CPU region is rejected for an unnamed handle's counter regression.
+Visibility-dependent workload now precedes another small-copy candidate;
+overall dxmt9 ownership and semantics-qualified removal remain open.
+
 [H454](present-pacing-backend-cpu-camera.454.md) finds a substantial worker CPU
 demand difference in a camera-qualified late scene: Replay 21.35 and Encode
 22.26 ms/rendered frame, versus D9VK cs 4.24–4.27 and submit 2.75–2.76 ms.

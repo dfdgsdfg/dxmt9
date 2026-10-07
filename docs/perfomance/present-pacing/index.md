@@ -11,6 +11,15 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H455](present-pacing-completed-workload-visibility.455.md) observes excess
+default native submissions at three closely matched late camera states.
+A same-binary real-visibility diagnostic reduces named Encode CPU in the tail:
+4.60–4.72 ms/frame in the first pair and 6.04–6.11 with execution order reversed.
+The reverse 80–95 s CPU region is rejected for an unnamed handle's counter
+regression. Sparse counters, measured same-policy drift, unresolved Primary
+ownership and incomplete pixel qualification prevent promotion or a
+largest-removable-cost verdict.
+
 [H454](present-pacing-backend-cpu-camera.454.md) compares native CPU using an
 external engine clock and camera trajectory. A qualified late interval costs
 about 21–22 CPU ms/frame in each dxmt9 Replay/Encode worker; D9VK named workers
