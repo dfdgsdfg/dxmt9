@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H451](present-pacing-run-construction-removal.451.md) directly constructs owned
+compatibility runs in an isolated experiment. Identical-input body CPU medians
+fall 1.53% on ARM and 1.00% on Rosetta (about 1 ms per capture), with unchanged
+logical digests within each architecture and route counts. Source/build defaults
+are restored; no GPU/wild promotion. This prices one small removal, not H450's
+whole tail or the largest dxmt9 CPU owner.
+
 [H450](present-pacing-default-tail-running.450.md) locates compatibility-run
 snapshot staging in current default-path Running samples. Same-image assembly
 confirms repeated large copies into temporary/run/vector storage; five memcpy

@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H451](present-pacing-run-construction-removal.451.md) tests direct owned-run
+construction on unchanged capture29: about 1 ms less body process CPU, or
+1.53% ARM / 1.00% Rosetta median reduction. Within-architecture logical and route
+checks pass; no new GPU/wild evidence or promotion. H450's copy-callsite sample
+share is not a savings budget. The current tail's largest removable owner
+remains unresolved, especially Primary's game/Wine/PE split.
+
 Current STALKER default-path evidence: [H449](present-pacing-default-tail-cpu.449.md)
 measures native thread CPU with product observers OFF;
 [H450](present-pacing-default-tail-running.450.md) adds Running-only attribution.
