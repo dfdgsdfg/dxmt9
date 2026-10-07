@@ -23,6 +23,20 @@ site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)
 
+[H463](../../docs/perfomance/present-pacing/present-pacing-public-occlusion-oracle.463.md)
+adds public PE32/PE64 single-sample visibility and pixel evidence: 256/0/256
+samples across query reuse, preserved depth/color, pending-output sentinels
+under delayed completion, and post-completion point/linear scaled readback.
+OFF controls return 2/2/2 and fail counts only. Viewport-overscanning geometry
+does not close the retained -0.5-to-15.5 XYZRHW edge failure (225 visible
+samples). Public MSAA/partial coverage and full-scene qualification remain
+open; these controls do not establish a correctness-qualified CPU saving.
+
+[H464](../../docs/perfomance/present-pacing/present-pacing-occlusion-edge-isolation.464.md)
+reproduces the retained XYZRHW edge discrepancy in both real-occlusion ON and
+conservative OFF with matching pixel signatures; WineD3D passes 256/0/256 and
+all pixels. This is an unresolved shared raster gap, not an ON-only regression.
+
 [H461](../../docs/perfomance/present-pacing/present-pacing-occlusion-stretch-oracle.461.md)
 closes the bounded explicit StretchRect failure below: non-anisotropic sampler
 initialization and resolved-source binding now pass 36 exact-green scaled

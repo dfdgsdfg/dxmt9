@@ -15,6 +15,16 @@ from scripts.tools import run_d3d9_conformance as runner
 
 
 class ChunkProcessFailureTests(unittest.TestCase):
+    def test_aux_directory_follows_selected_executable(self):
+        for executable in (runner.DEFAULT_EXE, Path("/pe32/tests/suite.exe")):
+            with patch.object(sys, "argv", ["runner", "--exe", str(executable)]):
+                self.assertEqual(runner.parse_args().exe_dir, executable.parent)
+
+    def test_explicit_aux_directory_is_preserved(self):
+        with patch.object(sys, "argv", ["runner", "--exe", "/pe32/suite.exe",
+                                       "--exe-dir", "/isolated/aux"]):
+            self.assertEqual(runner.parse_args().exe_dir, Path("/isolated/aux"))
+
     def test_run_chunk_preserves_nonzero_process_status(self):
         args = SimpleNamespace(wine=Path("/wine"), exe=Path("/suite.exe"))
         completed = SimpleNamespace(stdout="", stderr="loader failed\n",

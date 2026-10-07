@@ -108,6 +108,16 @@ d3d9_queries = executable(
   install: false,
 )
 
+d3d9_occlusion = executable(
+  'd3d9_occlusion_x64',
+  'd3d9_occlusion.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
 d3d9_resources = executable(
   'd3d9_resources_x64',
   'd3d9_resources.cpp',
@@ -243,6 +253,7 @@ alias_target(
     d3d9_inline_constants,
     d3d9_recorder_fault,
     d3d9_queries,
+    d3d9_occlusion,
     d3d9_resources,
     d3d9_device_misc,
     d3d9_stateblock,

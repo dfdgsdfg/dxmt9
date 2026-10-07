@@ -112,7 +112,7 @@ def parse_args() -> argparse.Namespace:
                    help="Per-singleton retry timeout in seconds (default: 30).")
     p.add_argument("--exe", type=Path, default=DEFAULT_EXE,
                    help=f"Main chunked conformance exe path (default: {DEFAULT_EXE.relative_to(REPO_ROOT)}).")
-    p.add_argument("--exe-dir", type=Path, default=DEFAULT_EXE_DIR,
+    p.add_argument("--exe-dir", type=Path, default=None,
                    help="Directory holding auxiliary conformance .exes "
                         "(default: same directory as --exe).")
     p.add_argument("--pe-dll-dir", type=Path, default=None,
@@ -173,7 +173,10 @@ def parse_args() -> argparse.Namespace:
                    help="Skip singleton replay of timed-out chunks.")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Echo each chunk's stdout to stderr as it runs.")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.exe_dir is None:
+        args.exe_dir = args.exe.parent
+    return args
 
 
 def discover_test_names() -> list[str]:

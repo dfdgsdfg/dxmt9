@@ -11,6 +11,37 @@
 # Runtime evidence is recorded with [[case.evidence]] lane/arch tables.
 
 [[case]]
+executable = "d3d9_occlusion_x64.exe"
+on_demand = true
+source_file = "d3d9_occlusion.cpp"
+function = "occlusion_query_draw_pixels"
+source = "dxmt9-authored exact visibility, query reuse, depth preservation and pixel oracle"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x64", "x86"]
+area = "queries"
+owner = "core/queries"
+requirements = ["R-TEST-12.12"]
+acceptance = ["Real occlusion provider: visible/occluded/reissued counts 256/0/256; FLUSH progresses without readback or Present, pending output unchanged, exact color/depth preservation and scaled point/linear readback. Conservative fallback is a negative control. Explicit on-demand execution requires DXMT9_METAL_OCCLUSION=1."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x86"
+status = "passing"
+source = "docs/perfomance/present-pacing/present-pacing-public-occlusion-oracle.463.md:1"
+summary = "H463 explicit PE32 ON and 200ms delayed-completion controls pass exact counts, pending sentinels, depth/color and scaled pixels. OFF is a count-only negative control. Overscanning geometry does not qualify the separately retained edge failure."
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "docs/perfomance/present-pacing/present-pacing-public-occlusion-oracle.463.md:1"
+summary = "H463 explicit PE64 ON and 200ms delayed-completion controls pass exact counts and pixels. OFF returns 2 for every draw. Public MSAA, edge rasterization and whole-scene promotion remain unqualified."
+
+[[case]]
 executable = "d3d9_draw_parent_economy_x86.exe"
 on_demand = true
 source_file = "d3d9_draw_parent_economy.cpp"

@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H465](present-pacing-primary-transfer-checkpoint.465.md) records an incomplete
+three-of-four-run Primary attribution checkpoint. Its first camera-matched
+diagnostic pair fails the declared stability gate; the diagnostic-only ranking
+cannot be transferred to the default path. The outstanding control must not
+be replaced by an open-ended series of marker experiments.
+
+[H463](present-pacing-public-occlusion-oracle.463.md) adds explicit PE32/PE64
+visibility/pixel controls: ON yields 256/0/256, OFF yields 2/2/2 even for the
+hidden draw. Delayed-completion controls preserve pending output. A retained
+edge-positioning failure and whole-scene qualification still block promotion;
+no removable CPU or FPS amount is newly established.
+
 [H462](present-pacing-default-thread-identity.462.md) joins the unnamed CPU
 leader to the known X-Ray helper yield protocol and independently identifies
 Replay. In a common late subinterval Encode costs 4.222 s versus Replay
