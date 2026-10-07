@@ -20,6 +20,13 @@ CPU/GPU gates and performance measurements on the repaired binary before L64
 promotion or equivalent-rendering FPS claims.
 See [H447](../../docs/perfomance/present-pacing/present-pacing-l64-depth-publication-fix.447.md).
 
+H448 completes one repaired-image observer-OFF wild ABBA: all image/config
+receipts agree and sampled scenes are normal, but +0.80% mean FPS is smaller
+than baseline drift, paired signs disagree, and p95 worsens in both pairs.
+No L64 benefit or default promotion is established. Current-image fixed-input
+CPU/GPU requalification remains distinct; see
+[H448](../../docs/perfomance/present-pacing/present-pacing-l64-repaired-wild-abba.448.md).
+
 R-HARN-REPLAY-8.3/8.5/8.7/8.9 admit the declared fresh-device domain with
 paired original-keyed effective-field equality, original Metal query/pixel
 qualification and image-bound observer-light CPU measurements. They do not

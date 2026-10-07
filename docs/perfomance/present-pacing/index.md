@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H448](present-pacing-l64-repaired-wild-abba.448.md) measures repaired-image
+L0/L64 observer-OFF ABBA: 30.81/31.05 mean FPS (+0.80%), but paired changes
+are −0.45%/+2.10% and baseline drift is −3.84%. L64 p95 worsens in both
+comparisons; no established FPS/tail benefit or default promotion.
+
 [H447](present-pacing-l64-depth-publication-fix.447.md) fixes the default
 depth/stencil chunk-end discard: absence in a bounded suffix is not attachment
 death. A 6,250-case production refinement and ordinary-policy Metal split/serial
