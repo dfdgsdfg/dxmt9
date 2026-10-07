@@ -4,12 +4,23 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-30
+updated: 2026-10-07
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
+
+Current STALKER default-path evidence: [H449](present-pacing-default-tail-cpu.449.md)
+measures native thread CPU with product observers OFF;
+[H450](present-pacing-default-tail-running.450.md) adds Running-only attribution.
+Compatibility snapshot staging contains repeated large compiled copies and is
+the next bounded removal candidate. Its 38.57% inclusive Replay sample share
+is not an attainable saving or whole-pipeline budget. Largest observed GPU idle
+gaps mostly precede submission; Primary's game/Wine/PE split remains unresolved.
+Repaired-image [H448](present-pacing-l64-repaired-wild-abba.448.md) does not
+establish a grouping benefit. Keep limit 0; measure removal on identical input
+before another wild comparison or Encode-parallelization project.
 
 [H429](present-pacing-query-proof-wild.429.md) measures H428 with observers OFF
 on the default range-OFF Day route: +1.668% / -1.546% in reversed-order pairs,

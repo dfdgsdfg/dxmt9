@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H450](present-pacing-default-tail-running.450.md) locates compatibility-run
+snapshot staging in current default-path Running samples. Same-image assembly
+confirms repeated large copies into temporary/run/vector storage; five memcpy
+return sites account for 455/3,106 Replay samples, not proven removable time.
+The largest observed GPU gaps precede submission. Next isolate direct owned-run
+construction on identical input; no FPS or critical-path verdict yet.
+
+[H449](present-pacing-default-tail-cpu.449.md) establishes external native-thread
+CPU budgets with product counters OFF. Encode and Replay consume about half
+a core each, while Primary mixes game/Wine/PE/Unix. Wall-stack wait populations
+are not CPU percentages; function-level removable cost remains open.
+
 [H448](present-pacing-l64-repaired-wild-abba.448.md) measures repaired-image
 L0/L64 observer-OFF ABBA: 30.81/31.05 mean FPS (+0.80%), but paired changes
 are −0.45%/+2.10% and baseline drift is −3.84%. L64 p95 worsens in both
