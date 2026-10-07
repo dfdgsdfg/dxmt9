@@ -11,17 +11,27 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-[H465](present-pacing-primary-transfer-checkpoint.465.md) records an incomplete
-three-of-four-run Primary attribution checkpoint. Its first camera-matched
-diagnostic pair fails the declared stability gate; the diagnostic-only ranking
-cannot be transferred to the default path. The outstanding control must not
-be replaced by an open-ended series of marker experiments.
+[H467](present-pacing-default-unwind-feasibility.467.md) rejects the bounded
+unchanged-default CPU ancestry route: the modeled export fails and raw Primary
+samples are mostly single-frame. No tail attribution or largest-owner claim
+is made; further marker/unwinder expansion is not part of that experiment.
+
+[H466](present-pacing-positiont-pixel-center.466.md) fixes the retained shared
+XYZRHW pixel-center error: PE32/PE64 edge counts and direct/scaled pixels now
+match the oracle, including delayed completion. This closes a bounded
+correctness gap, not the largest-CPU-owner or removable-budget objective.
+
+[H465](present-pacing-primary-transfer-checkpoint.465.md) closes all four Primary
+attribution runs. Both diagnostic comparisons fail the declared stability gate,
+while the default repeat passes. Transfer sensitivity also fails; the
+diagnostic-only ranking cannot be transferred to the default path. No further
+marker repetitions are warranted by this finite experiment.
 
 [H463](present-pacing-public-occlusion-oracle.463.md) adds explicit PE32/PE64
 visibility/pixel controls: ON yields 256/0/256, OFF yields 2/2/2 even for the
-hidden draw. Delayed-completion controls preserve pending output. A retained
-edge-positioning failure and whole-scene qualification still block promotion;
-no removable CPU or FPS amount is newly established.
+hidden draw. Delayed-completion controls preserve pending output. H466 closes
+the retained edge-positioning failure; whole-scene qualification still blocks
+promotion. No removable CPU or FPS amount is newly established.
 
 [H462](present-pacing-default-thread-identity.462.md) joins the unnamed CPU
 leader to the known X-Ray helper yield protocol and independently identifies

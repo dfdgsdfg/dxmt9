@@ -213,6 +213,15 @@ void testVisualDerivedFfpCoverage() {
                 "pre-transformed pointSize is clamped by min/max uniforms");
   check(declDefaultSource.find("out.position.xy += ffpVs.halfPixelFixup") == std::string::npos,
         "pre-transformed POSITIONT does not apply transformed half-pixel fixup");
+  checkContains(declDefaultSource,
+                "float2 screenPosition = inPosition.xy + float2(0.5f);",
+                "POSITIONT maps integral D3D9 pixel centers to Metal half centers");
+  checkContains(declDefaultSource,
+                "((screenPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x)",
+                "POSITIONT applies the center offset before X normalization");
+  checkContains(declDefaultSource,
+                "1.0f - ((screenPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y)",
+                "POSITIONT applies the center offset before Y inversion");
 
   // behavioral oracle: Wine visual.c:texop_test
   DeviceState texopState;
@@ -373,7 +382,7 @@ void testFfpVertexCoordinateAndLightingContracts() {
       baselineKey,
       dxmt9::drawshader::makeShaderSourceContext(positionTDesc));
   checkContains(positionTSource,
-                "float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x)",
+                "float2 ndc = float2(((screenPosition.x - ffpVs.viewportOrigin.x)",
                 "POSITIONT remains the explicit screen-space path");
 
   FfpVertexKey lightingKey{};

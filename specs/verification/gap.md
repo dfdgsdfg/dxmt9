@@ -23,6 +23,13 @@ site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)
 
+[H466](../../docs/perfomance/present-pacing/present-pacing-positiont-pixel-center.466.md)
+closes H464's bounded XYZRHW edge counterexample with screen-space pixel-center
+mapping. PE32/PE64 real visibility and delayed-completion runs now return
+256/0/256 with exact direct/scaled pixels; conservative controls retain 2/2/2
+but have exact pixels. Broader public and whole-scene qualification, default
+promotion, and a correctness-qualified removable CPU budget remain open.
+
 [H463](../../docs/perfomance/present-pacing/present-pacing-public-occlusion-oracle.463.md)
 adds public PE32/PE64 single-sample visibility and pixel evidence: 256/0/256
 samples across query reuse, preserved depth/color, pending-output sentinels

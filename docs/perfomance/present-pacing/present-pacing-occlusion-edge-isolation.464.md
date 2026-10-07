@@ -49,3 +49,7 @@ while any eventual real-visibility promotion retains its correctness gates.
 H455's observed CPU reduction is still candidate evidence for a change in
 submitted workload. H464 does not turn it into a fully qualified saving or
 establish which default thread has the largest renderer CPU cost.
+
+[H466](present-pacing-positiont-pixel-center.466.md) subsequently fixes this
+bounded edge counterexample in screen space and verifies both PE architectures.
+The failure evidence here is retained unchanged.

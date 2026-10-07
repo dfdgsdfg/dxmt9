@@ -646,8 +646,12 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float4 inPosition = dxmt9_load_f32x4(stream0, base + " << layout->positionOffset << "u);\n";
     out << "  float clipW = fabs(inPosition.w) > 1.0e-8f ? (1.0f / inPosition.w) : 1.0f;\n";
     out << "  float2 viewportSize = max(ffpVs.viewportSize, float2(1.0f));\n";
-    out << "  float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                     1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
+    // D3D9 POSITIONT pixel centers are integral; Metal centers are at +0.5.
+    // Apply this in screen space: the NDC Y offset has the opposite sign
+    // from X, unlike the transformed-position fixup below.
+    out << "  float2 screenPosition = inPosition.xy + float2(0.5f);\n";
+    out << "  float2 ndc = float2(((screenPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
+    out << "                     1.0f - ((screenPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
     out << "  out.position = float4(ndc * clipW, inPosition.z * clipW, clipW);\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
       out << "  out.color = "
