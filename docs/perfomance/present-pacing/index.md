@@ -11,6 +11,14 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H497](present-pacing-command-raster-reuse.497.md) rejects command-local target
+lookup reuse: 30 original oracles pass, but paired body saving is −0.177 ms
+with only 3/8 positive pairs. Runtime restored; no cache/knob retained.
+
+[H496](present-pacing-encode-callsite.496.md) maps 21 preserved observations to
+actual call boundaries. Five other-encodeChunk rows call encodeDraw; upload
+and uniform copies are distinct from shared-lock lookup. No exclusive prices.
+
 [H495](present-pacing-binding-counter-gate.495.md) consolidates OFF binding
 counter gates and passes 30 original oracles. Its 0.272 ms paired body delta
 does not clear 1.483 ms A/A noise; retain cleanup, claim no proven CPU saving.

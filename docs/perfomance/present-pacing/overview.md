@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H497](present-pacing-command-raster-reuse.497.md) implements H496's bounded
+raster-target reuse candidate. All 30 original oracles and bounded native
+refinement pass, but paired command-body saving is −0.177 ms versus 0.787 ms
+A/A noise (3/8 positive). Runtime restored; this cache does not establish a
+material saving. Next distinguish complete representation work from driver
+encoding, while retaining the unresolved default mixed-Primary boundary.
+
+[H496](present-pacing-encode-callsite.496.md) verifies the frozen image's call
+instructions and import targets. Five of twelve other-encodeChunk observations
+are at encodeDraw calls with missing callee ancestry, not proven outer-loop
+CPU. The next bounded candidate is command-local raster-target metadata reuse;
+uniform representation reduction is wider. No default owner or saving is priced.
+
 [H495](present-pacing-binding-counter-gate.495.md) removes repeated enable
 decisions and zero-valued atomics from three binding counter families. Exact
 counter tests and 30 original GPU oracles pass, but the 0.272 ms paired body

@@ -14,6 +14,14 @@ remain in `docs/perfomance/`.
 
 ## Pass-wide immutable access metadata (2026-09-20)
 
+H497 command-local raster extent reuse is **rejected on the local CPU gate**.
+Bounded production-helper refinement covers 46,080 reads and all 30 original
+GPU/source oracles pass, but paired command-body saving is −0.177 ms with only
+3/8 positive pairs. Runtime, candidate-specific tests and proposed spec extension
+are restored; no new cache or runtime selector remains. The patch/images and
+failure evidence are retained in [H497](../../../docs/perfomance/present-pacing/present-pacing-command-raster-reuse.497.md).
+No default-game owner, performance or wild promotion claim follows.
+
 Command-local binding projection: candidate implementation and bounded native
 reference comparison are in [binding-plan reuse](binding-plan-reuse.md).
 Serial DrawRun reuse is the default following the user's explicit promotion;
