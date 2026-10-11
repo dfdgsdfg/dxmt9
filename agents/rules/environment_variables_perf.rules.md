@@ -135,6 +135,16 @@ dictionary reset/lookup and tracing overhead; it is not an FPS lane.
 
 The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
 processing using queue/sequence-qualified native CPU and wall endpoints.
+Cold prepared V4 replay additionally emits `PreparedReplayPhaseBegin/End`
+using its execution-instance identity: phase 0 brackets arm-success through
+the original event-loop return (excluding finish/cleanup); phase 1 covers each
+original raw's import/resolve/replay, phase 2 its observed renderer replay call,
+and phase 3 the Present readback/oracle. Raw IDs are the immutable plan's
+command-chunk indices, not queue sequences. `analyze_prepared_replay_cpu.py`
+requires complete same-thread nested coverage and the expected raw count.
+These are harness caller CPU scopes, not production ReplayOffloadWorker CPU;
+they include V4 qualification work and must not be called pure renderer cost.
+No per-record observer callback, new drain or renderer policy is added.
 `analyze_publication_progress.py` partitions these with source preparation,
 context preparation and return/relock residuals. Missing endpoints in older
 traces or unsupported Arena/session/lookahead paths are unqualified, not zero

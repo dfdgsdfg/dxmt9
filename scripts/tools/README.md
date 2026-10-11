@@ -626,6 +626,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `shader_corpus_tool.py sync`.
 - `run_dx9_present_policy_ab.py` — A/B compare present policies across apps;
   emits boundary-counter JSON consumed by `specs/benchmarks/`.
+- `analyze_prepared_replay_cpu.py` — strict cold prepared-V4 caller CPU
+  partition: armed interval, original raw envelope, observed replay call and
+  readback/oracle. Requires the expected raw count and complete nested native
+  clock scopes; not production worker CPU or a removable-cost estimate.
 - `analyze_cpu_supply.py` — strict V2 ordinary-worker supply trace analysis:
   native thread CPU vs elapsed scopes, empty/reserved/ready FIFO residence,
   publication-to-encode delay and explicitly conditional fixed-arrival replay

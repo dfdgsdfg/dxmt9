@@ -76,6 +76,9 @@ test('dxmt9-observe-darwin-thread-cpu', python3,
 test('dxmt9-cpu-supply-analysis', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_cpu_supply.py')])
 
+test('dxmt9-prepared-replay-cpu-analysis', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_prepared_replay_cpu.py')])
+
 test('dxmt9-command-binding-plan-pair', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_command_binding_plan_pair.py')])
 

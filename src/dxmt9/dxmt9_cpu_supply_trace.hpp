@@ -56,6 +56,7 @@ enum class Event : std::uint32_t {
   SessionReleaseClose,
   SessionReleaseReuse,
   DrawRunPhase,
+  PreparedReplayPhaseBegin, PreparedReplayPhaseEnd,
 };
 
 inline bool planningSplitEnabled() noexcept {

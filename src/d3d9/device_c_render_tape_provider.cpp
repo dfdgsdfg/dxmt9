@@ -17,6 +17,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 #include "dxmt9/dxmt9_render_tape_attachment_restore.hpp"
+#include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2934,6 +2935,31 @@ class PreparedPhaseScope {
   std::chrono::steady_clock::time_point begin_;
 };
 
+// Cold prepared-V4 only. The existing supply sink owns native CPU clocks and
+// bounded storage; no per-record hook, file output or extra renderer effect.
+// Phase 0: original armed event interval; 1: raw import/resolve/replay;
+// 2: observed renderer replay call; 3: Present readback/oracle.
+class PreparedReplayCpuScope {
+ public:
+  PreparedReplayCpuScope(bool requested, const void* owner,
+                        std::uint64_t id, std::uint64_t phase) noexcept
+      : enabled_(requested && ::dxmt9::supply::enabled()),
+        owner_(owner), id_(id), phase_(phase) {
+    if (enabled_) ::dxmt9::supply::record(
+        ::dxmt9::supply::Event::PreparedReplayPhaseBegin, owner_, id_, phase_);
+  }
+  ~PreparedReplayCpuScope() noexcept {
+    if (enabled_) ::dxmt9::supply::record(
+        ::dxmt9::supply::Event::PreparedReplayPhaseEnd, owner_, id_, phase_);
+  }
+  PreparedReplayCpuScope(const PreparedReplayCpuScope&) = delete;
+  PreparedReplayCpuScope& operator=(const PreparedReplayCpuScope&) = delete;
+ private:
+  bool enabled_;
+  const void* owner_;
+  std::uint64_t id_, phase_;
+};
+
 class PreparedExecutionV4CancelScope {
  public:
   explicit PreparedExecutionV4CancelScope(RenderTapeExecutionV4* execution) noexcept
@@ -3982,6 +4008,9 @@ FrameTapeReplayResult& replayGeneralPlan(
                               bool v3Command = false,
                               bool v4Command = false) {
     PreparedPhaseScope phase(timing, &PreparedPhaseTiming::chunkReplayNanos);
+    const auto diagnosticRaw = v4Command
+        ? static_cast<std::uint64_t>(&chunk - plan.commandChunks.data()) : 0u;
+    PreparedReplayCpuScope rawCpu(v4Command, &executionV4, diagnosticRaw, 1u);
     ImportedChunkView imported;
     if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported) ||
         !resolveChunk(chunk, objects, resolved)) {
@@ -4040,9 +4069,12 @@ FrameTapeReplayResult& replayGeneralPlan(
           associations.clear();
         }
       }
-      const auto hr = replayPrevalidatedResolvedCommandChunkObservedV4(
+      const auto hr = [&] {
+        PreparedReplayCpuScope bodyCpu(true, &executionV4, diagnosticRaw, 2u);
+        return replayPrevalidatedResolvedCommandChunkObservedV4(
           device, chunk.bytes, chunk.envelope, resolved, policy,
           observerSession.observation(executionV4.observation(), associations), observed);
+      }();
       observerSession.observationComplete();
       if (hr != core::D3D_OK)
         result.exactDiagnosticV4.failure = "v4-renderer-replay-failed";
@@ -4477,6 +4509,7 @@ FrameTapeReplayResult& replayGeneralPlan(
     return fail(FrameTapeReplayStatus::ObjectCreationFailed, 0xffffffffu);
   }
 
+  std::optional<PreparedReplayCpuScope> intervalCpu;
   try {
     for (const auto& replayEvent : plan.events) {
       const auto eventIndex = replayEvent.eventIndex;
@@ -4605,6 +4638,7 @@ FrameTapeReplayResult& replayGeneralPlan(
               baselines.push_back({entry.object.identity, entry.query, entry.snapshot});
             if (!executionV4.arm(device, baselines))
               return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+            intervalCpu.emplace(true, &executionV4, eventIndex, 0u);
             if (observerSession.enabled())
               observerSession.armed(result.exactDiagnosticV4.execution.localArmHresult,
                   result.exactDiagnosticV4.execution.localArm,
@@ -5063,6 +5097,8 @@ FrameTapeReplayResult& replayGeneralPlan(
         break;
       }
       case RenderTapeEventType::PresentComplete: {
+        PreparedReplayCpuScope readbackCpu(
+            exactDiagnosticV4 != nullptr, &executionV4, eventIndex, 3u);
         if (textureInput && (!textureInputEvidence ||
                             !textureInputEvidence->readbackMatched))
           return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
@@ -5274,6 +5310,7 @@ FrameTapeReplayResult& replayGeneralPlan(
     return result;
   }
 
+  intervalCpu.reset();
   if (result.queryReplay.present) {
     result.queryReplay.transcriptComplete =
         result.queryReplay.replayedPolls == result.queryReplay.recordedPolls &&

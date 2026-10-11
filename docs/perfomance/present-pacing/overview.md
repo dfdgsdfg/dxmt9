@@ -11,6 +11,21 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H488](present-pacing-prepared-replay-cpu.488.md) measures the prepared caller,
+which replays synchronously rather than through ReplayOffloadWorker. Its 92
+observed replay calls cost about 52.1 ms CPU, inside 59.8 ms raw envelopes;
+another 58.6–58.8 ms lies in original interval services/qualification, plus
+48.6–50.8 ms readback/oracle CPU. These are harness-inclusive scopes, not a
+default worker or removable budget. Separate V4 qualification from ordinary
+replay before transferring this input's CPU prices to the real game.
+
+[H487](present-pacing-draw-loop-scratch.487.md) removes real per-draw scratch
+initialization in an archived candidate. All 30 original-input GPU oracles
+pass; all 8 A/B pairs favor it, but the 0.907 ms paired body-CPU median is below
+the 1.123 ms maximum A/A difference. The frozen gate fails; product source and
+images are restored. This narrows one small redundant operation, not the
+largest default owner or a qualified tail-removal budget.
+
 [H486](present-pacing-normal-source-cost.486.md) reproduces the original Normal
 input on x86/Rosetta and joins CPU to its three source cuts. The large source's
 roughly 34 ms prefetch includes fresh-cache PSO builds, not a steady-state

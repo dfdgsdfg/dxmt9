@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H488](present-pacing-prepared-replay-cpu.488.md) adds strict same-thread caller
+CPU scopes for the original V4 interval, raws and readback. Replay calls are
+about 52.1 ms CPU; interval services and qualification remain substantial and
+must not be presented as pure production Replay or a default removal budget.
+
+[H487](present-pacing-draw-loop-scratch.487.md) tests conditional DrawRun scratch
+construction. Release code loses seven redundant zeroing calls; 30 GPU oracles
+pass, but the small CPU delta fails the frozen A/A noise gate. The candidate
+is archived and production restored; global owner/removal qualification remains.
+
 [H486](present-pacing-normal-source-cost.486.md) adds x86/Rosetta original-image
 parity and source-qualified CPU decomposition. Cold PSO builds explain most
 prefetch lookup cost; DrawRun, not planning, owns the command body. Per-draw
