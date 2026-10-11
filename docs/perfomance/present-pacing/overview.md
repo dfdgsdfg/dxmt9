@@ -4,12 +4,37 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-10-07
+updated: 2026-10-09
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
+
+[H479](present-pacing-normal-capture.479.md) supplies the first authenticated
+Normal-action STALKER interval and original source/output readbacks. The queue
+remains Normal at construction/arm/freeze, revision zero; no Exact qualification
+gate is relaxed. Next is a bounded attachment-history checkpoint (touched,
+post-Present discard, defined contents) and Normal replay/original comparison,
+not an FPS claim or another policy timing matrix.
+
+[H478](present-pacing-default-capture-scope.478.md) establishes a prerequisite
+to the proposed fixed-input follow-up: current capture/replay qualification is
+intentionally stable-exact, not normal attachment policy. Late arming does not
+remove capture-policy prehistory, PE cache changes or Present reservation cuts.
+A default-tail removal experiment needs an explicit default-policy authority;
+another existing-profile capture cannot fill that gap or isolate Primary CPU.
+
+[H477](present-pacing-root-game.477.md) closes actual-game whole-root CPU
+attribution after four normal runs: the observer/default transfer and camera
+gates fail. In the first default tail observation Replay costs 28.713–28.909
+and Encode 29.579–29.778 ms/completed frame, but Primary's renderer portion
+remains unseparated and not all native threads are owner-qualified. Diagnostic
+root CPU of 22.0–22.5 ms/frame is not a default bound or a removable amount.
+Do not repeat this live all-call-clock method or infer savings from elapsed-time
+windows with different camera progress. Identity-matched late-input removal
+evidence remains necessary; no globally largest owner, FPS gain or promotion
+is established.
 
 [H455](present-pacing-completed-workload-visibility.455.md) breaks the equal-work
 assumption at three late observed camera states: default native draw counts

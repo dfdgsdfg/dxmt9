@@ -1,4 +1,5 @@
 #include "dxmt9/dxmt9_render_tape_action_profile.hpp"
+#include "dxmt9/render_tape_capture_policy.hpp"
 
 #include <array>
 #include <cstddef>
@@ -40,6 +41,36 @@ void checkSnapshot(const RenderTapeActionProfileSnapshot& observed,
             observed.currentProfile == (current ? 1u : 0u) &&
             observed.revision == changes && observed.valid == valid,
         "snapshot reports real immutable construction/current/change history");
+}
+
+void testCaptureActionSelection() {
+  using Mode = RenderTapeCaptureActionMode;
+  struct Case { std::string_view text; Mode selected; };
+  constexpr std::array cases{
+      Case{"", Mode::TapeExact}, Case{"tape-exact", Mode::TapeExact},
+      Case{"normal", Mode::Normal}, Case{"Normal", Mode::Invalid},
+      Case{"normal ", Mode::Invalid}, Case{"0", Mode::Invalid},
+      Case{"exact", Mode::Invalid}, Case{"bogus", Mode::Invalid},
+      Case{std::string_view{"normal\0junk", 11u}, Mode::Invalid},
+  };
+  for (const bool requested : {false, true}) {
+    for (const auto& item : cases) {
+      const auto selected = resolveRenderTapeCaptureActionMode(requested, item.text);
+      check(selected == (requested ? item.selected : Mode::Disabled),
+          "disabled ignores selector; enabled accepts only closed action names");
+      check(renderTapeCaptureActionModeEnabled(selected) ==
+              (requested && item.selected != Mode::Invalid),
+          "invalid selection cannot enable capture");
+      RenderTapeActionProfileHistory history;
+      check(history.initialize(selected == Mode::TapeExact),
+          "construction records the resolved policy, without a later setter");
+      checkSnapshot(history.snapshot(), selected == Mode::TapeExact,
+          selected == Mode::TapeExact, 0u, true);
+      check(renderTapeActionProfileStableExact(history.snapshot(), history.snapshot()) ==
+              (selected == Mode::TapeExact),
+          "normal, disabled and invalid selections never gain exact authority");
+    }
+  }
 }
 
 void testConstructionAndNormalDiagnosticEnable() {
@@ -203,6 +234,7 @@ void testExhaustiveSmallTransitionAndObservationTraces() {
 
 int main() {
   try {
+    testCaptureActionSelection();
     testConstructionAndNormalDiagnosticEnable();
     testAbaBeforeAndDuringTheCapturedInterval();
     testInitializationCannotFabricateOrRecoverHistory();

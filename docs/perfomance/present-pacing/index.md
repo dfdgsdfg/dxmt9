@@ -4,12 +4,29 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-10-08
+updated: 2026-10-09
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H479](present-pacing-normal-capture.479.md) validates actual Normal capture:
+one STALKER courtyard interval, truthful unchanged action history, V4/source
+inspection and original output bytes. Normal replay remains unqualified;
+initial attachment-history restoration is the next bounded gap.
+
+[H478](present-pacing-default-capture-scope.478.md) checks the proposed
+fixed-tail alternative: existing Render Tape enables exact attachment policy
+from construction and its qualified CPU/GPU lanes reject normal-policy input.
+Two focused rejection tests pass. No new capture is launched as false default
+evidence; default-policy capture authority and the Primary split remain open.
+
+[H477](present-pacing-root-game.477.md) completes the finite actual-game
+whole-root CPU comparison, but rejects default transfer: Primary perturbation
+and camera drift exceed the frozen gates. Diagnostic root CPU is 22.0–22.5
+ms/completed frame, not a default cost or removable budget. The live all-call
+clock method is closed; largest default owner and removable CPU remain open.
 
 [H476](present-pacing-root-reader.476.md) qualifies a bounded ARM-host live
 reader against the PE32/PE64 scope writers. Coherent inactive endpoints avoid

@@ -1466,6 +1466,16 @@ void testProfileSelectionTruthTable() {
                 kRenderTapeProfileSequence &&
             dxmt9PeRenderTapeProfileFromText("bogus") == 0u,
         "capture profile selection accepts only explicit bounded names");
+  for (const bool requested : {false, true}) {
+    for (const std::string_view profile : {"", "frame-tape", "sequence-tape", "bogus"}) {
+      for (const std::string_view action : {"", "tape-exact", "normal", "Normal", "bogus"}) {
+        check(dxmt9PeRenderTapeCaptureEnabledFromText(requested, profile, action) ==
+                  (requested && profile != "bogus" &&
+                   (action.empty() || action == "tape-exact" || action == "normal")),
+            "PE capture independently closes interval and action-profile selectors");
+      }
+    }
+  }
 }
 
 std::vector<std::byte> recorderPresentChunk() {

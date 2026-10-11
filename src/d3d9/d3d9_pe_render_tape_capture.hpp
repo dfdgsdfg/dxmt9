@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_c_render_tape_capture.hpp"
+#include "dxmt9/render_tape_capture_policy.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -19,6 +20,14 @@ inline constexpr std::uint32_t dxmt9PeRenderTapeProfileFromText(
     return dxmt9::d3d9::kRenderTapeProfileSequence;
   }
   return 0u;
+}
+
+inline constexpr bool dxmt9PeRenderTapeCaptureEnabledFromText(
+    bool requested, std::string_view profile,
+    std::string_view actionProfile) noexcept {
+  return dxmt9::renderTapeCaptureActionModeEnabled(
+             dxmt9::resolveRenderTapeCaptureActionMode(requested, actionProfile)) &&
+      dxmt9PeRenderTapeProfileFromText(profile) != 0u;
 }
 
 // This is deliberately a pure transform so the capture policy can be tested

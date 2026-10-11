@@ -923,8 +923,9 @@ used only after separately authenticating the R-HARN-REPLAY-7.21
 `identity.bin`; without it, the canonical event ordinal plus record index is
 the only admitted locator and carries no production source identity.
 
-**R-HARN-REPLAY-7.18** Production capture and production-provider replay use
-one tape-exact attachment-action policy. While either operation is active, an
+**R-HARN-REPLAY-7.18** TapeExact-qualified production capture and
+production-provider replay use one tape-exact attachment-action policy. While
+either operation is active, an
 attachment restored by bootstrap or resource mutation must load its preserved
 contents on first binding unless an explicit Clear or post-Present discard has
 higher precedence, and a later serialized command event must not observe a
@@ -937,6 +938,10 @@ diagnostic-only and inactive when Render Tape capture or provider replay is
 not selected. Deterministic equality between two fresh replay processes is a
 required intermediate gate, but promotion still requires equality with the
 captured `PresentComplete` digest.
+
+The separately selected Normal-action capture diagnostic in
+R-HARN-REPLAY-9.19 is outside this qualification domain; it must not relax this
+contract or be passed off as an Exact-policy input.
 
 **R-HARN-REPLAY-7.19** Provider replay keeps exact SHA-256 equality as the
 primary output result. A frame-tape bundle that also carries the
@@ -1939,3 +1944,23 @@ actual identity and lifecycle phase. Queue-owned quarantined work is not
 completion, retirement or successful cleanup; cleanup evidence must remain
 incomplete until the corresponding owner is genuinely retired or torn down.
 No cleanup path may fabricate an acknowledgment for unsubmitted work.
+
+**R-HARN-REPLAY-9.19** Capture enablement and attachment-action selection must
+be independently selectable for a capture-only Normal diagnostic. With
+`DXMT9_RENDER_TAPE_CAPTURE` enabled, absent or empty
+`DXMT9_RENDER_TAPE_ACTION_PROFILE`, or explicit `tape-exact`, must preserve
+the existing Exact policy from queue construction. Explicit `normal` must
+retain ordinary attachment actions from construction without toggling Exact at
+arm or freeze. Unknown action names must disable PE capture and must not enable
+the Unix Exact override. When capture is disabled the selector must have no
+effect. PE and Unix must use the same closed selection predicate.
+
+Normal capture must publish the actual queue-observed action history using the
+existing authenticated witness, not an environment-derived attestation. Existing
+seed budgets, missing-content, open-query-cut, generation, publication and
+failure gates must remain unchanged. Successful byte readback alone must not be
+claimed as proof of semantically defined attachment contents. A Normal bundle
+may be inspected, but must remain ineligible for the existing stable-Exact
+CPU/GPU policy qualification. It grants neither Normal replay authority nor
+unperturbed application timing. No `.gputrace` replay time may be attributed to
+dxmt9 Replay/Encode CPU work.

@@ -218,7 +218,10 @@ inline bool dxmt9PeRenderTapeCaptureEnabled() {
         [] {
             const auto profile =
                 dxmt9::util::getenvString("DXMT9_RENDER_TAPE_PROFILE");
-            return dxmt9PeRenderTapeProfileFromText(profile) != 0u;
+            const auto actionProfile =
+                dxmt9::util::getenvString("DXMT9_RENDER_TAPE_ACTION_PROFILE");
+            return dxmt9PeRenderTapeCaptureEnabledFromText(
+                true, profile, actionProfile);
         }();
     return enabled;
 }

@@ -9,6 +9,42 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Normal-action capture diagnostic — partial
+
+R-HARN-REPLAY-9.19 adds explicit capture-only `normal` action selection using a
+shared PE/Unix pure predicate; default capture remains `tape-exact`. Existing
+Normal witness transfer, publication and inspection are reused and stable-Exact
+qualification remains closed. No new command/identity ABI or generic GPU
+snapshot format is introduced.
+
+The selector/PE gate truth tables, real queue-construction environment cases,
+action-history, transfer, binding, capture and publisher tests pass on native
+ARM64 and x86_64. The CPU/GPU launcher suites retain rejection-before-child for
+Normal policy qualification. Both PE architectures and the x86_64 Unix provider
+build; its install-name audit passes. All 230 existing TLA configurations pass
+their expected safety/progress/counterexample outcomes. These are regression
+and selection/publication safety checks, not a successful game capture or a
+Normal GPU replay oracle.
+
+The H479 STALKER Day diagnostic now publishes one Normal-action frame interval:
+construction/arm/freeze are Normal with revisions zero, and native event/V4
+identity/topology inspection passes. The bundle has 85 PE chunks, 3,640 wire
+records and three published queue sources. Source/output readbacks are retained
+and digest-equal; this is original Present evidence, not replay equivalence.
+The actual Normal bundle remains rejected by the stable-Exact CPU authenticator
+before child execution. Both diagnostic game runs exit successfully and shared
+Wine images are restored; the first run selected an unreached capture boundary.
+See [H479](../../docs/perfomance/present-pacing/present-pacing-normal-capture.479.md).
+
+Normal replay and replay-versus-original GPU validation remain unqualified.
+Normal replay still needs the selected workload's initial touched/discard and
+content-validity evidence; no provider replay gate has been relaxed. Same-scene
+game/source identity, passive timing, and largest/removable CPU-owner attribution
+are not supplied by this capture mode. Capture drains and mirror reservations
+remain observable perturbations. Inspect the selected Normal workload before
+expanding checkpoint coverage; use `.gputrace` for GPU-side localization, not as
+a dxmt9 CPU-policy replay substitute.
+
 ### Qualification scope: cold conditional policy experiments
 
 **Production promotion exclusion:** H447 repairs the depth/stencil publication-cut

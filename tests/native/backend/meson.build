@@ -1952,6 +1952,23 @@ foreach spec : ['render_tape_runtime_identity_v3', 'render_tape_runtime_identity
       dependencies: spec_dependencies,
       link_args: dxmt9_test_link_args)
   test(target_name, target, env: dxmt9_native_test_env)
+  if spec == 'render_tape_runtime_binding_v4'
+    foreach mode : [
+      ['default', '1', '', 'tape-exact'],
+      ['explicit-exact', '1', 'tape-exact', 'tape-exact'],
+      ['normal', '1', 'normal', 'normal'],
+      ['invalid', '1', 'bogus', 'normal'],
+      ['disabled', '0', 'tape-exact', 'normal'],
+    ]
+      test('dxmt9-render-tape-construction-' + mode[0], target,
+           args: ['--construction-profile', mode[3]],
+           env: dxmt9_native_test_env_vars + [
+             'DXMT9_PREWARM=full',
+             'DXMT9_RENDER_TAPE_CAPTURE=' + mode[1],
+             'DXMT9_RENDER_TAPE_ACTION_PROFILE=' + mode[2],
+           ])
+    endforeach
+  endif
 endforeach
 
 # Second, bounded CPU-general admission over an already-built general-provider

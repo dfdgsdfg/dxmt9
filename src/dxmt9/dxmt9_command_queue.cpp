@@ -9,6 +9,7 @@
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9/render_tape_capture_policy.hpp"
 #include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_debug_alloc_guard.hpp"
 #include "dxmt9_debug_trace.hpp"
@@ -416,12 +417,20 @@ std::atomic_uint64_t gCommandBufferLabelCounter{0};
 }
 
 
-bool renderTapeCaptureEnabled() {
-  static const bool enabled = [] {
+RenderTapeCaptureActionMode renderTapeCaptureActionMode() {
+  static const auto mode = [] {
     const char* env = std::getenv("DXMT9_RENDER_TAPE_CAPTURE");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    const bool requested = env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    if (!requested) return RenderTapeCaptureActionMode::Disabled;
+    const char* profile = std::getenv("DXMT9_RENDER_TAPE_ACTION_PROFILE");
+    const auto selected = resolveRenderTapeCaptureActionMode(
+        requested, profile ? profile : "");
+    if (selected == RenderTapeCaptureActionMode::Invalid)
+      util::logf(util::LogLevel::Warn, "dxmt9-queue",
+                 "invalid Render Tape action profile; capture disabled, normal actions retained");
+    return selected;
   }();
-  return enabled;
+  return mode;
 }
 
 bool encodeSlotPsoPrefetchDisabled() {
@@ -675,7 +684,12 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
       shaderArchive_(archive_prewarm::resolveMode() == archive_prewarm::Mode::Full
                          ? shaders::Archive()
                          : shaders::Archive(device, resolveShaderCachePath(device))) {
-  initializeRenderTapeActionProfile(renderTapeCaptureEnabled());
+  const auto captureActionMode = renderTapeCaptureActionMode();
+  initializeRenderTapeActionProfile(
+      captureActionMode == RenderTapeCaptureActionMode::TapeExact);
+  if (captureActionMode == RenderTapeCaptureActionMode::Normal)
+    util::logf(util::LogLevel::Info, "dxmt9-queue",
+               "Render Tape normal-action capture: diagnostic only, replay unqualified");
   if (!render::encodeExecutionTopologyValid(encodeExecutionTopology_) ||
       !render::encodeExecutionTopologyImplemented(
           encodeExecutionTopology_)) {

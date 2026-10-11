@@ -1376,6 +1376,39 @@ the reducer observations to the serialized credential and byte-digest joins.
 Existing queue/lifecycle TLA models remain regression gates, not a proof of
 GPU pixels or of unimplemented candidate policy mappings.
 
+### Normal-action capture diagnostic
+
+`DXMT9_RENDER_TAPE_ACTION_PROFILE=normal` with capture enabled selects ordinary
+attachment actions at queue construction. The shared pure selector in
+`include/dxmt9/render_tape_capture_policy.hpp` is consumed by the PE capture gate
+and Unix queue constructor. No per-draw flag, new wire record, action-history
+setter at arm, or qualification bypass is introduced. Empty/unset or
+`tape-exact` preserves historical capture behavior; unknown names disable PE
+capture and retain Normal Unix actions. The existing interval profile remains
+independent (`frame-tape` / `sequence-tape`).
+
+The real construction/arm/freeze witness, not the requested mode, owns artifact
+provenance. The existing publisher accepts Normal observations and writes
+`action_profile_stable_exact=false`; inspect authenticates them and existing
+policy launchers reject them. Readbacks, seed drains, surface-handle-cache
+exclusion and Present mirror reservation remain capture perturbations. Normal
+refers only to attachment policy, not transparent timing or unchanged publication
+topology. No new physical-content validity authority follows from snapshot bytes.
+
+Normal replay requires a separate bounded initial-state contract: seed presence
+is not evidence of an original touched attachment, and replay seed upload must
+not invent or erase the original post-Present discard permission. The current
+provider's forced-Exact policy, touched restoration and Exact-only backbuffer
+seed completion must not be reused as Normal qualification. Use `.gputrace`
+for physical pass/action inspection; it cannot re-execute changed dxmt9 CPU
+planning or encoding. Existing original readback comparison remains independent.
+
+Verification uses the shared selector truth table, exhaustive action-history
+reducer traces, actual queue construction, Normal witness transfer/publication,
+and rejection-before-child launcher tests. No worker ordering, resource lifetime
+or completion transition changes in this selection-only slice; existing TLA
+models are regression evidence, not a Normal GPU replay proof.
+
 The production PE capture-Present adapter has an additional causal boundary:
 before stamping/committing the selected Present raw, mirror reservation joins
 software replay and flushes the preceding ordinary writer. Failed reservation

@@ -736,6 +736,25 @@ class ControlledCpuSemanticsTest(unittest.TestCase):
         self.assertIn("byte cap", receipt["failure"])
         self.assertGreater((output / "semantics.stdout").stat().st_size, 8)
 
+    def test_normal_action_capture_is_inspectable_but_never_cpu_qualified(self):
+        path = self.bundle / "action_profile.bin"
+        values = list(self.shared.ACTION_PROFILE_HEADER.unpack(path.read_bytes()))
+        values[5:8] = [0, 0, 0]  # Observed Normal construction, arm and freeze.
+        raw = self.shared.ACTION_PROFILE_HEADER.pack(*values)
+        path.write_bytes(raw)
+        self.manifest["components"]["action_profile"]["sha256"] = hashlib.sha256(raw).hexdigest()
+        self.manifest["scope"]["action_profile_stable_exact"] = False
+        self.save_manifest()
+        observed = self.shared.load_action_profile(self.bundle, self.manifest)
+        self.assertEqual(observed["evidence"], "queue-observed")
+        self.assertEqual(observed["witness"]["construction_profile"], 0)
+        self.assertFalse(observed["stable_exact"])
+        code, receipt, calls, _, _ = self.run_case(self.native())
+        self.assertEqual(code, 1)
+        self.assertFalse(receipt["accepted"])
+        self.assertEqual(calls, [])
+        self.assertIn("stable exact", receipt["failure"])
+
     def test_input_authentication_and_action_witness_reject_before_child(self):
         original = copy.deepcopy(self.manifest)
         response = self.native()

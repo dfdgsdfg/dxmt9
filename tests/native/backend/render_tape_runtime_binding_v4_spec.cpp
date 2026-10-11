@@ -527,8 +527,31 @@ void retainedQueueRetirement() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 3 && std::strcmp(argv[1], "--construction-profile") == 0) {
+      // Exercise the real environment-to-construction path. A null Metal
+      // device returns after policy initialization, before starting workers.
+      // The caller pins PREWARM=full so even archive loading is deferred.
+      check(std::strcmp(argv[2], "normal") == 0 ||
+                std::strcmp(argv[2], "tape-exact") == 0,
+          "construction test requires a closed expected profile");
+      CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, core::BackendLimits{}, false);
+      const auto snapshot = queue.renderTapeActionProfileSnapshot();
+      const bool exact = std::strcmp(argv[2], "tape-exact") == 0;
+      check(snapshot.valid && snapshot.revision == 0u &&
+                snapshot.constructionProfile == (exact ? 1u : 0u) &&
+                snapshot.currentProfile == snapshot.constructionProfile &&
+                queue.renderTapeExactAttachmentPreservation() == exact,
+          "actual queue construction selects actions without a post-construction transition");
+      RenderTapeActionWitnessV1 witness;
+      check(renderTapeRuntimeBindingV4BuildActionWitness(
+                snapshot, snapshot, 1u, 2u, 3u, witness) &&
+                renderTapeActionWitnessV1StableExact(witness) == exact,
+          "actual construction observation yields truthful witness authority");
+      return 0;
+    }
+    check(argc == 1, "unsupported runtime binding test arguments");
     bindingContract();
     actionWitnessHistoryMapping();
     actionWitnessUsesActualQueueHistory();
