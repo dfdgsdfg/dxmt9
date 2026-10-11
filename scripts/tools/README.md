@@ -630,6 +630,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   partition: armed interval, original raw envelope, observed replay call and
   readback/oracle. Requires the expected raw count and complete nested native
   clock scopes; not production worker CPU or a removable-cost estimate.
+  `--require-provider` additionally partitions observed provider calls into
+  preparation, planned replay, settlement and outer-call residual without
+  attributing embedded V4 qualification to pure renderer work.
 - `analyze_cpu_supply.py` — strict V2 ordinary-worker supply trace analysis:
   native thread CPU vs elapsed scopes, empty/reserved/ready FIFO residence,
   publication-to-encode delay and explicitly conditional fixed-arrival replay

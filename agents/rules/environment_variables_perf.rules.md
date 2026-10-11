@@ -145,6 +145,14 @@ requires complete same-thread nested coverage and the expected raw count.
 These are harness caller CPU scopes, not production ReplayOffloadWorker CPU;
 they include V4 qualification work and must not be called pure renderer cost.
 No per-record observer callback, new drain or renderer policy is added.
+Observed V4 provider calls also emit four `ProviderReplayPhase` endpoints:
+entry, prepared dispatch, replay return and successful settlement. The key is
+the observer context plus original event ordinal, not the raw/queue sequence.
+`analyze_prepared_replay_cpu.py --require-provider` requires every raw call to
+enclose exactly one complete same-thread phase set. Preparation includes owned
+raw/capture/ledger admission; planned replay still includes V4 hooks; settlement
+includes publication and snapshot/coverage. The enclosing-call residual includes
+entry import and resource/scope destruction. Missing phases reject, never zero-fill.
 `analyze_publication_progress.py` partitions these with source preparation,
 context preparation and return/relock residuals. Missing endpoints in older
 traces or unsupported Arena/session/lookahead paths are unqualified, not zero

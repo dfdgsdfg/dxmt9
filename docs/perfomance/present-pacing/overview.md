@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H490](present-pacing-provider-stack.490.md) confirms capture/identity hooks
+inside the observed planned-replay envelope, including command-emission record
+lookup. Wall-stack counts are not CPU proportions. A distinct product-path
+candidate is repeated complete Slot payload validation at admission/reserve/
+prepare; no removal, savings or default-game dominance is yet established.
+
+[H489](present-pacing-provider-phases.489.md) places about 94% of the observed
+provider-call CPU inside planned replay, including V4 hooks. Raw preparation
+is about 1.32 ms and settlement 1.37–1.47 ms against 51.1–51.6 ms planned replay.
+All three original-input image oracles pass. This weakens raw setup/settlement
+as the next removal target, but does not resolve capture-hook cost or global
+default-game CPU ownership.
+
 [H488](present-pacing-prepared-replay-cpu.488.md) measures the prepared caller,
 which replays synchronously rather than through ReplayOffloadWorker. Its 92
 observed replay calls cost about 52.1 ms CPU, inside 59.8 ms raw envelopes;

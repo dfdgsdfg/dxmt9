@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H490](present-pacing-provider-stack.490.md) finds capture qualification in
+26 of 52 planned-replay wall-stack observations; this is not CPU-share evidence.
+Repeated full-Slot payload validation is a separate product candidate requiring
+measurement and a validated-prefix contract before any checks are removed.
+
+[H489](present-pacing-provider-phases.489.md) splits original-input provider CPU:
+about 1.32 ms preparation, 51.1–51.6 ms planned replay, 1.37–1.47 ms settlement.
+The planned call includes V4 hooks; raw setup/settlement are not its main cost,
+and no exclusive renderer or default-game removal budget is established.
+
 [H488](present-pacing-prepared-replay-cpu.488.md) adds strict same-thread caller
 CPU scopes for the original V4 interval, raws and readback. Replay calls are
 about 52.1 ms CPU; interval services and qualification remain substantial and

@@ -117,3 +117,39 @@ original mutation service before assigning a default worker budget. The
 global decision also still needs Primary's dxmt9 share and the unnamed large
 native thread from H477. H477's rejected live all-call-clock method remains
 closed; this diagnostic is not a replacement default-transfer proof.
+
+## Follow-up boundary audit
+
+Static inspection identifies concrete qualification work to keep separate
+from the renderer before another optimization experiment:
+
+- `src/d3d9/device_c_chunk_replay.cpp`,
+  `ProviderReplayObservationV4State::observe`, admits each callback and then
+  requalifies its result. `beforeRecord`, `beforeDispatch` and
+  `recordDispatched` all use it. The underlying execution callbacks additionally
+  call `RenderTapeExecutionV4::rootBound`; disabling the optional prepared
+  observer does not disable this original V4 qualification.
+- `src/d3d9/device_c_render_tape_execution_v4.cpp`, `rawSettled`, takes an
+  actual identity/topology snapshot and checks raw coverage. `closeEvent`
+  takes another snapshot whenever armed, including for non-command events.
+  The former is inside H488's replay-call scope; the latter is outside it.
+- `src/d3d9/device_c_render_tape_runtime_identity_v4.cpp`, `snapshot` and
+  `copyProvenanceLocked`, copy accumulated provenance under the root mutex;
+  the topology snapshot is also included. These are not merely cursor reads.
+  Repeated cumulative snapshots are a harness materialization candidate, not
+  evidence of an equivalent production-game cost.
+
+No exclusive CPU time is assigned to these operations by H488. In particular,
+the 58.6–58.8 ms interval residual also contains real mutation/definition/control
+work and cannot be labelled snapshot overhead. Similarly, `replayPlannedChunk`
+still invokes V4 hooks, so bracketing only that function would not produce a
+capture-free renderer cost. Callback removal would invalidate the current
+identity/coverage oracle and is not an admissible performance shortcut.
+
+The next bounded diagnostic should first separate raw preparation, planned
+replay and settlement at raw boundaries, preserving all qualifications. Any
+subsequent snapshot experiment must compare exact identity/topology receipts
+and readbacks as well as CPU, and must not claim a default-game saving from a
+harness-only reduction. Per-record native-clock instrumentation remains out of
+scope; live Primary/native-thread attribution is still required for the
+global bottleneck decision.

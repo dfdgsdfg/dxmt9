@@ -67,6 +67,43 @@ class PreparedReplayCpu(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe.analyze(self.meta,rows,1)
 
+    def provider_rows(self):
+        return [dict(kind='provider_replay_phase', owner=3, tid=2, id=42,
+            value=i, wall_ns=t*1000, cpu_ns=t*500)
+            for i,t in enumerate((230,250,340,370))]
+
+    def test_provider_partition(self):
+        p=probe.analyze(self.meta,self.rows+self.provider_rows(),1,True)['provider']
+        self.assertEqual(p['preparation_cpu_ms'],0.01)
+        self.assertEqual(p['planned_replay_cpu_ms'],0.045)
+        self.assertEqual(p['settlement_cpu_ms'],0.015)
+        self.assertEqual(p['call_boundary_residual_cpu_ms'],0.01)
+        self.assertEqual(p['raws'][0]['event_ordinal'],42)
+
+    def test_provider_missing_endpoints(self):
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,self.rows,1,True)
+        providers=self.provider_rows()
+        for i in range(4):
+            with self.subTest(i=i),self.assertRaises(ValueError):
+                probe.analyze(self.meta,self.rows+providers[:i]+providers[i+1:],1)
+
+    def test_provider_bad_identity_clock_or_thread(self):
+        for field,value in (('owner',9),('id',0),('tid',7),('value',9),
+                ('wall_ns',210000),('cpu_ns',0)):
+            providers=self.provider_rows()
+            providers[1][field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                probe.analyze(self.meta,self.rows+providers,1,True)
+
+    def test_provider_duplicate_or_outside(self):
+        providers=self.provider_rows()
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,self.rows+providers+[providers[0]],1,True)
+        providers[-1].update(wall_ns=390000,cpu_ns=195000)
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,self.rows+providers,1,True)
+
 
 if __name__=='__main__':
     unittest.main()

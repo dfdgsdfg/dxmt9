@@ -26,6 +26,7 @@
 // upperDevice shared_ptr that the chunk importer's Phase 4-B path
 // hands the per-chunk retention list to.
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -3543,6 +3544,15 @@ int32_t runProviderReplay(
     const dxmt9::d3d9::ProviderReplayRecordConsumer* recordConsumer = nullptr,
     const dxmt9::d3d9::ProviderReplayObservationV4* observationV4 = nullptr,
     dxmt9::d3d9::ProviderReplayObservationV4Result* observationResultV4 = nullptr) noexcept {
+  // Cold observed-provider boundary only. This is not a per-record clock or
+  // production offload scope. Rejected/throwing calls deliberately lack the
+  // complete phase set and cannot be priced as successful replay.
+  const bool traceCpu = observationV4 && dxmt9::supply::enabled();
+  const auto cpuPhase = [&](std::uint64_t phase) noexcept {
+    if (traceCpu) dxmt9::supply::record(dxmt9::supply::Event::ProviderReplayPhase,
+        observationV4->context, observationV4->eventOrdinal, phase);
+  };
+  cpuPhase(0u);
   const bool v4Selected = observationV4 || runtimeReplayV4Selected(device);
   dxmt9::d3d9::RawCommandChunk raw;
   ScopedRetainedWrapperRelease retainedRelease(raw);
@@ -3668,6 +3678,7 @@ int32_t runProviderReplay(
     ScopedProviderReplayObservationV4 observationScope(
         observationResultV4 && observationResultV4->captureAccepted ? &observationStateV4 : nullptr);
     if (recordConsumer) markLegacyResources(device, raw);
+    cpuPhase(1u);
     const int32_t hr = recordConsumer
         ? replayCompatibilityChunk(device, raw, false,
                std::any_of(imported.records.begin(), imported.records.end(),
@@ -3693,6 +3704,7 @@ int32_t runProviderReplay(
               /*reportOffloadReplayStage=*/false,
               /*allowDirectSlot=*/
                   policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
+    cpuPhase(2u);
     if (!failed(hr)) {
       if (!sourceCutDriver && !sourceConsumer && !recordConsumer) {
         maybePublishEarlyCpuReadyPrefix(device, raw);
@@ -3743,6 +3755,7 @@ int32_t runProviderReplay(
             dxmt9::resources::mutation_observer::BarrierReason::Failure);
       }
     }
+    if (!failed(hr)) cpuPhase(3u);
     return hr;
   } catch (const std::bad_alloc&) {
     if (ledgerPublished) device->replayDrainLedger.poison();

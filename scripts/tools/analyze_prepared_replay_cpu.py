@@ -9,7 +9,54 @@ import analyze_cpu_supply as supply
 KINDS = ('interval', 'raw_envelope', 'raw_replay_call', 'readback_oracle')
 
 
-def analyze(meta, rows, expected_raw_count):
+def provider_partition(rows, calls, required):
+    groups = {}
+    for r in rows:
+        if r['kind'] != 'provider_replay_phase':
+            continue
+        key = (r['owner'], r['id'])
+        phases = groups.setdefault(key, {})
+        if r['value'] not in range(4) or r['value'] in phases:
+            raise ValueError('unknown/duplicate provider phase')
+        phases[r['value']] = r
+    if not groups:
+        if required:
+            raise ValueError('missing provider phases')
+        return None
+    if len(groups) != len(calls) or len({owner for owner, _ in groups}) != 1:
+        raise ValueError('provider owner/count mismatch')
+    joined, totals = {}, [0, 0, 0]
+    for (_, event), phases in groups.items():
+        if set(phases) != set(range(4)) or event <= 0:
+            raise ValueError('incomplete provider phases/identity')
+        points = [phases[i] for i in range(4)]
+        a, b = points[0], points[-1]
+        matches = [c for c in calls if c['tid'] == a['tid'] and
+            c['begin'] <= a['wall_ns'] <= b['wall_ns'] <= c['end'] and
+            c['cpu_begin'] <= a['cpu_ns'] <= b['cpu_ns'] <= c['cpu_end']]
+        if len(matches) != 1 or matches[0]['id'] in joined:
+            raise ValueError('provider does not uniquely nest in raw replay call')
+        deltas = []
+        for p, q in zip(points, points[1:]):
+            wall, cpu = q['wall_ns']-p['wall_ns'], q['cpu_ns']-p['cpu_ns']
+            if p['tid'] != q['tid'] or min(wall, cpu) < 0 or cpu > wall+100000:
+                raise ValueError('invalid provider clocks/thread/order')
+            deltas.append(cpu)
+        joined[matches[0]['id']] = dict(event_ordinal=event,
+            preparation_cpu_ms=deltas[0]/1e6, planned_replay_cpu_ms=deltas[1]/1e6,
+            settlement_cpu_ms=deltas[2]/1e6)
+        totals = [x+y for x,y in zip(totals,deltas)]
+    residual = sum(c['cpu_ns'] for c in calls)-sum(totals)
+    if residual < 0:
+        raise ValueError('negative provider residual')
+    return dict(calls=len(joined), preparation_cpu_ms=totals[0]/1e6,
+        planned_replay_cpu_ms=totals[1]/1e6, settlement_cpu_ms=totals[2]/1e6,
+        call_boundary_residual_cpu_ms=residual/1e6,
+        raws=[dict(id=i, **joined[i]) for i in sorted(joined)],
+        qualifications='Planned replay still includes V4 per-record qualification. Settlement includes publication, ACK and snapshot/coverage. Boundary residual includes import and scope/resource destruction. No exclusive renderer or removable-cost claim.')
+
+
+def analyze(meta, rows, expected_raw_count, require_provider=False):
     if (meta.get('closed'), meta.get('overflow'), meta.get('incomplete'),
             meta.get('cpu_clock')) != (1, 0, 0, 1):
         raise ValueError('incomplete/unqualified trace')
@@ -75,6 +122,7 @@ def analyze(meta, rows, expected_raw_count):
     if envelope_cpu < call_cpu or other_cpu < 0:
         raise ValueError('negative prepared residual')
     return dict(scope_complete=True, owner=root['owner'], tid=root['tid'], phases=totals,
+        provider=provider_partition(rows, calls, require_provider),
         raw_envelope_residual_cpu_ms=(envelope_cpu-call_cpu)/1e6,
         interval_other_cpu_ms=other_cpu/1e6,
         interval_excluding_readback_cpu_ms=(root['cpu_ns']-readbacks[0]['cpu_ns'])/1e6,
@@ -87,9 +135,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('trace', type=Path)
     p.add_argument('--expected-raw-count', required=True, type=int)
+    p.add_argument('--require-provider', action='store_true')
     args=p.parse_args()
     meta,rows=supply.load(args.trace)
-    print(json.dumps(analyze(meta,rows,args.expected_raw_count),indent=2))
+    print(json.dumps(analyze(meta,rows,args.expected_raw_count,args.require_provider),indent=2))
 
 
 if __name__=='__main__':
