@@ -66,6 +66,7 @@ normal_models=(
   RenderTapeIdentitySegments
   RenderTapeSingletonArenaRetirement
   RenderTapeNormalHistoryRestore
+  RenderTapeNormalSetup
   RenderTapeParallelJoin
   SegmentedTransportV1
   ReplayEmissionPlanIslands
@@ -79,10 +80,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=67
+expected_normal_count=68
 expected_progress_count=6
-expected_counterexample_count=160
-expected_cfg_count=233
+expected_counterexample_count=163
+expected_cfg_count=237
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -224,6 +225,9 @@ counterexample_models=(
   "RenderTapeSingletonArenaRetirement|.missing-transfer.counterexample|Temporal properties were violated"
   "RenderTapeNormalHistoryRestore|.stale-boundary.counterexample|Invariant SafeCommit is violated"
   "RenderTapeNormalHistoryRestore|.partial-mutation.counterexample|Invariant AtomicRestore is violated"
+  "RenderTapeNormalSetup|.temporary-alias.counterexample|Invariant StableAliasIdentity is violated"
+  "RenderTapeNormalSetup|.late-seed.counterexample|Invariant OriginalHistory is violated"
+  "RenderTapeNormalSetup|.early-arm.counterexample|Invariant ArmAfterRestoration is violated"
   # The historical R15 shadow planner dropped the active render seed after
   # retaining and restoring a Ready head, so it could never prove A|B|A.
   "CpuReadyActiveHeadLookahead|.seedless.counterexample|Invariant ActiveSeedPreserved is violated"

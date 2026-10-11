@@ -9,18 +9,41 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Normal provider diagnostic — partial qualification
+
+R-HARN-REPLAY-9.23 is implemented in immutable V4 preparation and the private
+provider. Original source-bound action/history companions, actual Normal queue
+construction, retained alias transfer and local checkpoint-before-restore-before-
+arm are enforced. Stable-Exact launchers and all independent content/timing
+qualification flags remain unchanged.
+
+H485 executes the original H481 input in two fresh native Metal processes.
+Both restore all 16 required surfaces, prepare/activate 12 identical retained
+aliases, create/release 779 wrappers, and map all three original source cuts.
+Both source and output readbacks match the original 3,686,400 bytes exactly;
+GPU command-buffer errors are zero. The initial attempt without the explicit
+PE Present-reservation producer contract correctly fails publication matching;
+the successful attempts supply the existing contract, not a relaxed comparator.
+
+Native and x86_64 focused suites pass 5/5 each; all 237 TLA configurations meet
+their expected outcomes. This qualifies the bounded H481 execution/readback
+diagnostic, not every resource's first-read content authority, full-tail
+representativeness, Rosetta/Wine replay parity, policy timing or CPU removal.
+The private runner is retained as evidence, not a general Normal CLI.
+See [H485](../../docs/perfomance/present-pacing/present-pacing-normal-provider.485.md).
+
 ### Normal produced-parent setup metadata — partial
 
 R-HARN-REPLAY-9.22 is implemented as an explicit bounded identity list in
 `buildRenderTapeInitialSetupV4`. Whole-source authentication, exact late
 generation selection, zero-content allocation, independent capacity and
 transactional failure are covered by native color/DF24 fixtures. The empty
-request leaves historical setup unchanged; no production caller enables the
-new selection yet. On H481, the actual resource-free builder gains one DF24
+request leaves historical setup unchanged. H484's resource-free builder gains one DF24
 parent and one alias (647 owners, 12 aliases) while preserving all 5,044 seed
-operations and original semantic actions. Wrapper precreation/retention and
-Normal provider execution remain unimplemented; this is not GPU or CPU timing
-qualification. See [H484](../../docs/perfomance/present-pacing/present-pacing-normal-produced-setup.484.md).
+operations and original semantic actions. H485's private Normal provider now
+supplies this selection and retains the actual wrappers; production rendering
+defaults and timing qualification are unchanged. See
+[H484](../../docs/perfomance/present-pacing/present-pacing-normal-produced-setup.484.md).
 
 ### Normal attachment-history restoration — partial
 
@@ -37,11 +60,10 @@ GPU contents. They cover alias/generation/capacity shape, local prefix and
 terminal/build rejection, one-use consumption and allocation rollback. The
 bounded `RenderTapeNormalHistoryRestore` model distinguishes stale-prefix and
 partial-mutation bugs. These layers do not prove physical GPU aliasing, load
-actions or pixels. The existing provider and stable-Exact launcher are not
-connected to this primitive: authenticated Normal provider admission, all
-required initial owners (including lazy aliases), first-read content authority
-and original-versus-replay GPU evidence remain open. Default-tail CPU ownership
-and removable cost are still unqualified.
+actions or pixels. H485 connects the private Normal provider and supplies
+bounded original-versus-replay GPU evidence; the stable-Exact launcher remains
+unchanged. First-read content authority, default-tail CPU ownership and
+removable cost are still unqualified.
 
 Focused tests pass 3/3 native and 4/4 x86_64 including install-name audit;
 Unix and both PE builds complete. All 233 TLA configurations meet expected

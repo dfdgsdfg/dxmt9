@@ -688,6 +688,14 @@ struct RenderTapeIntervalEvidence {
   FrameTapeValidityEvidence validity{};
 };
 
+// Cold diagnostic only. No timing/policy/content qualification follows from
+// successful history restoration or even byte-equal output.
+struct RenderTapeNormalDiagnosticEvidence {
+  bool requested = false, admitted = false, historyRestored = false;
+  bool unchangedNormal = false;
+  std::uint32_t requiredSurfaces = 0u, aliasesPrepared = 0u, aliasesActivated = 0u;
+};
+
 struct FrameTapeReplayResult {
   FrameTapeReplayStatus status = FrameTapeReplayStatus::InvalidTape;
   std::uint32_t failedEventIndex = 0xffffffffu;
@@ -721,6 +729,7 @@ struct FrameTapeReplayResult {
   RenderTapeExactDiagnosticV4Evidence exactDiagnosticV4{};
   RenderTapePreparedObserverV4Evidence preparedObserverV4{};
   RenderTapeQueryReplayEvidence queryReplay{};
+  RenderTapeNormalDiagnosticEvidence normalDiagnostic{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;
@@ -749,6 +758,11 @@ struct RenderTapePreparedV4PreparationOptions {
       RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic;
   RenderTapeExecutionV4ProducerContract producerContract =
       RenderTapeExecutionV4ProducerContract::None;
+  // Private Normal diagnostic. Both companion components and their independent
+  // manifest digests are mandatory when any of these fields is supplied.
+  std::span<const std::byte> normalActionProfile{};
+  std::span<const std::byte> normalAttachmentHistory{};
+  RenderTapeDigest expectedNormalActionDigest{}, expectedNormalHistoryDigest{};
 };
 
 // Owns a validated tape, all referenced blob bytes, and immutable preparation.

@@ -11,10 +11,16 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H485](present-pacing-normal-provider.485.md) integrates retained Normal setup
+and history restoration. Two fresh native Metal replays of H481 reproduce the
+original source/output bytes exactly, with three source cuts and balanced
+779-wrapper ownership. First-read content authority, representative default-tail
+CPU attribution and removable cost remain open; this is not timing promotion.
+
 [H484](present-pacing-normal-produced-setup.484.md) closes the missing DF24
 parent's metadata admission with an explicit allocation-only request. The
 same input plans 647 parents and 12 late aliases, with unchanged seeds and
-semantic cuts; actual retained-wrapper/provider integration is still required.
+semantic cuts; H485 supplies the subsequent retained-wrapper/provider evidence.
 
 [H483](present-pacing-normal-setup-closure.483.md) narrows Normal integration
 to 12 retained late wrappers, one unstaged produced DF24 parent, and independent

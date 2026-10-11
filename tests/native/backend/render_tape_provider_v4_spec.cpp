@@ -1,6 +1,9 @@
 #include "device_c_render_tape_provider.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
 #include "render_tape_cpu_destroy_fixture.hpp"
+#include "device_c_render_tape_action_profile_component.hpp"
+#include "device_c_render_tape_identity_transfer_v4.hpp"
+#include "dxmt9/render_tape_attachment_history.hpp"
 
 #include <algorithm>
 #include <array>
@@ -871,6 +874,94 @@ void observerForwarding() {
   }
 }
 
+void normalPreparation() {
+  const auto fixture = makeFixture();
+  GeneralPreflightPlan general;
+  check(render_tape_runtime::buildGeneralReplayPlan(fixture.tape, fixture.references, general).complete(),
+      "Normal preparation uses the actual General parser");
+  CaptureSourceReplayPlanV4 source;
+  check(buildCaptureSourceReplayPlanV4(fixture.tape, general.catalogue, fixture.identity,
+      fixture.topology, source) == CaptureSourceReplayPlanV4Status::Valid, "Normal source pair authenticates");
+  const auto& h = source.identity().header;
+  RenderTapeActionProfileV1ComponentHeader action;
+  action.witness.evidence = static_cast<std::uint32_t>(RenderTapeActionWitnessEvidenceV1::QueueObserved);
+  action.witness.captureToken = h.captureToken;
+  action.witness.captureEpoch = h.captureEpoch;
+  action.witness.queue = h.queue;
+  action.eventsBytes = fixture.tape.size(); action.identityBytes = fixture.identity.size();
+  action.executionTopologyBytes = fixture.topology.size();
+  action.eventsDigest = RenderTapeCaptureSession::sha256(fixture.tape);
+  action.identityDigest = RenderTapeCaptureSession::sha256(fixture.identity);
+  action.executionTopologyDigest = RenderTapeCaptureSession::sha256(fixture.topology);
+  RenderTapeAttachmentHistoryHeader header{.token = h.captureToken, .epoch = h.captureEpoch,
+      .queue = h.queue, .completedSequence = h.baselineSequence,
+      .completedInitializer = h.baselineInitializer};
+  std::vector<RenderTapeAttachmentHistoryRow> rows;
+  for (const auto& definition : general.definitions) {
+    if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE) continue;
+    RenderTapeSurfaceDescriptorV2 desc{};
+    check(renderTapeLoadSurfaceDescriptorV2(definition.descriptor, desc), "surface descriptor for original history");
+    const bool alias = desc.storage == static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource);
+    const bool current = desc.storage == static_cast<std::uint32_t>(RenderTapeSurfaceStorage::SwapchainBackbuffer);
+    rows.push_back({definition.fixed.identity, alias ? desc.parentTexture : definition.fixed.identity,
+        desc.subresource, 1u, current ? 1u : 0u, 0u});
+    if (current) header.flags |= 2u;
+  }
+  std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.surface.objectId < b.surface.objectId; });
+  header.count = rows.size();
+  std::array<std::byte, kRenderTapeActionProfileV1Bytes> actionBytes;
+  std::vector<std::byte> history;
+  const auto makeOptions = [&] {
+    check(encodeRenderTapeActionProfileV1Component(action, actionBytes), "Normal action fixture encodes canonically");
+    check(encodeRenderTapeAttachmentHistory(header, rows, history), "Normal history fixture encodes canonically");
+    auto options = immutableOptionsFor(fixture);
+    options.normalActionProfile = actionBytes; options.normalAttachmentHistory = history;
+    options.expectedNormalActionDigest = RenderTapeCaptureSession::sha256(actionBytes);
+    options.expectedNormalHistoryDigest = RenderTapeCaptureSession::sha256(history);
+    return options;
+  };
+  auto options = makeOptions();
+  auto prepared = prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options);
+  check(prepared.valid(), "bound unchanged-Normal companions admit immutable diagnostic preparation");
+  auto result = replayPreparedRenderTapeIdentityV4(nullptr, prepared, RenderTapePreparedRoute::Compatibility);
+  check(result.normalDiagnostic.requested && !result.normalDiagnostic.admitted &&
+      !result.normalDiagnostic.historyRestored && !result.normalDiagnostic.unchangedNormal,
+      "missing device grants no local history or policy evidence");
+  noEffects(result);
+  options.expectedNormalHistoryDigest[0] ^= std::byte{1};
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "wrong history digest rejects");
+  options = makeOptions(); options.normalActionProfile = {};
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "partial Normal request rejects");
+  action.eventsDigest[0] ^= std::byte{1}; options = makeOptions();
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "rehashing a foreign action component cannot repair source binding");
+  action.eventsDigest[0] ^= std::byte{1};
+  action.witness.armRevision = action.witness.freezeRevision = 2u; options = makeOptions();
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "Normal policy ABA rejects");
+  action.witness.armRevision = action.witness.freezeRevision = 0u;
+  const auto savedRows = rows;
+  const auto savedHeader = header;
+  rows.clear(); header.count = 0u; header.flags = 0u; options = makeOptions();
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "valid but incomplete history rejects");
+  rows = savedRows; header = savedHeader;
+  ++header.epoch; options = makeOptions();
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "foreign capture history rejects");
+  --header.epoch;
+  // Every synchronous allocation in the new immutable preparation is faulted.
+  options = makeOptions();
+  std::size_t count = 0u;
+  { ScopedV4AllocationProbe probe(false);
+    auto value = prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options);
+    count = prepared_v4_allocation_probe::count;
+    check(value.valid(), "counted Normal preparation remains valid"); }
+  for (std::size_t i = 0u; i < count; ++i) {
+    bool valid = false, injected = false;
+    { ScopedV4AllocationProbe probe(true, i);
+      auto value = prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options);
+      valid = value.valid(); injected = prepared_v4_allocation_probe::injected; }
+    check(injected && !valid, "Normal preparation allocation fault publishes no partial authority");
+  }
+}
+
 void unsupportedQuery() {
   const auto fixture = makeFixture();
   ImportedRenderTapeView tape;
@@ -1086,6 +1177,7 @@ int main() {
     modes();
     observerAdmission();
     observerForwarding();
+    normalPreparation();
     unsupportedQuery();
     terminalOutputMismatch();
     std::cout << "render_tape_provider_v4_spec: " << checks << " checks passed\n";

@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H485](present-pacing-normal-provider.485.md) connects the private Normal
+provider: two fresh native GPU replays match H481's original source/output
+bytes exactly. Content authority and default-tail CPU-removal qualification
+remain separate; stable-Exact launcher admission is unchanged.
+
 [H484](present-pacing-normal-produced-setup.484.md) adds explicit, authenticated
 allocation-only planning for the missing produced parent. H481 now plans all
 12 late aliases without changing seed or command counts. Runtime retention,

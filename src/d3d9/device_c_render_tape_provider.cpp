@@ -6,6 +6,8 @@
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_initial_setup_v4.hpp"
+#include "device_c_render_tape_action_profile_component.hpp"
+#include "device_c_render_tape_identity_transfer_v4.hpp"
 #include "device_c_render_tape_mutation_admission_v4.hpp"
 #include "device_c_render_tape_runtime_binding_v4.hpp"
 #include "device_c_render_tape_source_plan.hpp"
@@ -14,6 +16,7 @@
 #include "dxmt9/dxmt9_format_convert.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
+#include "dxmt9/dxmt9_render_tape_attachment_restore.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2518,6 +2521,88 @@ struct TexturePrestageEntry {
   bool active = false;
 };
 
+// Owned by immutable preparation; indices refer only to its authenticated
+// General plan. Runtime wrappers never live in this metadata owner.
+struct NormalHistorySetup {
+  RenderTapeAttachmentHistoryHeader header{};
+  std::vector<RenderTapeAttachmentHistoryRow> rows;
+  std::vector<std::uint32_t> surfaces, lateAliases;
+  std::vector<D9CWireObjectIdentity> producedParents;
+};
+
+bool prepareNormalHistorySetup(const CaptureSourceReplayPlanV4& source,
+    const GeneralPreflightPlan& general, std::span<const std::byte> tape,
+    const RenderTapePreparedV4PreparationOptions& options, NormalHistorySetup& out) {
+  const auto& identity = source.identity().header;
+  RenderTapeActionProfileV1ComponentHeader component{};
+  if (!nonZeroDigest(options.expectedNormalActionDigest) ||
+      !nonZeroDigest(options.expectedNormalHistoryDigest) ||
+      options.normalAttachmentHistory.size() > sizeof(RenderTapeAttachmentHistoryHeader) +
+          kAttachmentHistoryMaxRows * sizeof(RenderTapeAttachmentHistoryRow) ||
+      !importRenderTapeActionProfileV1Component(options.normalActionProfile, component) ||
+      RenderTapeCaptureSession::sha256(options.normalActionProfile) != options.expectedNormalActionDigest ||
+      RenderTapeCaptureSession::sha256(options.normalAttachmentHistory) != options.expectedNormalHistoryDigest ||
+      !renderTapeActionProfileV1ComponentMatchesBinding(component,
+          identity.captureToken, identity.captureEpoch, identity.queue,
+          tape.size(), options.sourceBoundaryIdentity.size(), options.sourceExecutionTopology.size(),
+          RenderTapeCaptureSession::sha256(tape),
+          RenderTapeCaptureSession::sha256(options.sourceBoundaryIdentity),
+          RenderTapeCaptureSession::sha256(options.sourceExecutionTopology)) ||
+      component.witness.constructionProfile || component.witness.armProfile ||
+      component.witness.freezeProfile || component.witness.armRevision || component.witness.freezeRevision ||
+      !renderTapeAttachmentHistoryMatchesCapture(options.normalAttachmentHistory, identity, component.witness) ||
+      !decodeRenderTapeAttachmentHistory(options.normalAttachmentHistory, out.header, out.rows)) return false;
+  std::uint32_t prefix = 0u;
+  if (!renderTapeInitialSetupV4SnapshotPrefix(general, prefix)) return false;
+  bool haveCurrent = false;
+  for (const auto& event : general.events) {
+    if (event.type != RenderTapeEventType::ObjectDefine) continue;
+    const auto& definition = general.definitions[event.index];
+    if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE) continue;
+    const auto row = std::find_if(out.rows.begin(), out.rows.end(), [&](const auto& value) {
+      return sameIdentity(value.surface, definition.fixed.identity);
+    });
+    RenderTapeSurfaceDescriptorV2 surface{};
+    if (row == out.rows.end() || !renderTapeLoadSurfaceDescriptorV2(definition.descriptor, surface)) return false;
+    for (const auto index : out.surfaces)
+      if (general.definitions[index].fixed.identity.objectId == definition.fixed.identity.objectId) return false;
+    const bool alias = surface.storage == static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource);
+    const bool backbuffer = surface.storage == static_cast<std::uint32_t>(RenderTapeSurfaceStorage::SwapchainBackbuffer);
+    // The bounded Normal lane settles backbuffer seeds only at its pre-arm
+    // checkpoint. Reject later writes before allocating or touching a device;
+    // the ordinary mutation path has Exact-only post-copy settlement.
+    if (backbuffer && std::any_of(general.events.begin(), general.events.end(),
+            [&](const auto& value) {
+              return value.eventIndex >= prefix &&
+                  value.type == RenderTapeEventType::ResourceMutation &&
+                  sameIdentity(general.mutations[value.index].identity, definition.fixed.identity);
+            })) return false;
+    if (!sameIdentity(row->storage, alias ? surface.parentTexture : definition.fixed.identity) ||
+        row->subresource != surface.subresource || bool(row->currentBackbuffer) != backbuffer) return false;
+    haveCurrent |= row->currentBackbuffer != 0u;
+    out.surfaces.push_back(event.index);
+    if (event.eventIndex < prefix) continue;
+    if (!alias || definition.fixed.expectedContentBytes || definition.fixed.expectedContentCount) return false;
+    out.lateAliases.push_back(event.index);
+    const auto parent = std::find_if(general.definitions.begin(), general.definitions.end(),
+        [&](const auto& value) { return sameIdentity(value.fixed.identity, surface.parentTexture); });
+    RenderTapeTextureDescriptorV2 texture{};
+    if (parent == general.definitions.end() ||
+        !renderTapeLoadTextureDescriptorV2(parent->descriptor, texture)) return false;
+    if (texture.initialContentDisposition == static_cast<std::uint32_t>(RenderTapeInitialContentDisposition::ProducedByCapturedPass) &&
+        std::none_of(out.producedParents.begin(), out.producedParents.end(),
+            [&](const auto& value) { return sameIdentity(value, surface.parentTexture); })) {
+      const auto pe = std::find_if(general.events.begin(), general.events.end(), [&](const auto& value) {
+        return value.type == RenderTapeEventType::ObjectDefine &&
+            value.index == static_cast<std::size_t>(parent - general.definitions.begin());
+      });
+      if (pe == general.events.end()) return false;
+      if (pe->eventIndex >= prefix) out.producedParents.push_back(surface.parentTexture);
+    }
+  }
+  return haveCurrent == bool(out.header.flags & 2u) && !out.surfaces.empty();
+}
+
 bool resolveChunk(const Chunk& chunk,
                   std::span<const render_tape_runtime::OwnedObject> objects,
                   std::vector<void*>& resolved) {
@@ -2579,7 +2664,7 @@ bool applyGeneralMutation(
     D9CDevice* device, const RenderTapeResourceMutationHeader& mutation,
     std::span<const RenderTapeProviderBlob> blobs,
     const std::vector<Definition>& definitions,
-    std::vector<OwnedObject>& objects) {
+    std::vector<OwnedObject>& objects, bool deferNormalHistory = false) {
   // This is deliberately general-provider-only. It performs GPU-visible
   // lock/unlock work (and may require a queue flush); CPU completion consumers
   // must establish their own bounded host-visible transfer path instead of
@@ -2735,8 +2820,11 @@ bool applyGeneralMutation(
           .destinationRect = extent,
       });
       upper->flush();
-      copied = upper->queue().completeRenderTapeBackbufferSeed(
-          wrapped->obj->handle());
+      // Normal setup settles every seed at its checked pre-arm checkpoint,
+      // then restores the original discard/touch history in one transaction.
+      // This branch is never completion or initial-content authority by itself.
+      if (!deferNormalHistory)
+        copied = upper->queue().completeRenderTapeBackbufferSeed(wrapped->obj->handle());
     }
     if (staging) dxmt9c_surface_release(staging);
     dxmt9c_texture_release(stagingTexture);
@@ -3167,7 +3255,8 @@ FrameTapeReplayResult& replayGeneralPlan(
     RenderTapeExecutionV4PublicationMode publicationModeV4 =
         RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic,
     RenderTapePreparedObserverV4* observerV4 = nullptr,
-    RenderTapeExecutionV4* admittedExecutionV4 = nullptr) {
+    RenderTapeExecutionV4* admittedExecutionV4 = nullptr,
+    const NormalHistorySetup* normalHistory = nullptr) {
   if (!device) {
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     if (exactDiagnosticV4)
@@ -3223,6 +3312,20 @@ FrameTapeReplayResult& replayGeneralPlan(
     result.exactDiagnosticV4.failure = "v4-initial-setup-plan-binding";
     result.status = FrameTapeReplayStatus::InvalidTape;
     return result;
+  }
+  if (normalHistory) {
+    result.normalDiagnostic.requested = true;
+    const auto upper = device->dev().upperDevice();
+    const auto profile = upper ? upper->queue().renderTapeActionProfileSnapshot()
+                               : dxmt9::RenderTapeActionProfileSnapshot{};
+    if (!exactDiagnosticV4 || !profile.valid || profile.constructionProfile ||
+        profile.currentProfile || profile.revision) {
+      result.exactDiagnosticV4.failure = "v4-normal-construction-policy";
+      result.status = FrameTapeReplayStatus::InvalidTape;
+      return result;
+    }
+    result.normalDiagnostic.admitted = true;
+    result.normalDiagnostic.requiredSurfaces = normalHistory->surfaces.size();
   }
   if (result.queryReplay.present) {
     const auto upper = device->dev().upperDevice();
@@ -3327,6 +3430,8 @@ FrameTapeReplayResult& replayGeneralPlan(
   std::vector<OwnedObject> setupHiddenObjects;
   std::vector<Definition> setupDefinitions;
   std::vector<RenderTapeInitialSetupV4OwnerState> setupOwnerStates;
+  std::vector<OwnedObject> normalHiddenAliases;
+  std::vector<RenderTapeInitialSetupV4OwnerState> normalAliasStates;
   struct PrefixBufferSeedV4 {
     std::uint32_t definitionIndex = 0u, definitionEventIndex = 0u;
     std::uint32_t mutationIndex = 0u, mutationEventIndex = 0u;
@@ -3342,6 +3447,14 @@ FrameTapeReplayResult& replayGeneralPlan(
       objects.reserve(plan.definitions.size());
       definitions.reserve(plan.definitions.size());
       seededSubresources.reserve(plan.mutations.size());
+      if (normalHistory) {
+        normalHiddenAliases.resize(normalHistory->lateAliases.size());
+        normalAliasStates.resize(normalHistory->lateAliases.size());
+        for (std::size_t i = 0u; i < normalHiddenAliases.size(); ++i) {
+          normalHiddenAliases[i].identity = plan.definitions[normalHistory->lateAliases[i]].fixed.identity;
+          normalAliasStates[i].mode = RenderTapeInitialSetupV4Mode::AllocationOnly;
+        }
+      }
       prefixBufferSeeds.reserve(plan.definitions.size());
       for (std::size_t i = 0u; i < entries.size(); ++i) {
         setupHiddenObjects[i].identity = entries[i].definition.identity;
@@ -3548,7 +3661,7 @@ FrameTapeReplayResult& replayGeneralPlan(
   const bool priorExactAttachmentPreservation =
       replayUpper &&
       replayUpper->queue().renderTapeExactAttachmentPreservation();
-  if (replayUpper) {
+  if (replayUpper && !normalHistory) {
     replayUpper->queue().setRenderTapeExactAttachmentPreservation(true);
   }
   const auto findPrestage = [&](const D9CWireObjectIdentity& identity)
@@ -3575,6 +3688,13 @@ FrameTapeReplayResult& replayGeneralPlan(
       result.exactDiagnosticV4.failure = "v4-initial-setup-release-state";
       result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     }
+  };
+  const auto releaseNormalAliasState = [&](const D9CWireObjectIdentity& identity) {
+    const auto alias = std::find_if(normalHiddenAliases.begin(), normalHiddenAliases.end(),
+        [&](const auto& value) { return sameIdentity(value.identity, identity); });
+    if (alias == normalHiddenAliases.end()) return true;
+    return renderTapeInitialSetupV4Advance(normalAliasStates[alias - normalHiddenAliases.begin()],
+        RenderTapeInitialSetupV4Action::Release);
   };
   const auto cleanup = [&] {
     if (exactDiagnosticV4 && !result.exactDiagnosticV4.execution.complete) {
@@ -3607,7 +3727,7 @@ FrameTapeReplayResult& replayGeneralPlan(
       }
     }
     if (auto upper = device->dev().upperDevice()) upper->flush();
-    if (replayUpper) {
+    if (replayUpper && !normalHistory) {
       replayUpper->queue().setRenderTapeExactAttachmentPreservation(
           priorExactAttachmentPreservation);
     }
@@ -3627,11 +3747,24 @@ FrameTapeReplayResult& replayGeneralPlan(
       notifyActiveBuffer(RenderTapePreparedBufferPhaseV4::Retiring,
           kRenderTapeIdentityV4NoIndex, object.identity, nullptr, object.value);
       releaseSetupState(findSetupOwner(object.identity));
+      if (!releaseNormalAliasState(object.identity)) {
+        result.exactDiagnosticV4.failure = "v4-normal-alias-release-state";
+        result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      }
       if (texturePrestageAudit) {
         ++texturePrestageAudit->activeObjectsReleased;
         if (auto* entry = findPrestage(object.identity)) {
           entry->active = false;
         }
+      }
+      render_tape_runtime::releaseOwnedObject(object);
+      ++result.conservation.objectsReleased;
+    }
+    for (auto& object : normalHiddenAliases) {
+      if (!object.value) continue;
+      if (!releaseNormalAliasState(object.identity)) {
+        result.exactDiagnosticV4.failure = "v4-normal-hidden-release-state";
+        result.status = FrameTapeReplayStatus::ObjectCreationFailed;
       }
       render_tape_runtime::releaseOwnedObject(object);
       ++result.conservation.objectsReleased;
@@ -4351,7 +4484,29 @@ FrameTapeReplayResult& replayGeneralPlan(
         const auto prefix = exactDiagnosticV4
             ? executionV4.snapshotPrefixEvents() : executionV3.snapshotPrefixEvents();
         if (eventIndex == prefix) {
-          restoreSeededColorAttachmentTouches(device, definitions, objects, seededSubresources);
+          if (normalHistory) {
+            // Parent lookup is a borrowed cold union, not semantic activation.
+            // Retain each actual wrapper so Texture's weak cache cannot later
+            // manufacture a different handle at its original ObjectDefine.
+            auto parents = objects;
+            parents.insert(parents.end(), setupHiddenObjects.begin(), setupHiddenObjects.end());
+            for (std::size_t i = 0u; i < normalHiddenAliases.size(); ++i) {
+              const auto& definition = plan.definitions[normalHistory->lateAliases[i]];
+              void* value = render_tape_runtime::createRenderTapeObject(device,
+                  definition.fixed, definition.descriptor, blobs, parents);
+              if (!value) {
+                result.exactDiagnosticV4.failure = "v4-normal-alias-preparation";
+                return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+              }
+              normalHiddenAliases[i].value = value;
+              ++result.conservation.objectsCreated;
+              if (!renderTapeInitialSetupV4Advance(normalAliasStates[i], RenderTapeInitialSetupV4Action::Prepare)) {
+                result.exactDiagnosticV4.failure = "v4-normal-alias-prepare-state";
+                return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+              }
+              ++result.normalDiagnostic.aliasesPrepared;
+            }
+          } else restoreSeededColorAttachmentTouches(device, definitions, objects, seededSubresources);
           for (const auto& overlay : bootstrap) {
             if (!replayChunk(overlay))
               return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
@@ -4398,6 +4553,51 @@ FrameTapeReplayResult& replayGeneralPlan(
             for (auto& witness : prefixBufferSeeds)
               witness.checkpointCompleted = witness.bytesVerified;
           } else if (auto upper = device->dev().upperDevice()) upper->flush();
+          if (normalHistory) {
+            // The checkpoint lock has left scope. Settlement independently
+            // rechecks this exact local prefix, completion, policy and handles.
+            std::vector<D9CWireObjectIdentity> required;
+            std::vector<dxmt9::TapeAttachmentRestoreBinding> bindings;
+            required.reserve(normalHistory->surfaces.size());
+            bindings.reserve(normalHistory->surfaces.size());
+            for (const auto index : normalHistory->surfaces) {
+              const auto identity = plan.definitions[index].fixed.identity;
+              auto* value = render_tape_runtime::findExactObject(objects, identity);
+              if (!value) value = render_tape_runtime::findExactObject(normalHiddenAliases, identity);
+              auto* surface = static_cast<D9CSurface*>(value);
+              if (!surface || !surface->obj) {
+                result.exactDiagnosticV4.failure = "v4-normal-surface-coverage";
+                return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+              }
+              RenderTapeSurfaceDescriptorV2 descriptor{};
+              if (!renderTapeLoadSurfaceDescriptorV2(plan.definitions[index].descriptor, descriptor))
+                return fail(FrameTapeReplayStatus::InvalidTape, eventIndex);
+              if (descriptor.storage == static_cast<std::uint32_t>(RenderTapeSurfaceStorage::TextureSubresource)) {
+                auto* parent = render_tape_runtime::findExactObject(objects, descriptor.parentTexture);
+                if (!parent) parent = render_tape_runtime::findExactObject(setupHiddenObjects, descriptor.parentTexture);
+                auto* texture = static_cast<D9CTexture*>(parent);
+                const auto* backing = replayUpper->pool()->findSurface(surface->obj->handle().value);
+                const bool nullRt = renderTapeNullRtSurfaceShapeSupported(descriptor.surface);
+                if (!texture || !texture->obj || !backing || backing->destroyPending ||
+                    surface->ownerTex != texture || surface->ownerLevel != descriptor.subresource ||
+                    (!nullRt && backing->aliasTexture != texture->obj->handle())) {
+                  result.exactDiagnosticV4.failure = "v4-normal-alias-physical-parent";
+                  return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+                }
+              }
+              required.push_back(identity);
+              bindings.push_back({identity, surface->obj->handle().value});
+            }
+            const auto progress = replayUpper->queryProgress();
+            auto restore = dxmt9::TapeAttachmentRestorePlan::prepare(normalHistory->header,
+                normalHistory->rows, required, bindings,
+                {progress.queue, progress.published, progress.initializerPublished});
+            if (!restore || !replayUpper->queue().restoreRenderTapeNormalAttachmentHistory(std::move(*restore))) {
+              result.exactDiagnosticV4.failure = "v4-normal-history-settlement";
+              return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+            }
+            result.normalDiagnostic.historyRestored = true;
+          }
           if (exactDiagnosticV4) {
             std::vector<RenderTapeExecutionV4QueryBaselineInput> baselines;
             baselines.reserve(checkpointQueries.size());
@@ -4438,6 +4638,11 @@ FrameTapeReplayResult& replayGeneralPlan(
         if (replayEvent.index >= plan.definitions.size())
           return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
         const auto& definition = plan.definitions[replayEvent.index];
+        const auto normalAlias = std::find_if(normalHiddenAliases.begin(), normalHiddenAliases.end(),
+            [&](const auto& value) { return sameIdentity(value.identity, definition.fixed.identity); });
+        const auto normalAliasIndex = static_cast<std::size_t>(normalAlias - normalHiddenAliases.begin());
+        auto normalAliasNext = normalAliasIndex < normalAliasStates.size()
+            ? normalAliasStates[normalAliasIndex] : RenderTapeInitialSetupV4OwnerState{};
         const auto setupOwnerIndex = findSetupOwner(definition.fixed.identity);
         auto setupNext = setupOwnerIndex < setupOwnerStates.size()
             ? setupOwnerStates[setupOwnerIndex]
@@ -4480,6 +4685,13 @@ FrameTapeReplayResult& replayGeneralPlan(
             return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
           }
           value = setupHiddenObjects[setupOwnerIndex].value;
+        } else if (normalAlias != normalHiddenAliases.end()) {
+          if (!result.normalDiagnostic.historyRestored || !normalAlias->value ||
+              !renderTapeInitialSetupV4Advance(normalAliasNext, RenderTapeInitialSetupV4Action::Activate)) {
+            result.exactDiagnosticV4.failure = "v4-normal-alias-activation";
+            return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+          }
+          value = normalAlias->value;
         } else if (checkpoint != checkpointQueries.end()) {
           if (!checkpoint->object.value ||
               checkpoint->evidenceIndex >= result.queryReplay.checkpoints.size() ||
@@ -4523,6 +4735,11 @@ FrameTapeReplayResult& replayGeneralPlan(
         if (freshSeedDrainAudit) definitionEpochs.push_back(commandEpoch);
         objects.push_back({.identity = definition.fixed.identity, .value = value});
         transient.release();
+        if (normalAlias != normalHiddenAliases.end()) {
+          normalAlias->value = nullptr;
+          normalAliasStates[normalAliasIndex] = normalAliasNext;
+          ++result.normalDiagnostic.aliasesActivated;
+        }
         if (setupOwnerIndex < setupOwnerStates.size()) {
           // No fallible operation intervenes between publishing the active
           // owner and clearing the hidden reference. Activation acquires none.
@@ -4601,6 +4818,10 @@ FrameTapeReplayResult& replayGeneralPlan(
         }
         notifyActiveBuffer(RenderTapePreparedBufferPhaseV4::Retiring,
             eventIndex, fixed.identity, nullptr, object->value);
+        if (!releaseNormalAliasState(fixed.identity)) {
+          result.exactDiagnosticV4.failure = "v4-normal-alias-destruction";
+          return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+        }
         render_tape_runtime::releaseOwnedObject(*object);
         ++result.conservation.objectsReleased;
         break;
@@ -4723,7 +4944,8 @@ FrameTapeReplayResult& replayGeneralPlan(
           }
         }
         if (!consumeSetupSeed && !consumeStagedSeed &&
-            !applyGeneralMutation(device, fixed, blobs, definitions, objects)) {
+            !applyGeneralMutation(device, fixed, blobs, definitions, objects,
+                normalHistory && eventIndex < executionV4.snapshotPrefixEvents())) {
           return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
         }
         if (observerSession.enabled() && fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
@@ -4755,7 +4977,7 @@ FrameTapeReplayResult& replayGeneralPlan(
         }
         seededSubresources.push_back(
             {.identity = fixed.identity, .subresource = fixed.subresource});
-        restoreSeededColorAttachmentTouches(
+        if (!normalHistory) restoreSeededColorAttachmentTouches(
             device, definitions, objects, seededSubresources);
         break;
       }
@@ -4769,7 +4991,7 @@ FrameTapeReplayResult& replayGeneralPlan(
                                       objects, blobs, *initialSeedAudit);
             initialSeedAuditDone = true;
           }
-          restoreSeededColorAttachmentTouches(
+          if (!normalHistory) restoreSeededColorAttachmentTouches(
               device, definitions, objects, seededSubresources);
           for (const auto& overlay : bootstrap) {
             if (!replayChunk(overlay))
@@ -5102,6 +5324,17 @@ FrameTapeReplayResult& replayGeneralPlan(
     if (!finished)
       return fail(FrameTapeReplayStatus::CommandReplayFailed, 0xffffffffu);
   }
+  if (normalHistory) {
+    const auto profile = replayUpper->queue().renderTapeActionProfileSnapshot();
+    result.normalDiagnostic.unchangedNormal = profile.valid && !profile.constructionProfile &&
+        !profile.currentProfile && !profile.revision;
+    if (!result.normalDiagnostic.historyRestored || !result.normalDiagnostic.unchangedNormal ||
+        result.normalDiagnostic.aliasesPrepared != normalHiddenAliases.size() ||
+        result.normalDiagnostic.aliasesActivated != normalHiddenAliases.size()) {
+      result.exactDiagnosticV4.failure = "v4-normal-history-transcript-incomplete";
+      return fail(FrameTapeReplayStatus::CommandReplayFailed, 0xffffffffu);
+    }
+  }
   result.validity = result.intervals[0].validity;
   result.validity.structurallyValid = true;
   result.validity.digestsValid = true;
@@ -5117,6 +5350,7 @@ struct PreparedRenderTape::Impl {
     CaptureSourceReplayPlanV4 sourcePlan{};
     RenderTapeExecutionV4Preparation execution{};
     RenderTapeInitialSetupV4Plan initialSetup{};
+    std::unique_ptr<NormalHistorySetup> normalHistory;
     RenderTapeExecutionV4PublicationMode publicationMode =
         RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic;
     RenderTapeExecutionV4ProducerContract producerContract =
@@ -5504,11 +5738,24 @@ PreparedRenderTape prepareRenderTapeIdentityV4(
       return prepared;
     }
     const char* failure = "none";
+    const bool normalRequested = !options.normalActionProfile.empty() ||
+        !options.normalAttachmentHistory.empty() || nonZeroDigest(options.expectedNormalActionDigest) ||
+        nonZeroDigest(options.expectedNormalHistoryDigest);
+    if (normalRequested) {
+      v4->normalHistory = std::make_unique<NormalHistorySetup>();
+      if (!prepareNormalHistorySetup(v4->sourcePlan, impl.generalPlan, impl.tape,
+              options, *v4->normalHistory)) {
+        prepared.impl_.reset();
+        return prepared;
+      }
+    }
     if (!RenderTapeExecutionV4PreparedReplayAccess::prepare(v4->execution,
             v4->sourcePlan, impl.generalPlan, impl.tape, options.publicationMode,
             options.producerContract, failure) ||
         buildRenderTapeInitialSetupV4(v4->sourcePlan, impl.generalPlan, impl.tape,
-            v4->execution.snapshotPrefixEvents(), v4->initialSetup) !=
+            v4->execution.snapshotPrefixEvents(), v4->initialSetup, {},
+            v4->normalHistory ? std::span<const D9CWireObjectIdentity>(v4->normalHistory->producedParents)
+                              : std::span<const D9CWireObjectIdentity>{}) !=
             RenderTapeInitialSetupV4Status::Valid) {
       prepared.impl_.reset();
       return prepared;
@@ -6362,6 +6609,7 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentityV4(
         std::count_if(v4.initialSetup.entries().begin(), v4.initialSetup.entries().end(),
             [](const auto& entry) { return entry.mode == RenderTapeInitialSetupV4Mode::AllocationOnly; }));
     result.exactDiagnosticV4.initialSetupAllocationBytes = v4.initialSetup.totalAllocationBytes();
+    result.normalDiagnostic.requested = bool(v4.normalHistory);
   }
   const auto begin = std::chrono::steady_clock::now();
   const auto policy = route == RenderTapePreparedRoute::ProductionSlot
@@ -6369,7 +6617,7 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentityV4(
   replayGeneralPlan(device, impl.generalPlan, result, impl.blobs, policy, &phases,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, {}, &v4.sourcePlan, impl.tape, &v4.initialSetup,
-      v4.producerContract, v4.publicationMode, observer, &execution);
+      v4.producerContract, v4.publicationMode, observer, &execution, v4.normalHistory.get());
   if (!result.exactDiagnosticV4.execution.complete &&
       std::strcmp(result.exactDiagnosticV4.failure, "none") == 0)
     result.exactDiagnosticV4.failure = frameTapeReplayStatusName(result.status);

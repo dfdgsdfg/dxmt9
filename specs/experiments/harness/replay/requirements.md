@@ -2016,3 +2016,17 @@ reject transactionally. Allocation footprint must be bounded independently of
 seed bytes. An empty request must preserve the historical setup plan. This
 metadata admission does not qualify Normal policy, local completion, defined
 contents or GPU output, and must not silently enable a runtime preparation lane.
+
+**R-HARN-REPLAY-9.23** A private Normal provider diagnostic must authenticate
+both action-profile and attachment-history companions against independently
+supplied digests and the exact admitted event/identity/topology bytes. It must
+require Normal construction, arm and freeze with no policy revision. Required
+late wrappers must retain the same local handle from physical preparation to
+original logical activation; activation must acquire no replacement reference.
+All setup seed effects and local initialization must complete before original
+history restoration and arm. Captured watermarks must not authorize this local
+completion. Partial setup failure must release every acquired wrapper exactly
+once. The bounded lane must reject post-prefix backbuffer mutations before any
+device effects rather than invoke Exact-only settlement. History restoration,
+successful replay and even output equality grant no initial-content, timing or
+policy qualification. The stable-Exact launcher gate must remain unchanged.

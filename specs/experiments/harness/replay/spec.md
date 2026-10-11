@@ -1484,6 +1484,33 @@ settlement and local arm, and logical activation/seed consumption must not
 overwrite the restored history. Existing Exact-only backbuffer seed settlement
 cannot be reused by toggling a Normal queue's policy.
 
+`prepareRenderTapeIdentityV4` owns this private diagnostic's immutable
+`NormalHistorySetup` (R-HARN-REPLAY-9.23). Both companion spans and independent
+digests are mandatory when any Normal option is provided. Preparation joins
+the action witness to the exact source components, checks every required
+surface row/storage/subresource and derives only missing produced parents.
+Post-prefix backbuffer mutations are unsupported and reject during preparation.
+`replayGeneralPlan` checks actual Normal construction before resource effects,
+retains late alias wrappers, completes the actual pre-arm checkpoint, verifies
+physical parent/level bindings and consumes a local-prefix restore plan before
+`RenderTapeExecutionV4::arm`. NULL RT aliases require the correct live wrapper
+and parent/level, but no physical texture. Original ObjectDefine transfers the
+retained reference; failure cleanup and ObjectDestroy use the shared setup
+owner reducer. No Exact toggle or seed-derived touch restoration runs on this
+path. Result evidence reports requested/admitted/restored and unchanged Normal
+separately; none is a content or performance qualification.
+
+`RenderTapeNormalSetup.tla` composes retained alias preparation, seed effects,
+checkpoint, history restoration, arm, activation and cleanup. `Prepare` and
+`Activate` bind the provider's hidden-to-active transfer and
+`renderTapeInitialSetupV4Advance`; `Checkpoint`/`Restore` bind actual local
+checkpoint and the independently checked queue restore primitive. Native
+provider tests bind companion authentication, null-device non-authority and
+every synchronous preparation allocation failure. Temporary alias release,
+late seed-touch restoration and early arm are distinguishing negative models.
+Physical contents, Metal actions, driver completion and production drain
+internals remain outside this composition model.
+
 `RenderTapeNormalHistoryRestore.tla` models preparation, a publication/reset
 before settlement, local completion, locked staging, allocation failure and
 atomic commit. `Prepare` binds the plan's local queue/prefix; `Attempt` binds
