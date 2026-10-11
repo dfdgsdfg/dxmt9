@@ -32,6 +32,15 @@ representativeness, Rosetta/Wine replay parity, policy timing or CPU removal.
 The private runner is retained as evidence, not a general Normal CLI.
 See [H485](../../docs/perfomance/present-pacing/present-pacing-normal-provider.485.md).
 
+H486 additionally reproduces both original readbacks in nine fresh x86_64
+processes under Rosetta and authenticates the loaded provider images in a
+separate diagnostic. Three original source cuts are joined to native Encode
+CPU; setup sources are excluded. This closes bounded x86 replay/readback
+parity, not Wine execution parity. Fresh-cache prefetch builds and intrusive
+draw clocks prevent steady-state/removable-cost claims. Content authority,
+representative tail input and global CPU ownership remain open. See
+[H486](../../docs/perfomance/present-pacing/present-pacing-normal-source-cost.486.md).
+
 ### Normal produced-parent setup metadata — partial
 
 R-HARN-REPLAY-9.22 is implemented as an explicit bounded identity list in

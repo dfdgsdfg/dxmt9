@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H486](present-pacing-normal-source-cost.486.md) adds x86/Rosetta original-image
+parity and source-qualified CPU decomposition. Cold PSO builds explain most
+prefetch lookup cost; DrawRun, not planning, owns the command body. Per-draw
+diagnostics are intrusive; no steady-state removal or default-tail rank follows.
+
 [H485](present-pacing-normal-provider.485.md) connects the private Normal
 provider: two fresh native GPU replays match H481's original source/output
 bytes exactly. Content authority and default-tail CPU-removal qualification

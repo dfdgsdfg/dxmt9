@@ -11,6 +11,14 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H486](present-pacing-normal-source-cost.486.md) reproduces the original Normal
+input on x86/Rosetta and joins CPU to its three source cuts. The large source's
+roughly 34 ms prefetch includes fresh-cache PSO builds, not a steady-state
+removal budget. DrawRun owns 18.8 ms of its 20.1 ms command body in the command
+diagnostic; planning is about 1.1 ms. Fine draw clocks perturb the scope, so
+investigate repeated loop work without treating intrusive timings as savings.
+Content/default-tail/global-owner and removable-cost gates remain open.
+
 [H485](present-pacing-normal-provider.485.md) integrates retained Normal setup
 and history restoration. Two fresh native Metal replays of H481 reproduce the
 original source/output bytes exactly, with three source cuts and balanced
