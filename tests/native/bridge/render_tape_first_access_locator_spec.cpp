@@ -287,6 +287,75 @@ void testMismatchMalformedAndPresentHandle() {
         "malformed validated-view input fails closed");
 }
 
+void testCarriedTextureReads() {
+  const auto origin = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 2u, 90u);
+  const auto texture = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 3u, 91u);
+  const auto other = identity(D9C_CHUNK_HANDLE_KIND_TEXTURE, 4u, 91u);
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    for (unsigned replacement = 0u; replacement < 3u; ++replacement) {
+      RenderTapeFirstAccessLedger ledger;
+      arm(ledger, origin, texture);
+      const std::array<SectionSpec, 1> binding{{{D9C_COMMAND_CHUNK_SECTION_TEXTURE, 0u, slot}}};
+      const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, texture);
+      check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+          RenderTapeFirstAccessStatus::Observing, "texture binding alone is not a read");
+      if (replacement) {
+        const std::array<SectionSpec, 1> next{{{D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+            replacement == 1u ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX : 0u, slot}}};
+        const auto replace = sparse(D9C_COMMAND_RECORD_APPLY_STATE, next, other);
+        check(renderTapeFirstAccessObserve(ledger, replace.view()).status ==
+            RenderTapeFirstAccessStatus::Observing, "unbind/rebind remains nonterminal");
+      }
+      auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, {}, other);
+      draw.handles.clear();
+      draw.record.handleCount = 0u;
+      const auto result = renderTapeFirstAccessObserve(ledger, draw.view());
+      check(result.status == (replacement ? RenderTapeFirstAccessStatus::Observing
+                                          : RenderTapeFirstAccessStatus::Terminal),
+          "sparse next-chunk draw uses carried identity, not a new handle-table index");
+      if (!replacement) {
+        check(result.classification == RenderTapeFirstAccessClass::ShaderReadCandidate &&
+            result.observedIdentity.generation == texture.generation &&
+            result.bindingSlot == slot && result.handleIndex == kRenderTapeFirstAccessSentinel,
+            "carried read preserves exact generation/slot without stale handle index");
+        const D9CCommandChunkWireClear clear{.flags = 1u,
+            .rectOffset = sizeof(D9CCommandChunkWireClear)};
+        check(renderTapeFirstAccessObserve(ledger,
+            fixed(D9C_COMMAND_RECORD_CLEAR, &clear, sizeof(clear)).view()).status ==
+            RenderTapeFirstAccessStatus::Complete, "later clear cannot repair a read-first result");
+      }
+    }
+  }
+  for (const bool unbindAtDraw : {false, true}) {
+    RenderTapeFirstAccessLedger ledger;
+    arm(ledger, origin, texture);
+    const std::array<SectionSpec, 1> binding{{{D9C_COMMAND_CHUNK_SECTION_TEXTURE, 0u, 0u}}};
+    const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, texture);
+    check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+        RenderTapeFirstAccessStatus::Observing, "carried texture precedes RT draw");
+    const std::array<SectionSpec, 1> attachment{{{D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+    check(renderTapeFirstAccessObserve(ledger,
+        sparse(D9C_COMMAND_RECORD_APPLY_STATE, attachment, origin).view()).status ==
+        RenderTapeFirstAccessStatus::Observing, "alias attachment is carried into draw");
+    std::vector<SectionSpec> sections;
+    if (unbindAtDraw)
+      sections.push_back({D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+                         D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX, 0u});
+    const auto draw = sparse(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, sections, origin);
+    check(renderTapeFirstAccessObserve(ledger, draw.view()).classification ==
+        (unbindAtDraw ? RenderTapeFirstAccessClass::DrawWriteUnknownCoverage
+                      : RenderTapeFirstAccessClass::Unknown),
+        "same-draw unbind precedes access; carried read plus alias write is ambiguous");
+  }
+  RenderTapeFirstAccessLedger ledger;
+  arm(ledger, origin, texture);
+  const std::array<SectionSpec, 1> invalid{{{D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+      D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX, D9C_DRAW_PACKET_MAX_TEXTURES}}};
+  check(renderTapeFirstAccessObserve(ledger,
+      sparse(D9C_COMMAND_RECORD_APPLY_STATE, invalid, texture).view()).status ==
+      RenderTapeFirstAccessStatus::Malformed, "invalid null texture slot fails closed");
+}
+
 void testExplicitNullAttachmentBindings() {
   const auto target = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 91u);
   const D9CCommandChunkWireClear clear{.flags = 3u,
@@ -863,6 +932,7 @@ int main() {
     testReadWriteConflictAndClear();
     testMismatchMalformedAndPresentHandle();
     testExplicitNullAttachmentBindings();
+    testCarriedTextureReads();
     testConstantSectionsPreserveFirstAccess();
     testStandaloneDepthFullClearObservation();
     testProducedByCapturedPassProof();

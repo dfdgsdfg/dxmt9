@@ -900,9 +900,13 @@ First-access inspection consumes the canonical section schema, including the
 constant-range header before constant elements. Unrelated constants must not
 change attachment bindings. An explicit valid-null RT/DS binding clears the
 tracked attachment; a null texture binding is not a resource access. Nonnull
-invalid or non-owned handles fail closed. Locator classifications alone do not
-prove Normal initial-content validity, carried texture-read closure or physical
-alias equivalence.
+invalid or non-owned handles fail closed. Texture bindings persist by exact
+generation and canonical slot across sparse records/chunks, until explicitly
+replaced or unbound. A draw observes those bindings after applying its own
+overlay; a carried binding reports no current-chunk handle index. Read/write
+conflicts remain unknown and a later clear cannot replace a terminal read.
+This is conservative binding-based attribution, not shader-use/coverage proof,
+Normal initial-content validity or physical alias equivalence.
 
 The bounded `NullRtDescriptorOnly` disposition (R-HARN-REPLAY-7.36) is
 independent of both complete seed and produced-pass authority. It admits only

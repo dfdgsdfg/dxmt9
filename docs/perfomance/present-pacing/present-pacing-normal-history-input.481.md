@@ -5,7 +5,7 @@ title: "Authenticated Normal history input and first-access parser corrections"
 type: evidence
 status: capture-authenticated-replay-unqualified
 updated: 2026-10-11
-source: traces/stkcop-normal-finish-h481/{run.py,receipt.json,loaded-images.txt,progress.jsonl,restore/restored.json,inspection.json,summary.json,surface-inventory.json,normal-rejection.json,first_access.cpp,first-access.tsv,first-access.stderr}; traces/stkcop-normal-finish-h481/verification/{native-testlog.txt,x86_64-testlog.txt}
+source: traces/stkcop-normal-finish-h481/{run.py,receipt.json,loaded-images.txt,progress.jsonl,restore/restored.json,inspection.json,summary.json,surface-inventory.json,normal-rejection.json,first_access.cpp,first-access.tsv,first-access.stderr,first-access-carried-texture.tsv,first-access-carried-texture.stderr,carried-texture-probe-sha256.txt}; traces/stkcop-normal-finish-h481/verification/{native-testlog.txt,x86_64-testlog.txt,carried-texture-before-testlog.txt,carried-texture-native-testlog.txt,carried-texture-x86_64-testlog.txt}
 related: present-pacing-normal-history.480.md; present-pacing-root-game.477.md; ../../../specs/experiments/gap.md
 ---
 
@@ -92,6 +92,40 @@ It is unsafe to assume every attachment is cleared before use or to recreate
 the two current wrappers with unrelated physical backing.
 
 ## Remaining gate
+
+### Follow-up: carried texture reads
+
+After `6c41150b`, a bounded native counterexample confirmed that APPLY_STATE
+texture bindings were lost to a later sparse draw's first-access attribution.
+The cold ledger now retains all 20 canonical slots by qualified identity,
+applies null/replacement bindings before the draw, and reports a sentinel
+instead of interpreting the old chunk's handle index in a new chunk. A carried
+read plus an attachment write remains unknown. This does not change rendering
+or upgrade a shader-read candidate to proof of shader execution.
+
+Tests enumerate every slot with unchanged, null and newer-generation binding;
+additional cases cover same-draw unbind, read/write conflict, invalid slots and
+exactly-once terminal observation. The pre-fix counterexample fails; the final
+native three-test suite and x86_64 four-test suite pass. Unix and both PE builds
+complete. These are sequential cold-reducer checks, not a change to concurrent
+queue transitions or a new TLA/GPU claim.
+
+Recompiling the same offline probe against the corrected library yields an
+identical 21-row TSV for H481. Thus this input's classifications did not depend
+on the missing carry behavior; the initial limitation above is now narrowed,
+not evidence that content/alias admission is complete.
+
+Source inspection also narrows the alias question: queue arm marks a row
+current only when its backend handle equals `currentBackBuffer_`, and
+`createRenderTapeObject` resolves SwapchainBackbuffer wrappers through the same
+swapchain backbuffer. This supports preserving the existing factory, not
+inventing independent backing per history row. It is not a restored-runtime
+alias test. The actual missing history hook is separate:
+`restoreSeededColorAttachmentTouches` derives touches from seeds, while
+`completeRenderTapeBackbufferSeed` completes setup. Neither consumes original
+Normal history or establishes first-read defined contents.
+
+### Qualification still required
 
 Preserve original touch/discard state independently of seed uploads, establish
 physical alias closure and first-read content authority, then compare Normal

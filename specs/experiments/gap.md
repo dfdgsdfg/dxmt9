@@ -44,6 +44,10 @@ generations. Shared images are restored; the owned engine is intentionally
 stopped after publication. H480 failures remain unexplained, not repaired.
 Offline first-access inspection exposed constant-range header and explicit-null
 binding parsing defects; both are corrected with native regression coverage.
+Follow-up native counterexamples also close carried texture-binding tracking
+across sparse draws, including unbind, generation replacement and read/write
+conflict. The same H481 input retains all 21 prior locator classifications;
+this is not new content authority or GPU evidence.
 The input includes draw-first/read-first cases and two current-backbuffer
 wrappers, so first-access labels do not establish defined contents or physical
 equivalence. See

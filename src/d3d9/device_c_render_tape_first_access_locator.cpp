@@ -150,6 +150,18 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
         handleIndex = binding.handleIndex;
         bindingSlot = binding.slot;
         hasHandle = binding.valid != 0u && handleIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+        if (bindingSlot >= ledger.textures.size())
+          return false;
+        auto& state = ledger.textures[bindingSlot];
+        if (!hasHandle) {
+          state = {};
+          continue;
+        }
+        if (!recordOwnsHandle(record, handleIndex) ||
+            !bindingForHandle(chunk, handleIndex, state))
+          return false;
+        state.sectionKind = descriptor.kind;
+        state.bindingSlot = bindingSlot;
       } else if (descriptor.kind == D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) {
         D9CCommandChunkWireRenderTargetBinding binding{};
         if (descriptor.elementSize != sizeof(binding) ||
@@ -226,6 +238,21 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
     }
   }
   if (record.header.type != D9C_COMMAND_RECORD_APPLY_STATE) {
+    // Sparse draws may carry no texture section at all. Preserve the qualified
+    // binding across chunks; its old handle index is not valid in this chunk.
+    for (const auto& texture : ledger.textures) {
+      if (!texture.valid || !targetIdentity(ledger, texture.identity))
+        continue;
+      if (!haveCandidate) {
+        candidate = terminal(ledger, RenderTapeFirstAccessClass::ShaderReadCandidate,
+            texture.identity, recordIndex, record.header.type,
+            kRenderTapeFirstAccessSentinel, texture.sectionKind, texture.bindingSlot);
+        haveCandidate = true;
+      } else if (candidate.classification != RenderTapeFirstAccessClass::ShaderReadCandidate) {
+        candidate.classification = RenderTapeFirstAccessClass::Unknown;
+      }
+      break;
+    }
     const RenderTapeFirstAccessBinding* carried = nullptr;
     for (const auto& attachment : ledger.renderTargets) {
       if (attachment.valid && targetIdentity(ledger, attachment.identity)) {

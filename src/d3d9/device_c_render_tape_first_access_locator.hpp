@@ -47,6 +47,8 @@ struct RenderTapeFirstAccessLedger {
   bool terminal = false;
   D9CWireObjectIdentity originIdentity{};
   D9CWireObjectIdentity resolvedIdentity{};
+  std::array<RenderTapeFirstAccessBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
+      textures{};
   std::array<RenderTapeFirstAccessBinding,
              kRenderTapeFirstAccessRenderTargetSlots>
       renderTargets{};
