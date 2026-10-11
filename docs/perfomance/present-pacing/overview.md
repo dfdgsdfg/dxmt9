@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H481](present-pacing-normal-history-input.481.md) supplies authenticated
+Normal history for all 16 defined surface generations. The same-input locator
+now handles constant-range headers and null unbinds. Read-first contents,
+original touch/discard restoration and physical aliases remain the replay gate;
+successful publication does not explain H480 failures or establish CPU savings.
+
 [H480](present-pacing-normal-history.480.md) adds retained, generation-qualified
 arm history and authenticated publication/inspection. Native tests pass, but
 the actual-game run publishes no bundle: old occlusion cycles fail admission

@@ -896,6 +896,14 @@ seed-dependent negative controls. This cold capture eligibility change does
 not alter queue interleaving or lifetime policy; GPU and original-workload
 evidence remain independent of the native predicate tests.
 
+First-access inspection consumes the canonical section schema, including the
+constant-range header before constant elements. Unrelated constants must not
+change attachment bindings. An explicit valid-null RT/DS binding clears the
+tracked attachment; a null texture binding is not a resource access. Nonnull
+invalid or non-owned handles fail closed. Locator classifications alone do not
+prove Normal initial-content validity, carried texture-read closure or physical
+alias equivalence.
+
 The bounded `NullRtDescriptorOnly` disposition (R-HARN-REPLAY-7.36) is
 independent of both complete seed and produced-pass authority. It admits only
 a DEFAULT-pool, render-target-only, single-sample NULL Texture2D with one mip,

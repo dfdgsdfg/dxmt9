@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H481](present-pacing-normal-history-input.481.md) publishes an authenticated
+Normal bundle with 21 original history rows. Offline inspection fixes canonical
+constant/null parsing and exposes read-first and current-wrapper alias gates.
+Normal replay, defined-content authority and CPU savings remain unqualified.
+
 [H480](present-pacing-normal-history.480.md) implements bounded original
 attachment history, but the fresh wild capture publishes nothing. Pre-cut
 occlusion polls and separate identity-finish failures block it; stage-qualified

@@ -287,6 +287,85 @@ void testMismatchMalformedAndPresentHandle() {
         "malformed validated-view input fails closed");
 }
 
+void testExplicitNullAttachmentBindings() {
+  const auto target = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 91u);
+  const D9CCommandChunkWireClear clear{.flags = 3u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear)};
+  const auto write = fixed(D9C_COMMAND_RECORD_CLEAR, &clear, sizeof(clear));
+  for (const auto kind : {D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+                          D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+                          D9C_COMMAND_CHUNK_SECTION_TEXTURE}) {
+    const std::array<SectionSpec, 1> binding{{{static_cast<std::uint16_t>(kind), 0u, 0u}}};
+    const std::array<SectionSpec, 1> nullBinding{{{static_cast<std::uint16_t>(kind),
+        D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX, 0u}}};
+    const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, target);
+    const auto unbind = sparse(D9C_COMMAND_RECORD_APPLY_STATE, nullBinding, target);
+    RenderTapeFirstAccessLedger ledger;
+    arm(ledger, target, target);
+    check(renderTapeFirstAccessObserve(ledger, apply.view()).status == RenderTapeFirstAccessStatus::Observing &&
+        renderTapeFirstAccessObserve(ledger, unbind.view()).status == RenderTapeFirstAccessStatus::Observing,
+        "valid=true with null handle is an explicit unbind, not malformed handle ownership");
+    check(renderTapeFirstAccessObserve(ledger, write.view()).status == RenderTapeFirstAccessStatus::Observing,
+        "clear after explicit unbind cannot retain the old attachment's first write");
+    const std::array<SectionSpec, 1> stale{{{static_cast<std::uint16_t>(kind), 1u, 0u}}};
+    auto invalid = sparse(D9C_COMMAND_RECORD_APPLY_STATE, stale, target);
+    arm(ledger, target, target);
+    const auto result = renderTapeFirstAccessObserve(ledger, invalid.view());
+    check(result.status == RenderTapeFirstAccessStatus::Malformed,
+        "nonnull out-of-range resource still fails closed");
+  }
+}
+
+void testConstantSectionsPreserveFirstAccess() {
+  const auto target = identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 91u);
+  const std::array<SectionSpec, 1> binding{{{D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, 0u, 0u}}};
+  const auto apply = sparse(D9C_COMMAND_RECORD_APPLY_STATE, binding, target);
+  const D9CCommandChunkWireClear clear{.flags = 1u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear)};
+  const auto write = fixed(D9C_COMMAND_RECORD_CLEAR, &clear, sizeof(clear));
+  for (const auto& schema : kSectionRules) {
+    if (!(schema.ruleFlags & SectionRuleConstantRange)) continue;
+    for (unsigned variant = 0u; variant < 8u; ++variant) {
+      Fixture constants;
+      D9CCommandChunkWireDrawHeader draw{};
+      draw.sectionCount = 1u;
+      draw.sectionTableOffset = sizeof(draw);
+      draw.sectionPayloadOffset = sizeof(draw) + sizeof(D9CCommandChunkWireSectionDesc);
+      D9CCommandChunkWireConstantRange range{0u, variant == 1u ? schema.maxCount : 1u};
+      D9CCommandChunkWireSectionDesc section{schema.kind, schema.elementSize, range.registerCount,
+          draw.sectionPayloadOffset,
+          static_cast<std::uint32_t>(sizeof(range) + range.registerCount * schema.elementSize)};
+      if (variant == 2u) section.count = 0u;
+      if (variant == 3u) ++section.elementSize;
+      if (variant == 4u) --section.byteSize;
+      if (variant == 5u) ++range.registerCount;
+      if (variant == 6u) range.startRegister = schema.maxCount;
+      if (variant == 7u) section.kind = UINT16_MAX;
+      constants.payload.resize(draw.sectionPayloadOffset + section.byteSize);
+      std::memcpy(constants.payload.data(), &draw, sizeof(draw));
+      std::memcpy(constants.payload.data() + draw.sectionTableOffset, &section, sizeof(section));
+      std::memcpy(constants.payload.data() + draw.sectionPayloadOffset, &range, sizeof(range));
+      constants.record = {.type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payloadSize = static_cast<std::uint32_t>(constants.payload.size())};
+      RenderTapeFirstAccessLedger ledger;
+      arm(ledger, target, target);
+      check(renderTapeFirstAccessObserve(ledger, apply.view()).status ==
+          RenderTapeFirstAccessStatus::Observing, "attachment binding precedes unrelated constants");
+      const auto result = renderTapeFirstAccessObserve(ledger, constants.view());
+      check(result.status == (variant < 2u ? RenderTapeFirstAccessStatus::Observing
+                                          : RenderTapeFirstAccessStatus::Malformed),
+          "six constant families admit range-header extents and reject malformed views");
+      if (variant < 2u) {
+        const auto next = renderTapeFirstAccessObserve(ledger, write.view());
+        check(next.status == RenderTapeFirstAccessStatus::Terminal &&
+            next.classification == RenderTapeFirstAccessClass::FullClearWrite &&
+            next.observedIdentity.objectId == target.objectId,
+            "unrelated constant range does not consume or alter the first attachment access");
+      }
+    }
+  }
+}
+
 void testStandaloneDepthFullClearObservation() {
   const auto depth =
       identity(D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 4294967545ull);
@@ -783,6 +862,8 @@ int main() {
     testCrossChunkDrawAndExactlyOnce();
     testReadWriteConflictAndClear();
     testMismatchMalformedAndPresentHandle();
+    testExplicitNullAttachmentBindings();
+    testConstantSectionsPreserveFirstAccess();
     testStandaloneDepthFullClearObservation();
     testProducedByCapturedPassProof();
     testProducedDf24DescriptorPolicy();

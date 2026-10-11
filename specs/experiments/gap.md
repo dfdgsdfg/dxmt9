@@ -38,8 +38,17 @@ failures, and 16 unlocalized identity-finish failures across 43 completed arms
 and native wrong-history binding negatives were added afterward; they are not
 retroactive cause evidence. Shared images are restored. See
 [H480](../../docs/perfomance/present-pacing/present-pacing-normal-history.480.md).
-A fresh game capture with real rows remains missing. Content validity,
-history restoration, future-alias and
+H481 publishes an authenticated Normal bundle on the first bounded arm, with
+21 original history rows and exact history for all 16 defined surface
+generations. Shared images are restored; the owned engine is intentionally
+stopped after publication. H480 failures remain unexplained, not repaired.
+Offline first-access inspection exposed constant-range header and explicit-null
+binding parsing defects; both are corrected with native regression coverage.
+The input includes draw-first/read-first cases and two current-backbuffer
+wrappers, so first-access labels do not establish defined contents or physical
+equivalence. See
+[H481](../../docs/perfomance/present-pacing/present-pacing-normal-history-input.481.md).
+Content validity, history restoration, future-alias and
 physical-storage closure, and original-versus-replay GPU evidence remain
 missing; Normal replay qualification remains closed. This diagnostic change
 does not establish default-tail CPU ownership or a removable-cost estimate.

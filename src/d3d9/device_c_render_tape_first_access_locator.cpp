@@ -114,11 +114,26 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
        sectionIndex < record.sections.size(); ++sectionIndex) {
     const auto section = record.section(sectionIndex);
     const auto& descriptor = record.sections[sectionIndex];
-    if (section.payload.size() != descriptor.byteSize ||
-        descriptor.elementSize == 0u ||
-        descriptor.byteSize % descriptor.elementSize != 0u ||
-        descriptor.count != descriptor.byteSize / descriptor.elementSize)
+    const auto* schema = sectionRule(descriptor.kind);
+    if (!schema || descriptor.elementSize != schema->elementSize ||
+        !descriptor.count || descriptor.count > schema->maxCount ||
+        ((schema->ruleFlags & SectionRuleSingle) && descriptor.count != 1u))
       return false;
+    // Constant sections have a range header before their elements. Applying
+    // the plain-array extent to them rejects valid full bootstrap overlays.
+    const bool constant = (schema->ruleFlags & SectionRuleConstantRange) != 0u;
+    const auto expectedBytes = std::uint64_t{descriptor.count} * descriptor.elementSize +
+        (constant ? sizeof(D9CCommandChunkWireConstantRange) : 0u);
+    if (section.payload.size() != descriptor.byteSize ||
+        descriptor.byteSize != expectedBytes)
+      return false;
+    if (constant) {
+      D9CCommandChunkWireConstantRange range{};
+      if (!load(section.payload, 0u, range) || range.registerCount != descriptor.count ||
+          std::uint64_t{range.startRegister} + range.registerCount > schema->maxCount)
+        return false;
+      continue; // Constants neither bind nor access attachment storage.
+    }
 
     for (std::uint32_t element = 0u;
          element < descriptor.count; ++element) {
@@ -134,7 +149,7 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
           return false;
         handleIndex = binding.handleIndex;
         bindingSlot = binding.slot;
-        hasHandle = binding.valid != 0u;
+        hasHandle = binding.valid != 0u && handleIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
       } else if (descriptor.kind == D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) {
         D9CCommandChunkWireRenderTargetBinding binding{};
         if (descriptor.elementSize != sizeof(binding) ||
@@ -142,7 +157,7 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
           return false;
         handleIndex = binding.handleIndex;
         bindingSlot = binding.slot;
-        hasHandle = binding.valid != 0u;
+        hasHandle = binding.valid != 0u && handleIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
         if (bindingSlot >= ledger.renderTargets.size())
           return false;
         auto& state = ledger.renderTargets[bindingSlot];
@@ -161,7 +176,7 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
             !load(section.payload, offset, binding))
           return false;
         handleIndex = binding.handleIndex;
-        hasHandle = binding.valid != 0u;
+        hasHandle = binding.valid != 0u && handleIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
         if (!hasHandle) {
           ledger.depthStencil = {};
           continue;
@@ -174,8 +189,10 @@ bool observeSparseRecord(RenderTapeFirstAccessLedger& ledger,
         continue;
       }
 
-      if (!hasHandle || handleIndex >= chunk.handles.size())
+      if (!hasHandle)
         continue;
+      if (!recordOwnsHandle(record, handleIndex) || handleIndex >= chunk.handles.size())
+        return false;
       const auto identity = D9CWireObjectIdentity{
           chunk.handles[handleIndex].kind, chunk.handles[handleIndex].generation,
           chunk.handles[handleIndex].objectId};
