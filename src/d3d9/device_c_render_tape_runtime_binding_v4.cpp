@@ -218,17 +218,17 @@ bool matchesBinding(D9CDevice& device, const std::shared_ptr<Root>& root,
 
 void logCutFailure(const std::shared_ptr<Root>& root, Key key,
     std::uint64_t queue, std::uint64_t event, std::uint32_t kind,
-    const char* phase) noexcept {
+    const char* phase, const char* operation = "cut", std::uint32_t detail = 0u) noexcept {
   try {
     const auto first = root ? root->firstFailure() : RenderTapeRuntimeIdentityFailure{};
     const auto current = root ? root->diagnosticState() : RenderTapeRuntimeIdentityFailure{};
     util::logf(util::LogLevel::Info, "dxmt9-render-tape-v4",
-        "cut_rejected phase=%s token=%llu epoch=%llu queue=%llu event=%llu cut=%u "
+        "%s_rejected phase=%s detail=%u token=%llu epoch=%llu queue=%llu event=%llu cut=%u "
         "clock_active=%u root_active=%u root_failed=%u root_frozen=%u "
         "cursor_event=%llu cursor_raw=%llu cursor_cut=%u/%u cursor_record=%u cursor_type=%u "
         "event_active=%u record_active=%u first_event=%llu first_raw=%llu first_cut=%u/%u "
         "first_file=%s first_line=%u first_function=%s",
-        phase, static_cast<unsigned long long>(key.token),
+        operation, phase, detail, static_cast<unsigned long long>(key.token),
         static_cast<unsigned long long>(key.epoch), static_cast<unsigned long long>(queue),
         static_cast<unsigned long long>(event), kind,
         static_cast<unsigned>(root && root->edges().active()),
@@ -513,47 +513,55 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture_v4(
       (capacity && !bytes) || capacity > std::numeric_limits<std::size_t>::max())
     return dxmt9::core::D3DERR_INVALIDCALL;
   const auto root = acquireRenderTapeRuntimeIdentityV4(device);
+  // Cold failure-only evidence. Never add a clock or diagnostic payload to
+  // draw/replay signatures, and never relax admission to obtain an artifact.
+  const auto reject = [&](const char* phase, std::uint32_t detail = 0u) noexcept {
+    logCutFailure(root, {token, epoch}, queue, presentOrdinal, 0u, phase, "finish", detail);
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  };
   try {
     std::lock_guard lock(device->renderTapeRuntimeIdentityV4Mutex);
     const Key key{token, epoch};
     if (!matchesBinding(*device, root, key, queue))
-      return dxmt9::core::D3DERR_NOTAVAILABLE;
+      return reject("binding");
     auto& binding = *device->renderTapeRuntimeBindingV4;
     // A controlled CPU arm cannot acquire a production paired receipt even
     // when its provenance happens to be structurally empty/complete.
     if (binding.domain != RenderTapeRuntimeBindingV4Domain::Production)
-      return dxmt9::core::D3DERR_NOTAVAILABLE;
+      return reject("domain");
     if (!binding.receipt) {
       if (binding.actionWitnessFrozen && binding.frozenPresentOrdinal != presentOrdinal)
-        return dxmt9::core::D3DERR_NOTAVAILABLE;
+        return reject("frozen_present");
       if (!binding.actionWitnessFrozen) {
         if (!drainDeferredReplay(device, "render-tape-v4-finish"))
-          return dxmt9::core::D3DERR_NOTAVAILABLE;
+          return reject("drain");
         const auto upper = device->dev().upperDevice();
-        if (!upper || !upper->queue().hasCompletedPendingWork() ||
-            !upper->queue().refreshTapeRuntimeCompletions(root->sink()) ||
-            !upper->queue().removeTapeRuntimeObserver(root->sink()) ||
-            !root->freeze(key, presentOrdinal))
-          return dxmt9::core::D3DERR_NOTAVAILABLE;
+        if (!upper) return reject("backend");
+        if (!upper->queue().hasCompletedPendingWork()) return reject("pending_work");
+        if (!upper->queue().refreshTapeRuntimeCompletions(root->sink()))
+          return reject("refresh_completions");
+        if (!upper->queue().removeTapeRuntimeObserver(root->sink()))
+          return reject("remove_observer");
+        if (!root->freeze(key, presentOrdinal)) return reject("freeze");
         binding.actionWitnessFrozen = true;
         binding.frozenPresentOrdinal = presentOrdinal;
         const auto freezeProfile = upper->queue().renderTapeActionProfileSnapshot();
         if (!renderTapeRuntimeBindingV4BuildActionWitness(binding.armActionProfile,
                 freezeProfile, key.token, key.epoch, queue, binding.actionWitness))
-          return dxmt9::core::D3DERR_NOTAVAILABLE;
+          return reject("action_witness_build");
       }
       if (!root->frozen() || !renderTapeActionWitnessV1MatchesBinding(
               binding.actionWitness, key.token, key.epoch, queue))
-        return dxmt9::core::D3DERR_NOTAVAILABLE;
+        return reject("action_witness_binding");
       RenderTapeIdentityV4View identity;
       RenderTapeExecutionTopologyV1View topology;
-      if (!root->snapshot(key, identity, topology) ||
-          identity.header.presentOrdinal != presentOrdinal || identity.header.queue != queue ||
-          topology.header.queue != queue ||
-          encodeRenderTapeIdentityV4SnapshotTransfer(
-              identity, topology, binding.actionWitness, binding.attachmentHistory, binding.transfer) !=
-              RenderTapeIdentityV4TransferStatus::Valid)
-        return dxmt9::core::D3DERR_NOTAVAILABLE;
+      if (!root->snapshot(key, identity, topology)) return reject("snapshot");
+      if (identity.header.presentOrdinal != presentOrdinal || identity.header.queue != queue ||
+          topology.header.queue != queue) return reject("snapshot_binding");
+      const auto transferStatus = encodeRenderTapeIdentityV4SnapshotTransfer(
+          identity, topology, binding.actionWitness, binding.attachmentHistory, binding.transfer);
+      if (transferStatus != RenderTapeIdentityV4TransferStatus::Valid)
+        return reject("transfer", static_cast<std::uint32_t>(transferStatus));
       binding.receipt = D9CRenderTapeIdentityCaptureV4Result{
           .status = D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE,
           .version = 4u, .captureToken = token, .captureEpoch = epoch,
@@ -562,13 +570,13 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture_v4(
     }
     const auto& receipt = *binding.receipt;
     if (receipt.presentOrdinal != presentOrdinal)
-      return dxmt9::core::D3DERR_NOTAVAILABLE;
+      return reject("receipt_present");
     if (capacity && capacity != receipt.byteCount)
       return dxmt9::core::D3DERR_INVALIDCALL;
     if (capacity) std::memcpy(bytes, binding.transfer.data(), binding.transfer.size());
     *out = receipt;
     return dxmt9::core::D3D_OK;
-  } catch (...) { return dxmt9::core::D3DERR_NOTAVAILABLE; }
+  } catch (...) { return reject("exception"); }
 }
 
 extern "C" void dxmt9c_device_cancel_render_tape_identity_capture_v4(

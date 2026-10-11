@@ -125,37 +125,53 @@ bool D3D9DeviceImpl::finishRenderTapeIdentityCaptureV4(
     if (!peCaptureState_ || !peCaptureState_->renderTapeActiveCaptureToken ||
         !peCaptureState_->renderTapeActiveCaptureEpoch ||
         !peCaptureState_->renderTapeActiveCaptureQueue ||
-        peCaptureState_->renderTapeExternalEventOrdinal)
+        peCaptureState_->renderTapeExternalEventOrdinal) {
+        dxmt9DeviceInfoLog("render_tape_capture identity_v4_finish_rejected phase=precondition");
         return false;
+    }
     const auto token = peCaptureState_->renderTapeActiveCaptureToken;
     const auto epoch = peCaptureState_->renderTapeActiveCaptureEpoch;
     const auto queue = peCaptureState_->renderTapeActiveCaptureQueue;
     D9CRenderTapeIdentityCaptureV4Result queried{};
-    if (FAILED(hr32(dxmt9c_device_finish_render_tape_identity_capture_v4(
+    const auto queryHr = hr32(dxmt9c_device_finish_render_tape_identity_capture_v4(
             dev_, token, epoch, queue, presentOrdinal, &queried,
-            nullptr, 0u))) ||
+            nullptr, 0u));
+    if (FAILED(queryHr) ||
         queried.status != D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE ||
         queried.version != 4u || queried.captureToken != token ||
         queried.captureEpoch != epoch || queried.queue != queue ||
         queried.presentOrdinal != presentOrdinal ||
         queried.byteCount < sizeof(
             dxmt9::d3d9::RenderTapeIdentityV4TransferHeader) ||
-        queried.byteCount > std::numeric_limits<std::size_t>::max())
+        queried.byteCount > std::numeric_limits<std::size_t>::max()) {
+        dxmt9DeviceInfoLog(
+            "render_tape_capture identity_v4_finish_rejected phase=size_query "
+            "token=%llu epoch=%llu queue=%llu present=%llu hr=0x%08x status=%u bytes=%llu",
+            static_cast<unsigned long long>(token), static_cast<unsigned long long>(epoch),
+            static_cast<unsigned long long>(queue), static_cast<unsigned long long>(presentOrdinal),
+            static_cast<unsigned>(queryHr), queried.status,
+            static_cast<unsigned long long>(queried.byteCount));
         return false;
+    }
     try {
         std::vector<std::byte> bytes(
             static_cast<std::size_t>(queried.byteCount));
         D9CRenderTapeIdentityCaptureV4Result copied{};
-        if (FAILED(hr32(dxmt9c_device_finish_render_tape_identity_capture_v4(
+        const auto copyHr = hr32(dxmt9c_device_finish_render_tape_identity_capture_v4(
                 dev_, token, epoch, queue, presentOrdinal, &copied,
-                bytes.data(), bytes.size()))) ||
+                bytes.data(), bytes.size()));
+        if (FAILED(copyHr) ||
             copied.status != queried.status || copied.version != queried.version ||
             copied.captureToken != queried.captureToken ||
             copied.captureEpoch != queried.captureEpoch ||
             copied.queue != queried.queue ||
             copied.presentOrdinal != queried.presentOrdinal ||
-            copied.byteCount != queried.byteCount)
+            copied.byteCount != queried.byteCount) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture identity_v4_finish_rejected phase=copy hr=0x%08x status=%u",
+                static_cast<unsigned>(copyHr), copied.status);
             return false;
+        }
         dxmt9::d3d9::RenderTapeIdentityV4View identity{};
         dxmt9::d3d9::RenderTapeExecutionTopologyV1View topology{};
         dxmt9::d3d9::RenderTapeActionWitnessV1 actionWitness{};
@@ -178,10 +194,17 @@ bool D3D9DeviceImpl::finishRenderTapeIdentityCaptureV4(
                 "render_tape_capture identity_v4_action_witness_rejected");
             return false;
         }
-        return peCaptureState_->renderTapeCapture.attachCaptureIdentityV4(
-            expected, queue, presentOrdinal, identity, topology, actionWitness, attachmentHistory) ==
-            dxmt9::d3d9::RenderTapeCaptureStatus::Complete;
+        const auto attached = peCaptureState_->renderTapeCapture.attachCaptureIdentityV4(
+            expected, queue, presentOrdinal, identity, topology, actionWitness, attachmentHistory);
+        if (attached != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture identity_v4_finish_rejected phase=attach status=%u",
+                static_cast<unsigned>(attached));
+            return false;
+        }
+        return true;
     } catch (...) {
+        dxmt9DeviceInfoLog("render_tape_capture identity_v4_finish_rejected phase=exception");
         return false;
     }
 }

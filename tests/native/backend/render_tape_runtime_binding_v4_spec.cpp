@@ -301,6 +301,27 @@ void bindingContract() {
       device->renderTapeRuntimeBindingV4->frozenPresentOrdinal == 1u &&
       device->renderTapeRuntimeBindingV4->actionWitness == witness,
       "post-observation transfer retry cannot bind a frozen root/witness to another Present");
+  const auto originalHistory = device->renderTapeRuntimeBindingV4->attachmentHistory;
+  for (unsigned fault = 0u; fault < 3u; ++fault) {
+    RenderTapeAttachmentHistoryHeader history;
+    std::vector<RenderTapeAttachmentHistoryRow> rows;
+    check(decodeRenderTapeAttachmentHistory(originalHistory, history, rows),
+        "finish rejection fixture uses genuinely observed Normal history");
+    if (fault == 0u) ++history.epoch;
+    if (fault == 1u) ++history.queue;
+    if (fault == 2u) ++history.completedSequence;
+    check(encodeRenderTapeAttachmentHistory(history, rows,
+        device->renderTapeRuntimeBindingV4->attachmentHistory),
+        "well-formed history can still name the wrong arm authority");
+    check(dxmt9c_device_finish_render_tape_identity_capture_v4(device, 5u, 6u, queue,
+        1u, &repeated, nullptr, 0u) == core::D3DERR_NOTAVAILABLE &&
+        repeated.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_FAILED &&
+        !repeated.byteCount && !device->renderTapeRuntimeBindingV4->receipt &&
+        device->renderTapeRuntimeBindingV4->transfer.empty() &&
+        device->renderTapeRuntimeBindingV4->actionWitness == witness,
+        "finish transfer rejects mismatched history without receipt or policy resampling");
+  }
+  device->renderTapeRuntimeBindingV4->attachmentHistory = originalHistory;
   check(dxmt9c_device_finish_render_tape_identity_capture_v4(device, 5u, 6u, queue,
       1u, &repeated, bytes.data(), bytes.size()) == core::D3D_OK &&
       bytes == frozenBytes && std::memcmp(&repeated, &queried, sizeof(repeated)) == 0,

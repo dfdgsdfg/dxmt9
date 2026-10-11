@@ -4,12 +4,19 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-10-09
+updated: 2026-10-11
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
+
+[H480](present-pacing-normal-history.480.md) adds retained, generation-qualified
+arm history and authenticated publication/inspection. Native tests pass, but
+the actual-game run publishes no bundle: old occlusion cycles fail admission
+and 16 later intervals fail the identity finish without detailed attribution.
+The next gate is stage-qualified finish diagnosis with bounded attempts, not
+a policy timing run. Defined contents and Normal replay remain unproven.
 
 [H479](present-pacing-normal-capture.479.md) supplies the first authenticated
 Normal-action STALKER interval and original source/output readbacks. The queue

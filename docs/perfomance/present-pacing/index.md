@@ -4,12 +4,18 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-10-09
+updated: 2026-10-11
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H480](present-pacing-normal-history.480.md) implements bounded original
+attachment history, but the fresh wild capture publishes nothing. Pre-cut
+occlusion polls and separate identity-finish failures block it; stage-qualified
+cold diagnostics now distinguish the latter. Normal replay and CPU savings
+remain unqualified.
 
 [H479](present-pacing-normal-capture.479.md) validates actual Normal capture:
 one STALKER courtyard interval, truthful unchanged action history, V4/source

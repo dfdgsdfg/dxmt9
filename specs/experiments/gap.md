@@ -31,8 +31,15 @@ meet their expected safety/progress/counterexample outcomes; they remain
 regression evidence, not a new content-validity or Normal replay proof.
 
 H479 still inspects successfully as history-absent/unknown; it predates this
-component and cannot retrospectively supply it. A fresh game capture with real
-rows remains missing. Content validity, history restoration, future-alias and
+component and cannot retrospectively supply it. H480 attempts fresh capture
+but publishes no bundle: 20 uncaptured-cycle aborts, 6 final query-transcript
+failures, and 16 unlocalized identity-finish failures across 43 completed arms
+(the last is interrupted by timeout). Cold stage-qualified finish diagnostics
+and native wrong-history binding negatives were added afterward; they are not
+retroactive cause evidence. Shared images are restored. See
+[H480](../../docs/perfomance/present-pacing/present-pacing-normal-history.480.md).
+A fresh game capture with real rows remains missing. Content validity,
+history restoration, future-alias and
 physical-storage closure, and original-versus-replay GPU evidence remain
 missing; Normal replay qualification remains closed. This diagnostic change
 does not establish default-tail CPU ownership or a removable-cost estimate.
