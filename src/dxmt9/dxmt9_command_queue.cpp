@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_render_tape_attachment_restore.hpp"
 #include "render/query_range_draw_append.hpp"
 #include <stdexcept>
 #include "dxmt9_wait_trace.hpp"
@@ -2189,6 +2190,66 @@ bool CommandQueue::completeRenderTapeBackbufferSeed(
   } catch (...) {
     return false;
   }
+}
+
+bool CommandQueue::restoreRenderTapeNormalAttachmentHistory(
+    TapeAttachmentRestorePlan plan) noexcept {
+  if (!plan.valid()) return false;
+  try {
+    std::lock_guard lock(mutex_);
+    // Match capture's queue -> policy lock order, but retain both through
+    // commit so a concurrent cold policy setter cannot invalidate admission.
+    std::lock_guard policyLock(renderTapeActionProfileMutex_);
+    const auto profile = renderTapeActionProfileHistory_.snapshot();
+    const auto boundary = plan.boundary();
+    if (!profile.valid || profile.constructionProfile != kRenderTapeActionProfileNormal ||
+        profile.currentProfile != kRenderTapeActionProfileNormal || profile.revision != 0u ||
+        tapeRuntimeObserver_ || boundary.queue != queryQueueIdentity_ ||
+        !renderTapeBackbufferSeedBuildQuiescent(
+            arenaAdmissionActive_.load(std::memory_order_relaxed),
+            activeArenaBuild_.load(std::memory_order_relaxed) != nullptr,
+            activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) != nullptr,
+            arenaBuildContext_.has_value(), directChunkSlotBuildContext_.has_value()))
+      return false;
+    bool empty = !writingSlot_;
+    if (writingSlot_ && *writingSlot_ < slots_.size()) {
+      const auto* payload = slots_[*writingSlot_].payload;
+      empty = payload && payload->commandsEmpty();
+    }
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    if (boundary.published != lastCommittedSeqId_ ||
+        boundary.initializerPublished != uploads.published ||
+        !renderTapeCheckpointCompletionAllowed({
+            .nextSequence = nextSeqId_.load(std::memory_order_relaxed),
+            .publishedSequence = lastCommittedSeqId_,
+            .completedSequence = completedSeqIdLocked(),
+            .initializerPublished = uploads.published,
+            .initializerCompleted = uploads.completed,
+            .inflightCount = inflightCount_, .buildQuiescent = true, .writingEmpty = empty,
+            .initializerPending = initializer_ && initializer_->hasPendingUploadsUnlocked(),
+            .initializerTrackingAvailable = query::asynchronousFencesEnabled(),
+            .initializerFailed = uploads.failed,
+            .terminal = stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+                queryPendingTerminal_.load(std::memory_order_relaxed) ||
+                queueLifecycle_.queryCompletionFailed()})) return false;
+    // Encoder-owned fields are read only after actual local completion.
+    if (plan.current() != currentBackBuffer_.value) return false;
+    for (const auto& row : plan.rows()) {
+      const auto* surface = pool_.findSurface(row.handle);
+      if (!surface || surface->destroyPending) return false;
+    }
+    // All fallible work remains off-state. Unmentioned local resources retain
+    // their setup history; each relevant original row overrides seed effects.
+    auto staged = touchedColorHandles_;
+    for (const auto& row : plan.rows()) {
+      if (row.touched) staged.insert(row.handle);
+      else staged.erase(row.handle);
+    }
+    touchedColorHandles_.swap(staged);
+    backBufferDiscardAfterPresent_ = plan.discard();
+    return true;
+  } catch (...) { return false; }
 }
 
 void CommandQueue::markPendingDirtyAll() {

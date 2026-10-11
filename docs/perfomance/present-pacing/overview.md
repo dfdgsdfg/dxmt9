@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H482](present-pacing-normal-restore.482.md) closes the cold queue primitive for
+seed-independent original touch/discard restoration. It is still disconnected
+from policy qualification: all-owner setup, Normal provider admission and GPU
+comparison remain before any same-input CPU-removal measurement.
+
 [H481](present-pacing-normal-history-input.481.md) supplies authenticated
 Normal history for all 16 defined surface generations. The same-input locator
 now handles constant-range headers and null unbinds. Read-first contents,

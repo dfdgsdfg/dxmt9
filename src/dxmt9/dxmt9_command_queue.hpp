@@ -71,6 +71,7 @@ class CommandQueue;
 struct CommandQueueArenaLeaseTestAccess;
 class Presenter;
 class PresentDrawableToken;
+class TapeAttachmentRestorePlan;
 
 namespace encoders {
 struct EncodeChunkOptions;
@@ -1395,6 +1396,9 @@ class CommandQueue {
   // complete swapchain seed, then waited for actual queue completion. Default
   // rendering policy is untouched; a failed admission changes no discard state.
   bool completeRenderTapeBackbufferSeed(core::Handle handle) noexcept;
+  // Cold Normal setup only. Consumes even on failure; never establishes
+  // content validity or replay qualification. No flush or wait is performed.
+  bool restoreRenderTapeNormalAttachmentHistory(TapeAttachmentRestorePlan plan) noexcept;
 
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so CommandQueue's constructor can wire its own runtime loops.

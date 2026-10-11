@@ -1924,7 +1924,7 @@ test('dxmt9-render-tape-publication-spec',
      env: dxmt9_native_test_env)
 
 foreach spec : ['render_tape_runtime_identity_v3', 'render_tape_runtime_identity_v4',
-                'render_tape_runtime_binding_v4', 'render_tape_ordinary_coordinator',
+                'render_tape_runtime_binding_v4', 'render_tape_attachment_restore', 'render_tape_ordinary_coordinator',
                 'render_tape_replay_observer', 'render_tape_emission_observer',
                 'render_tape_execution_v3', 'render_tape_execution_v4',
                 'render_tape_initial_setup_v4',
@@ -1934,7 +1934,7 @@ foreach spec : ['render_tape_runtime_identity_v3', 'render_tape_runtime_identity
                 'render_tape_capture_attachment', 'render_tape_action_profile']
   target_name = 'dxmt9-' + spec.replace('_', '-') + '-spec'
   spec_dependencies = [dxmt9_dep, dxmt9_frontend_dep]
-  if spec in ['render_tape_runtime_identity_v3', 'render_tape_runtime_binding_v4',
+  if spec in ['render_tape_runtime_identity_v3', 'render_tape_runtime_binding_v4', 'render_tape_attachment_restore',
               'render_tape_topology_scope', 'render_tape_execution_v4',
               'render_tape_initial_setup_v4',
               'render_tape_mutation_admission_v4',

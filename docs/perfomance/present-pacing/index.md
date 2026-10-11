@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H482](present-pacing-normal-restore.482.md) adds transactional cold restoration
+of original touch/discard history, with local completion and alias checks.
+Native and bounded-model evidence does not yet qualify Normal provider replay
+or CPU removal; authenticated integration and the original GPU oracle remain.
+
 [H481](present-pacing-normal-history-input.481.md) publishes an authenticated
 Normal bundle with 21 original history rows. Offline inspection fixes canonical
 constant/null parsing and exposes read-first and current-wrapper alias gates.

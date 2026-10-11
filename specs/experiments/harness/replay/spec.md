@@ -1440,6 +1440,35 @@ exclusion and Present mirror reservation remain capture perturbations. Normal
 refers only to attachment policy, not transparent timing or unchanged publication
 topology. No new physical-content validity authority follows from snapshot bytes.
 
+The cold Normal restore primitive (R-HARN-REPLAY-9.21) uses a move-only
+`TapeAttachmentRestorePlan`. Its caller authenticates original history, derives
+the required surface set from the admitted definitions and retains the exact
+resolved local wrappers through settlement. Preparation checks full required
+coverage, generations, duplicate identities and a bounded alias equivalence:
+equal storage/subresource or two observed current wrappers must resolve to the
+same local handle; unrelated storage must not collapse to one handle. Views
+requiring a wider physical alias relation are rejected, not guessed.
+
+The queue consumes the plan even on rejection. It requires unchanged Normal
+construction/history, no installed capture and an exact local published prefix
+with real queue/initializer completion and no borrowed writer. Only then may it
+inspect encoder-owned touch/current/discard state. It validates live pool
+generations and stages a replacement touch set before a no-throw swap and
+discard assignment. Unmapped local resources remain unchanged. No captured
+watermark substitutes for local progress, and no rendering policy is toggled.
+This primitive is deliberately not connected to existing stable-Exact policy
+qualification; it restores history, not content authority or shader coverage.
+
+`RenderTapeNormalHistoryRestore.tla` models preparation, a publication/reset
+before settlement, local completion, locked staging, allocation failure and
+atomic commit. `Prepare` binds the plan's local queue/prefix; `Attempt` binds
+the exact-prefix checks plus `renderTapeCheckpointCompletionAllowed`; the
+locked phase binds the queue and action-profile locks; `Stage`/`Commit` bind
+off-state set construction and swap/discard assignment. Its stale-boundary
+and eager-mutation negative configurations must fail. Native tests independently
+exercise the actual queue/pool and allocation sites. Retention and physical
+Metal contents are external assumptions, not proved by this bounded model.
+
 Normal replay requires a separate bounded initial-state contract: seed presence
 is not evidence of an original touched attachment, and replay seed upload must
 not invent or erase the original post-Present discard permission. The current

@@ -1986,3 +1986,21 @@ native bounded truth tables and real admission tests bind its observation and
 failure predicates. Existing lifecycle models remain regression gates. Normal
 restoration, content authority and original GPU comparison remain separate
 prerequisites for replay qualification.
+
+**R-HARN-REPLAY-9.21** A cold Normal attachment-history restoration primitive
+must consume a one-use, bounded plan joined to exact original surface
+generations and independently resolved, retained local handles. Required
+surface coverage, current-backbuffer membership, logical alias equivalence and
+touch agreement must be checked before mutation. Captured sequence labels must
+never authorize local completion: the plan must bind a local queue incarnation
+and exact published queue/initializer prefix, and restoration must independently
+observe completion and writer quiescence at that prefix.
+
+Restoration must reject active capture, borrowed builders, live queued work,
+pending/failed initialization, terminal state, dead handles, policy changes and
+current-backbuffer mismatch. Allocation or validation failure must leave all
+touch/discard state unchanged. Success restores original touched bits and
+post-Present discard independently of seed writes, without publishing, waiting,
+changing policy or claiming defined contents. This primitive is not Normal
+replay admission; authenticated provider integration, initial-content proof and
+original GPU comparison remain required.

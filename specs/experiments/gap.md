@@ -9,6 +9,33 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Normal attachment-history restoration — partial
+
+R-HARN-REPLAY-9.21 now has a move-only bounded plan and a cold queue settlement
+primitive. Preparation closes required generation coverage and the supported
+exact-handle alias relation. Settlement requires an unchanged Normal policy,
+no capture, a matching local queue/published prefix, completed queue/initializer
+work, no borrowed writer and live pool generations. Touch changes are staged
+before an atomic swap; original discard is restored independently of seed writes.
+The primitive does not publish work, wait or import captured completion labels.
+
+Native tests exercise the real inert queue and NULL-marker surface arena, not
+GPU contents. They cover alias/generation/capacity shape, local prefix and
+terminal/build rejection, one-use consumption and allocation rollback. The
+bounded `RenderTapeNormalHistoryRestore` model distinguishes stale-prefix and
+partial-mutation bugs. These layers do not prove physical GPU aliasing, load
+actions or pixels. The existing provider and stable-Exact launcher are not
+connected to this primitive: authenticated Normal provider admission, all
+required initial owners (including lazy aliases), first-read content authority
+and original-versus-replay GPU evidence remain open. Default-tail CPU ownership
+and removable cost are still unqualified.
+
+Focused tests pass 3/3 native and 4/4 x86_64 including install-name audit;
+Unix and both PE builds complete. All 233 TLA configurations meet expected
+outcomes, including the new model and its two negatives. See
+[H482](../../docs/perfomance/present-pacing/present-pacing-normal-restore.482.md)
+for exact evidence scope and the remaining provider boundary.
+
 ### Normal initial attachment history — partial
 
 R-HARN-REPLAY-9.20 specifies a bounded retained census and quiescent queue
