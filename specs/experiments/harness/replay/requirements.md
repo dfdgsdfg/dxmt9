@@ -2004,3 +2004,15 @@ post-Present discard independently of seed writes, without publishing, waiting,
 changing policy or claiming defined contents. This primitive is not Normal
 replay admission; authenticated provider integration, initial-content proof and
 original GPU comparison remain required.
+
+**R-HARN-REPLAY-9.22** A cold initial-setup planner may accept an explicit,
+bounded list of exact late produced-texture generations required for Normal
+attachment-history resolution. Such a request must be checked against the
+authenticated complete source, not caller-supplied descriptor claims. It may
+produce only allocation ownership with zero seed promises; the defining
+clear/write, original logical definition and source publication cuts must remain
+unchanged. Absent, stale, duplicate, unsupported or already seeded requests must
+reject transactionally. Allocation footprint must be bounded independently of
+seed bytes. An empty request must preserve the historical setup plan. This
+metadata admission does not qualify Normal policy, local completion, defined
+contents or GPU output, and must not silently enable a runtime preparation lane.

@@ -9,6 +9,19 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Normal produced-parent setup metadata — partial
+
+R-HARN-REPLAY-9.22 is implemented as an explicit bounded identity list in
+`buildRenderTapeInitialSetupV4`. Whole-source authentication, exact late
+generation selection, zero-content allocation, independent capacity and
+transactional failure are covered by native color/DF24 fixtures. The empty
+request leaves historical setup unchanged; no production caller enables the
+new selection yet. On H481, the actual resource-free builder gains one DF24
+parent and one alias (647 owners, 12 aliases) while preserving all 5,044 seed
+operations and original semantic actions. Wrapper precreation/retention and
+Normal provider execution remain unimplemented; this is not GPU or CPU timing
+qualification. See [H484](../../docs/perfomance/present-pacing/present-pacing-normal-produced-setup.484.md).
+
 ### Normal attachment-history restoration — partial
 
 R-HARN-REPLAY-9.21 now has a move-only bounded plan and a cold queue settlement
@@ -35,6 +48,17 @@ Unix and both PE builds complete. All 233 TLA configurations meet expected
 outcomes, including the new model and its two negatives. See
 [H482](../../docs/perfomance/present-pacing/present-pacing-normal-restore.482.md)
 for exact evidence scope and the remaining provider boundary.
+
+H483 reuses the original H481 bytes through production General/V4/initial-setup
+preflight without creating a device. All admissions pass. Of 16 required
+surfaces, four are prefix-resident and 12 wrappers remain lazy: ten seeded
+texture aliases, one NULL RT alias and one produced DF24 alias. The produced
+parent is also absent from hidden initial setup. The NULL alias is originally
+touched despite having no seed. Normal integration must retain the exact late
+wrappers through logical activation, prepare the missing owner without granting
+contents, and handle backbuffer seeding without the Exact-only completion call.
+First-read content and GPU equality remain open; see
+[H483](../../docs/perfomance/present-pacing/present-pacing-normal-setup-closure.483.md).
 
 ### Normal initial attachment history — partial
 

@@ -103,21 +103,52 @@ RenderTapeInitialSetupV4Status buildRenderTapeInitialSetupV4(
     const CaptureSourceReplayPlanV4& sourcePlan,
     const render_tape_runtime::GeneralPreflightPlan& replay,
     std::span<const std::byte> exactTape, std::uint32_t firstIntervalEvent,
-    RenderTapeInitialSetupV4Plan& out, RenderTapeInitialSetupV4Limits limits) noexcept {
+    RenderTapeInitialSetupV4Plan& out, RenderTapeInitialSetupV4Limits limits,
+    std::span<const D9CWireObjectIdentity> allocationOnlyProducedParents) noexcept {
   using Status = RenderTapeInitialSetupV4Status;
   if (!render_tape_runtime::generalReplayPlanMatchesAuthenticatedV4(
           exactTape, sourcePlan, replay)) return Status::InvalidBinding;
   std::uint32_t prefix = 0u;
   if (!renderTapeInitialSetupV4SnapshotPrefix(replay, prefix) ||
       prefix != firstIntervalEvent) return Status::InvalidBoundary;
+  if (allocationOnlyProducedParents.size() > limits.maxObjects)
+    return Status::CapacityExceeded;
+  for (std::size_t i = 0u; i < allocationOnlyProducedParents.size(); ++i) {
+    const auto& identity = allocationOnlyProducedParents[i];
+    if (identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE || !identity.objectId ||
+        !identity.generation) return Status::InvalidBinding;
+    for (std::size_t j = 0u; j < i; ++j)
+      if (sameSlot(identity, allocationOnlyProducedParents[j])) return Status::InvalidBinding;
+  }
   try {
     RenderTapeInitialSetupV4Plan staged;
+    std::size_t producedPrepared = 0u;
     for (std::size_t eventIndex = prefix; eventIndex < replay.events.size(); ++eventIndex) {
       const auto& event = replay.events[eventIndex];
       if (event.type != RenderTapeEventType::ObjectDefine) continue;
       const auto& definition = replay.definitions[event.index];
       const auto& fixed = definition.fixed;
-      const bool allocationOnly = renderTapeNullRtDescriptorOnly(
+      const bool producedRequested = std::any_of(allocationOnlyProducedParents.begin(),
+          allocationOnlyProducedParents.end(), [&](const auto& identity) {
+            return renderTapeIdentityV3SameIdentity(identity, fixed.identity);
+          });
+      if (producedRequested) {
+        RenderTapeTextureDescriptorV2 texture{};
+        D9CSurfaceDesc surface{};
+        if (!renderTapeLoadTextureDescriptorV2(definition.descriptor, texture) ||
+            texture.initialContentDisposition != static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::ProducedByCapturedPass) ||
+            texture.dimension != static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
+            texture.mipLevelCount != 1u || texture.subresourceCount != 1u ||
+            !renderTapeTextureSubresourceDescriptor(definition.descriptor, 0u, surface) ||
+            surface.resourceType != 3u || surface.pool != 0u || surface.depth != 1u ||
+            surface.multiSampleType || surface.multiSampleQuality ||
+            !((surface.usage == 1u && (surface.format == 21u || surface.format == 22u)) ||
+              renderTapeProducedTexturePolicy(definition.descriptor) ==
+                  RenderTapeProducedTextureContentPolicy::Df24DepthOnly))
+          return Status::UnsupportedClosure;
+      }
+      const bool allocationOnly = producedRequested || renderTapeNullRtDescriptorOnly(
           fixed.identity.kind, definition.descriptor);
       if (!allocationOnly && !fixed.expectedContentCount && !fixed.expectedContentBytes) continue;
       if (staged.entries_.size() >= limits.maxObjects ||
@@ -150,6 +181,7 @@ RenderTapeInitialSetupV4Status buildRenderTapeInitialSetupV4(
             kRenderTapeIdentityV4NoIndex, 0u, 0u,
             RenderTapeInitialSetupV4Mode::AllocationOnly, allocationBytes});
         staged.totalAllocationBytes_ += allocationBytes;
+        if (producedRequested) ++producedPrepared;
         continue;
       }
 
@@ -225,6 +257,9 @@ RenderTapeInitialSetupV4Status buildRenderTapeInitialSetupV4(
       staged.totalSeedBytes_ += contract.bytes;
     }
 
+    // Explicit requests may not silently disappear (prefix, absent or stale
+    // identity). A partial closure never replaces the previously admitted plan.
+    if (producedPrepared != allocationOnlyProducedParents.size()) return Status::InvalidBinding;
     for (const auto& event : replay.events) {
       if (event.type != RenderTapeEventType::ObjectDefine) continue;
       const auto& definition = replay.definitions[event.index];

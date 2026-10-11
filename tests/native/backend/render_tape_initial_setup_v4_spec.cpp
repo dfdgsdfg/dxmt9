@@ -38,7 +38,7 @@ constexpr D9CWireObjectIdentity spareQuery{D9C_CHUNK_HANDLE_KIND_QUERY, 7u, 901u
 enum class Variant {
   Normal, Empty, InterveningDefinition, InterveningCommand, InterveningControl,
   InterveningDestroy, InitialCpuUnlock, UnsupportedSurface, NoncanonicalBuffer,
-  ReversedSubresources, Produced, ProducedTexture, AllocationOnly,
+  ReversedSubresources, Produced, ProducedTexture, ProducedDepthTexture, ProducedFpTexture, AllocationOnly,
   AllocationWithSeeds, AllocationTwo, AllocationExtraAlias, AllocationOverflow,
   AllocationGenerationReuse,
 };
@@ -202,13 +202,16 @@ Fixture makeFixture(Variant variant = Variant::Normal) {
     }
   };
   const auto appendProduced = [&] {
+    const bool depth = variant == Variant::ProducedDepthTexture;
+    const bool fp = variant == Variant::ProducedFpTexture;
     const D9CWireObjectIdentity produced{D9C_CHUNK_HANDLE_KIND_SURFACE, 11u, 1021u};
     const RenderTapeSurfaceDescriptorV2 surface{
         .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
         .initialContentDisposition = static_cast<std::uint32_t>(RenderTapeInitialContentDisposition::ProducedByCapturedPass),
-        .surface = {.format = 21u, .resourceType = 1u, .usage = 1u,
+        .surface = {.format = depth ? kRenderTapeDf24D3DFormat : fp ? 113u : 21u,
+            .resourceType = 1u, .usage = depth ? 2u : 1u,
             .width = 16u, .height = 16u, .depth = 1u}};
-    if (variant == Variant::ProducedTexture) {
+    if (variant == Variant::ProducedTexture || depth || fp) {
       auto descriptor = textureDescriptor(RenderTapeTextureDimension::Texture2D, 1u);
       RenderTapeTextureDescriptorV2 fixed{};
       std::memcpy(&fixed, descriptor.data(), sizeof(fixed));
@@ -229,6 +232,27 @@ Fixture makeFixture(Variant variant = Variant::Normal) {
     }
     // The actual whole-target Clear stays an interval command, never a
     // setup seed. The snapshot routes it to the newly produced surface.
+    if (depth) {
+      const D9CCommandChunkWireDrawHeader state{.sectionCount = 1u,
+          .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+          .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader) + sizeof(D9CCommandChunkWireSectionDesc)};
+      const D9CCommandChunkWireSectionDesc section{.kind = D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+          .elementSize = sizeof(D9CCommandChunkWireDepthStencilBinding), .count = 1u,
+          .payloadOffset = state.sectionPayloadOffset, .byteSize = sizeof(D9CCommandChunkWireDepthStencilBinding)};
+      const D9CCommandChunkWireDepthStencilBinding binding{.valid = 1u, .handleIndex = 0u};
+      auto payload = bytesOf(state);
+      const auto sectionBytes = bytesOf(section), bindingBytes = bytesOf(binding);
+      payload.insert(payload.end(), sectionBytes.begin(), sectionBytes.end());
+      payload.insert(payload.end(), bindingBytes.begin(), bindingBytes.end());
+      const D9CCommandChunkWireClear clear{.flags = 2u, .z = 1.0f,
+          .rectOffset = sizeof(D9CCommandChunkWireClear)};
+      const std::array records{Record{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payload = std::move(payload), .handles = {{produced.kind, produced.generation, produced.objectId}}},
+          Record{.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)}};
+      builder.appendCommandChunk({.recordCount = 2u, .handleCount = 1u}, makeChunk(records));
+      ++nextEvent;
+      return;
+    }
     auto stateBytes = test::general_cpu_destroy_fixture_detail::bootstrapChunk();
     D9CCommandChunkWireHeader stateHeader{};
     std::memcpy(&stateHeader, stateBytes.data(), sizeof(stateHeader));
@@ -307,7 +331,8 @@ Fixture makeFixture(Variant variant = Variant::Normal) {
           .handles = {{query.kind, query.generation, query.objectId}}}};
       builder.appendCommandChunk({.recordCount = 1u, .handleCount = 1u}, makeChunk(records));
       ++nextEvent;
-      if (variant == Variant::Produced || variant == Variant::ProducedTexture) appendProduced();
+      if (variant == Variant::Produced || variant == Variant::ProducedTexture ||
+          variant == Variant::ProducedDepthTexture || variant == Variant::ProducedFpTexture) appendProduced();
       inserted = true;
     }
     if (type == RenderTapeEventType::PresentComplete) {
@@ -717,6 +742,82 @@ void allocationOnly() {
       "allocation-only move assignment invalidates old scalar authority too");
 }
 
+void requestedProducedAllocation() {
+  auto fixture = makeFixture(Variant::ProducedTexture);
+  RenderTapeInitialSetupV4Plan plan;
+  constexpr D9CWireObjectIdentity parent{D9C_CHUNK_HANDLE_KIND_TEXTURE, 11u, 1022u};
+  const std::array requested{parent};
+  const RenderTapeInitialSetupV4Limits limits{6u, 17u, 864u, 1024u};
+  const auto actions = std::vector<CaptureSourceReplayPlanV4Action>(
+      fixture.source.actions().begin(), fixture.source.actions().end());
+  const auto admit = [&](std::span<const D9CWireObjectIdentity> requests,
+                         RenderTapeInitialSetupV4Limits budget = {6u, 17u, 864u, 1024u}) {
+    return buildRenderTapeInitialSetupV4(fixture.source, fixture.replay, fixture.tape,
+        fixture.prefix, plan, budget, requests);
+  };
+  const auto admitted = admit(requested, limits);
+  if (admitted != Status::Valid) std::cerr << "produced allocation status=" << unsigned(admitted) << '\n';
+  check(admitted == Status::Valid && plan.entries().size() == 6u &&
+      plan.seeds().size() == 17u && plan.aliases().size() == 3u &&
+      plan.totalSeedBytes() == 864u && plan.totalAllocationBytes() == 1024u,
+      "explicit exact produced parent adds allocation and alias metadata, not a seed");
+  const auto owner = std::find_if(plan.entries().begin(), plan.entries().end(),
+      [&](const auto& entry) { return renderTapeIdentityV3SameIdentity(entry.definition.identity, parent); });
+  check(owner != plan.entries().end() && owner->mode == Mode::AllocationOnly &&
+      owner->seedCount == 0u && owner->firstSeedIndex == noIndex && owner->totalBytes == 0u &&
+      owner->allocationBytes == 1024u && owner->definition.expectedContentCount == 0u &&
+      owner->definition.expectedContentBytes == 0u,
+      "produced physical preparation carries no initial content promise");
+  check(std::equal(actions.begin(), actions.end(), fixture.source.actions().begin()) &&
+      plan.firstIntervalEvent() == fixture.prefix,
+      "request does not move the defining clear, publication cuts or semantic prefix");
+  const auto unchanged = [&] {
+    return plan.valid() && plan.entries().size() == 6u && plan.aliases().size() == 3u &&
+        plan.totalAllocationBytes() == 1024u && plan.sourcePlanDigest() == fixture.source.digest();
+  };
+  for (const auto invalid : std::array{
+      D9CWireObjectIdentity{parent.kind, parent.generation + 1u, parent.objectId},
+      D9CWireObjectIdentity{parent.kind, parent.generation, 999999u},
+      D9CWireObjectIdentity{D9C_CHUNK_HANDLE_KIND_SURFACE, parent.generation, parent.objectId},
+      D9CWireObjectIdentity{parent.kind, 0u, parent.objectId}}) {
+    const std::array request{invalid};
+    check(admit(request) == Status::InvalidBinding && unchanged(),
+        "stale/absent/wrong-kind/zero-generation request rejects without partial closure");
+  }
+  const std::array duplicate{parent, parent};
+  check(admit(duplicate) == Status::InvalidBinding && unchanged(), "duplicate allocation requests reject");
+  const std::array conflicting{parent,
+      D9CWireObjectIdentity{parent.kind, parent.generation + 1u, parent.objectId}};
+  check(admit(conflicting) == Status::InvalidBinding && unchanged(),
+      "two generations of one requested slot cannot be prestaged together");
+  const std::array seeded{D9CWireObjectIdentity{parent.kind, 11u, 1000u}};
+  check(admit(seeded) == Status::UnsupportedClosure && unchanged(),
+      "a seeded owner cannot be downgraded to allocation-only");
+  check(admit(requested, {6u, 17u, 864u, 1023u}) == Status::CapacityExceeded && unchanged(),
+      "produced allocation charges the independent bounded physical budget");
+  check(admit(requested, {5u, 17u, 864u, 1024u}) == Status::CapacityExceeded && unchanged(),
+      "produced allocation counts against the owner budget");
+  auto forged = fixture.replay;
+  ++forged.definitions[owner->definitionIndex].fixed.identity.generation;
+  check(buildRenderTapeInitialSetupV4(fixture.source, forged, fixture.tape,
+      fixture.prefix, plan, limits, requested) == Status::InvalidBinding && unchanged(),
+      "requested allocation does not bypass whole-input authentication");
+  check(admit({}) == Status::Valid && plan.entries().size() == 5u &&
+      plan.totalAllocationBytes() == 0u && plan.aliases().size() == 2u,
+      "unchanged default leaves produced allocation in the original interval");
+  auto depthFixture = makeFixture(Variant::ProducedDepthTexture);
+  check(buildRenderTapeInitialSetupV4(depthFixture.source, depthFixture.replay, depthFixture.tape,
+      depthFixture.prefix, plan, limits, requested) == Status::Valid &&
+      plan.entries().size() == 6u && plan.totalAllocationBytes() == 1024u &&
+      plan.seeds().size() == 17u && plan.aliases().size() == 3u,
+      "DF24 parent is allocation-only; actual Z-only defining clear stays in the admitted stream");
+  auto fpFixture = makeFixture(Variant::ProducedFpTexture);
+  check(buildRenderTapeInitialSetupV4(fpFixture.source, fpFixture.replay, fpFixture.tape,
+      fpFixture.prefix, plan, limits, requested) == Status::UnsupportedClosure &&
+      plan.sourcePlanDigest() == depthFixture.source.digest() && plan.totalAllocationBytes() == 1024u,
+      "unsupported wider FP backing cannot be charged as a four-byte allocation");
+}
+
 void prefixGrammar() {
   // Direct shared-prefix tests bind the precise execution grammar, separately
   // from authenticated builder tests that reject an altered General plan.
@@ -884,6 +985,7 @@ int main() {
     admission();
     failClosed();
     allocationOnly();
+    requestedProducedAllocation();
     prefixGrammar();
     lifecycle();
     std::cout << "render tape initial setup v4: " << checks << " checks passed\n";

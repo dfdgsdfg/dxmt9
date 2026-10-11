@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H484](present-pacing-normal-produced-setup.484.md) closes the missing DF24
+parent's metadata admission with an explicit allocation-only request. The
+same input plans 647 parents and 12 late aliases, with unchanged seeds and
+semantic cuts; actual retained-wrapper/provider integration is still required.
+
+[H483](present-pacing-normal-setup-closure.483.md) narrows Normal integration
+to 12 retained late wrappers, one unstaged produced DF24 parent, and independent
+history restoration after actual setup completion. Production offline preflight
+accepts the existing input; no Normal GPU replay or CPU savings are qualified.
+
 [H482](present-pacing-normal-restore.482.md) closes the cold queue primitive for
 seed-independent original touch/discard restoration. It is still disconnected
 from policy qualification: all-owner setup, Normal provider admission and GPU

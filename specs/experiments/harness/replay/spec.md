@@ -1332,12 +1332,25 @@ Two further V4-only refinements preserve the production timeline:
   and any resulting zero-initializer work finish before arm. Its exact original
   ObjectDefine activates ownership once; aliases still resolve at their original
   events against that active generation. This owner grants no seed or content
-  authority, cannot consume an Upload, and must never classify a
+  authority, cannot consume an Upload, and must not automatically classify a
   `ProducedByCapturedPass` resource as setup. Allocation-only footprint is
   bounded independently from promised seed bytes, including overflow rejection;
   the private provider's default allocation-only footprint limit is 64 MiB.
   Zero-seed ownership and failure release use the same checked lifecycle with
   an explicit mode, not an unchecked zero-count exception.
+
+For Normal history preparation, R-HARN-REPLAY-9.22 permits a separate explicit
+list of exact produced parent identities in `buildRenderTapeInitialSetupV4`.
+The current bounded shape is single-level, single-sample DEFAULT 2D
+A8R8G8B8/X8R8G8B8 color or DF24 depth. Whole-source authentication precedes
+selection; every requested identity must resolve to one late unseeded produced
+definition with no conflicting generation. The output uses `AllocationOnly`,
+zero seeds and `NoIndex`, charging width times height times four against the
+independent allocation budget. Aliases still carry their original definition
+events and exact parent generation. No command/action or content proof moves.
+The default empty request preserves produced-resource exclusion. This is a
+pure metadata extension; Normal wrapper retention, actual preparation and
+post-completion history settlement remain separate integration obligations.
 
 Native distinguishing traces cover pending Clear across NoOverwrite and across
 descriptor-only allocation/alias activation, negative drain classes, stale
@@ -1458,6 +1471,18 @@ discard assignment. Unmapped local resources remain unchanged. No captured
 watermark substitutes for local progress, and no rendering policy is toggled.
 This primitive is deliberately not connected to existing stable-Exact policy
 qualification; it restores history, not content authority or shader coverage.
+
+Provider integration must distinguish physical preparation from logical
+ObjectDefine activation. Every required late surface wrapper must remain
+retained from pre-arm resolution through transfer into the active owner table;
+a temporary lookup is insufficient when the texture's surface cache is weak.
+Required unseeded produced parents may be prepared only as allocation owners:
+the original clear/write and its content authority remain at their original
+semantic positions. Descriptor-only NULL resources do not derive touched state
+from seed absence. Seed effects must finish before one original-history
+settlement and local arm, and logical activation/seed consumption must not
+overwrite the restored history. Existing Exact-only backbuffer seed settlement
+cannot be reused by toggling a Normal queue's policy.
 
 `RenderTapeNormalHistoryRestore.tla` models preparation, a publication/reset
 before settlement, local completion, locked staging, allocation failure and

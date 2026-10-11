@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H484](present-pacing-normal-produced-setup.484.md) adds explicit, authenticated
+allocation-only planning for the missing produced parent. H481 now plans all
+12 late aliases without changing seed or command counts. Runtime retention,
+Normal replay and CPU-removal evidence remain open.
+
+[H483](present-pacing-normal-setup-closure.483.md) runs the production offline
+preflight on H481: 16 required surfaces include 12 late wrappers and one
+unstaged produced parent. NULL history disproves seed-derived restoration;
+the remaining Normal setup/activation boundary is explicit, not GPU-qualified.
+
 [H482](present-pacing-normal-restore.482.md) adds transactional cold restoration
 of original touch/discard history, with local completion and alias checks.
 Native and bounded-model evidence does not yet qualify Normal provider replay

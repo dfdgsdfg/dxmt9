@@ -84,7 +84,7 @@ private:
   friend RenderTapeInitialSetupV4Status buildRenderTapeInitialSetupV4(
       const CaptureSourceReplayPlanV4&, const render_tape_runtime::GeneralPreflightPlan&,
       std::span<const std::byte>, std::uint32_t, RenderTapeInitialSetupV4Plan&,
-      RenderTapeInitialSetupV4Limits) noexcept;
+      RenderTapeInitialSetupV4Limits, std::span<const D9CWireObjectIdentity>) noexcept;
   std::vector<RenderTapeInitialSetupV4Entry> entries_{};
   std::vector<RenderTapeInitialSetupV4Seed> seeds_{};
   std::vector<RenderTapeInitialSetupV4Alias> aliases_{};
@@ -102,13 +102,18 @@ bool renderTapeInitialSetupV4SnapshotPrefix(
 // Authenticates the whole supplied General plan against the immutable V4
 // owner before selecting any seed. Late promised closures must be complete,
 // contiguous, canonical initial Upload blocks; subsequent writes are excluded.
-// AllocationOnly admits only canonical late NullRtDescriptorOnly textures with
-// zero promises, not ProducedByCapturedPass or independently prepared aliases.
+// By default AllocationOnly admits canonical late NullRtDescriptorOnly textures.
+// A cold history-setup caller may explicitly request exact late produced parent
+// identities: only single-level 2D A8R8G8B8/X8R8G8B8/DF24 allocation is supported.
+// Requests grant no seed, content, policy or execution authority and never move
+// the original defining clear. Missing, stale, duplicate or seeded requests fail.
+// Independently prepared aliases remain outside this owner plan.
 // Admission is transactional: every failure leaves the destination unchanged.
 RenderTapeInitialSetupV4Status buildRenderTapeInitialSetupV4(
     const CaptureSourceReplayPlanV4&, const render_tape_runtime::GeneralPreflightPlan&,
     std::span<const std::byte> exactTape, std::uint32_t firstIntervalEvent,
-    RenderTapeInitialSetupV4Plan&, RenderTapeInitialSetupV4Limits = {}) noexcept;
+    RenderTapeInitialSetupV4Plan&, RenderTapeInitialSetupV4Limits = {},
+    std::span<const D9CWireObjectIdentity> allocationOnlyProducedParents = {}) noexcept;
 
 enum class RenderTapeInitialSetupV4OwnerPhase : std::uint8_t {
   Unprepared, Hidden, Active, Released,
