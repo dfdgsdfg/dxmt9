@@ -1,4 +1,16 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+perf_binding_counters_spec = executable(
+  'dxmt9-perf-binding-counters-spec', 'perf_binding_counters_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach mode : ['on', 'off']
+  test('dxmt9-perf-binding-counters-' + mode + '-spec', perf_binding_counters_spec,
+       args: [mode], env: dxmt9_native_test_env_vars + [
+         'DXMT_PERF_COUNTERS=' + (mode == 'on' ? '1' : '0')])
+endforeach
+
 query_range_draw_source_spec = executable(
   'dxmt9-query-range-draw-source-spec', 'query_range_draw_source_spec.cpp',
   include_directories: dxmt9_inc,

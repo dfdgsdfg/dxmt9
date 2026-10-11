@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H495](present-pacing-binding-counter-gate.495.md) consolidates OFF binding
+counter gates and passes 30 original oracles. Its 0.272 ms paired body delta
+does not clear 1.483 ms A/A noise; retain cleanup, claim no proven CPU saving.
+
+[H494](present-pacing-encode-cpu-stack.494.md) recovers native Encode CPU
+ancestry and confirms ten repeated OFF counter gates in release instructions.
+This selects a product-path removal candidate, not a CPU-share or default rank.
+
+[H493](present-pacing-v4-pending-lookup.493.md) reuses V4 pending-draw indices
+with first-match refinement. All 30 original oracles pass; paired planned CPU
+saving is 8.29 ms versus 2.20 ms A/A noise. Capture-only, not game FPS savings.
+
 [H492](present-pacing-validation-reuse.492.md) rejects local uniform-validation
 reuse on frozen CPU noise gates despite 30 passing original-image oracles.
 Runtime restored; no default-tail owner or removable-budget claim follows.

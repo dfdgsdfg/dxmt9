@@ -11,6 +11,24 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H495](present-pacing-binding-counter-gate.495.md) removes repeated enable
+decisions and zero-valued atomics from three binding counter families. Exact
+counter tests and 30 original GPU oracles pass, but the 0.272 ms paired body
+delta fails the 1.483 ms A/A noise gate. Retained diagnostic cleanup is not a
+proven time-saving budget or explanation of the tail gap.
+
+[H494](present-pacing-encode-cpu-stack.494.md) obtains 62 native Encode
+Running/Timer-Fired observations on the original input. A binding counter
+still executes ten enable checks when OFF, confirmed in release code. This
+is an actual product candidate, unlike H493's capture-only saving. Active
+signposts and cold prefetch prohibit treating the profile as default CPU prices.
+
+[H493](present-pacing-v4-pending-lookup.493.md) removes repeated DrawRun locator
+scans from capture qualification. All 30 original-input oracles pass; planned
+replay saves a paired median 8.29 ms, exceeding the 2.20 ms A/A envelope in
+8/8 positive pairs. The new approximately 42.94 ms scope still includes V4
+verification and tracing. No default-game owner, FPS or removal budget follows.
+
 [H492](present-pacing-validation-reuse.492.md) tests invocation-local uniform
 validation reuse. All 30 original-input oracles pass, but its 0.312 ms validator
 and 0.397 ms planned-replay paired medians fail the frozen A/A noise gates.

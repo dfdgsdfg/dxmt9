@@ -1743,6 +1743,22 @@ relation. Original and candidate END prefixes are projected onto canonical
 effect coverage, including all earlier sources, so an empty/baseline label
 cannot hide omitted pre-END work or admit younger work.
 
+Capture-side DrawRun emission lookup may reuse the existing pending-draw
+index only while appended `(eventOrdinal, recordIndex)` keys are strictly
+ordered. The index must match the full supplied locator; kind, unbound writer,
+physical-command, attempt-prefix and pending-order checks remain mandatory.
+The complete batch must validate before any binding changes. A duplicate or
+nonmonotone key permanently disables indexed lookup for that owner and retains
+the reference first-match scan, including for malformed cut histories. Record
+keys are append-only and rollback truncates them, so rollback may preserve a
+true ordering witness but must not resurrect a false one. Non-draw lookup
+retains its reference behavior. This changes capture qualification cost only,
+not publication, completion, resource lifetime or rendering policy.
+`render_tape_runtime_identity_v4_spec.cpp` binds this refinement to the actual
+append-hint and rollback transitions with bounded exhaustive append/truncate
+histories, malformed locator pairs and atomic batch-rejection cases. Original
+input GPU/source oracles remain an independent integration gate.
+
 The pure mapper consumes a validated immutable source plan, canonical event
 facts, actual local query facts and complete candidate identity rows. It
 revalidates real lifecycle, attempt/rollback and raw-ack coverage before

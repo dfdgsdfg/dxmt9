@@ -3740,22 +3740,26 @@ void countBaseStateBind(std::uint32_t textureBinds,
                         std::uint32_t viewportBinds,
                         std::uint32_t scissorBinds,
                         std::uint32_t rasterizerBinds) {
-  add(counters().bindTexture, textureBinds);
-  add(counters().bindSampler, samplerBinds);
-  add(counters().bindVertexBuffer, vertexBufferBinds);
-  add(counters().bindIndexBuffer, indexBufferBinds);
-  add(counters().bindUniformBuffer, uniformBufferBinds);
-  add(counters().bindPipeline, pipelineBinds);
-  add(counters().bindDepthState, depthStateBinds);
-  add(counters().bindViewport, viewportBinds);
-  add(counters().bindScissor, scissorBinds);
-  add(counters().bindRasterizer, rasterizerBinds);
+  if (!enabled()) return;
+  auto& c = counters();
+  addEnabledNonZero(c.bindTexture, textureBinds);
+  addEnabledNonZero(c.bindSampler, samplerBinds);
+  addEnabledNonZero(c.bindVertexBuffer, vertexBufferBinds);
+  addEnabledNonZero(c.bindIndexBuffer, indexBufferBinds);
+  addEnabledNonZero(c.bindUniformBuffer, uniformBufferBinds);
+  addEnabledNonZero(c.bindPipeline, pipelineBinds);
+  addEnabledNonZero(c.bindDepthState, depthStateBinds);
+  addEnabledNonZero(c.bindViewport, viewportBinds);
+  addEnabledNonZero(c.bindScissor, scissorBinds);
+  addEnabledNonZero(c.bindRasterizer, rasterizerBinds);
 }
 
 void countBaseStateBindSkip(std::uint32_t textureBinds,
                             std::uint32_t samplerBinds) {
-  add(counters().bindTextureSkipped, textureBinds);
-  add(counters().bindSamplerSkipped, samplerBinds);
+  if (!enabled()) return;
+  auto& c = counters();
+  addEnabledNonZero(c.bindTextureSkipped, textureBinds);
+  addEnabledNonZero(c.bindSamplerSkipped, samplerBinds);
 }
 
 void countBaseStateBindSkipExtended(std::uint32_t vertexBufferBinds,
@@ -3765,13 +3769,15 @@ void countBaseStateBindSkipExtended(std::uint32_t vertexBufferBinds,
                                     std::uint32_t viewportBinds,
                                     std::uint32_t scissorBinds,
                                     std::uint32_t rasterizerBinds) {
-  add(counters().bindVertexBufferSkipped, vertexBufferBinds);
-  add(counters().bindIndexBufferSkipped, indexBufferBinds);
-  add(counters().bindPipelineSkipped, pipelineBinds);
-  add(counters().bindDepthStateSkipped, depthStateBinds);
-  add(counters().bindViewportSkipped, viewportBinds);
-  add(counters().bindScissorSkipped, scissorBinds);
-  add(counters().bindRasterizerSkipped, rasterizerBinds);
+  if (!enabled()) return;
+  auto& c = counters();
+  addEnabledNonZero(c.bindVertexBufferSkipped, vertexBufferBinds);
+  addEnabledNonZero(c.bindIndexBufferSkipped, indexBufferBinds);
+  addEnabledNonZero(c.bindPipelineSkipped, pipelineBinds);
+  addEnabledNonZero(c.bindDepthStateSkipped, depthStateBinds);
+  addEnabledNonZero(c.bindViewportSkipped, viewportBinds);
+  addEnabledNonZero(c.bindScissorSkipped, scissorBinds);
+  addEnabledNonZero(c.bindRasterizerSkipped, rasterizerBinds);
 }
 
 void countDrawShaderBucket(std::uint64_t vertexShaderHash,

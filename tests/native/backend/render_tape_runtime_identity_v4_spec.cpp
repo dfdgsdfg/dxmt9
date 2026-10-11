@@ -4,6 +4,7 @@
 #include "device_c_replay_projection.hpp"
 #include "dxmt9/dxmt9_queue.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -56,6 +57,45 @@ struct RenderTapeRuntimeIdentityV4TestAccess {
           writer.identity.storageGeneration, writer.captureId, writer.sourceIndex, writer.commandCount,
           writer.identity.queue});
     return out;
+  }
+  // Reference algorithm before pending-index reuse. The fixtures call this
+  // after raw ACK, so no attempt/checkpoint prefix is active.
+  static bool referenceDrawLocators(RenderTapeRuntimeIdentityV4& runtime,
+      std::span<const RenderTapeRuntimeRecordLocator> locators) {
+    auto& core = *static_cast<RenderTapeRuntimeIdentityCore*>(runtime.sink().context);
+    std::lock_guard lock(core.mutex_);
+    for (std::size_t i = 0; i < locators.size(); ++i) {
+      const auto locator = locators[i];
+      const auto found = std::find_if(core.records_.begin(), core.records_.end(),
+          [&](const auto& r) { return r.disposition.eventOrdinal == locator.eventOrdinal &&
+              r.disposition.firstRecord == locator.recordIndex; });
+      if (found == core.records_.end() || core.consumedDraws_ + i >= core.pendingDraws_.size() ||
+          core.pendingDraws_[core.consumedDraws_ + i] != std::size_t(found - core.records_.begin()) ||
+          found->disposition.kind != static_cast<std::uint32_t>(RenderTapeIdentityV3DispositionKind::GpuCommand) ||
+          found->writer.valid() || found->physicalCommand != kRenderTapeIdentityV3NoIndex ||
+          renderTapeIdentityV3RecordCommandKind(found->type) != RenderTapeIdentityV3CommandKind::DrawRun)
+        return false;
+    }
+    return true;
+  }
+  static void applyLookupTrace(RenderTapeRuntimeIdentityV4& runtime, std::span<const int> actions) {
+    auto& core = *static_cast<RenderTapeRuntimeIdentityCore*>(runtime.sink().context);
+    std::lock_guard lock(core.mutex_);
+    for (const auto action : actions) {
+      if (action > 0) {
+        core.currentRecord_ = core.records_.size();
+        core.records_.push_back({.disposition = {
+            .eventOrdinal = static_cast<std::uint64_t>(action), .recordCount = 1u,
+            .kind = static_cast<std::uint32_t>(RenderTapeIdentityV3DispositionKind::GpuCommand)},
+            .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE});
+        core.pendingDraws_.push_back(core.currentRecord_);
+        core.onRecordBegin(); // Real V4 ordering-hint transition.
+      } else {
+        auto checkpoint = core.checkpoint();
+        checkpoint.records = checkpoint.pendingDraws = static_cast<std::size_t>(-action - 1);
+        if (!core.restoreRecords(checkpoint)) throw std::runtime_error("bounded lookup rollback");
+      }
+    }
   }
   static bool same(const Snapshot& left, const Snapshot& right) {
     if (left.records.size() != right.records.size() || left.writers != right.writers) return false;
@@ -1100,6 +1140,116 @@ void publishedSourceOriginsBeforeCoordinatorFinishes() {
       "frozen retained source/sequence lookup preserves exact immutable publication projection");
 }
 
+void pendingDrawLookupMatchesFirstScan() {
+  const std::array<RenderTapeRuntimeRecordLocator, 7> choices{{
+      {2u, 1u}, {2u, 3u}, {2u, 0u}, {2u, 2u}, {3u, 1u}, {0u, 1u}, {2u, UINT32_MAX}}};
+  for (const auto first : choices) for (const auto second : choices) {
+    RenderTapeRuntimeIdentityV4 runtime;
+    check(runtime.begin(key, {.queue = writer.queue}), "pending lookup root begins");
+    constexpr ReplayTransactionRawIdentity raw{key.token, 2u, 1u, 4u};
+    ReplayTransaction transaction;
+    {
+      ScopedReplayTransactionObserver scope(raw, runtime.replaySink());
+      transaction.begin(projectionIdentity(raw.rawOrdinal));
+      for (std::uint32_t index = 0u; index < raw.totalRawRecords; ++index)
+        record(runtime, transaction, index, index % 2u ? D9C_COMMAND_RECORD_DRAW_PRIMITIVE
+            : D9C_COMMAND_RECORD_SET_VS_CONST_F, index % 2u);
+      receiveAndCommit(transaction, ReplayDestinationKind::Compatibility);
+    }
+    check(runtime.acknowledgeRaw(raw, true), "mixed state/draw raw acknowledges");
+    const std::array locators{first, second};
+    const bool expected = RenderTapeRuntimeIdentityV4TestAccess::referenceDrawLocators(runtime, locators);
+    const auto before = RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime);
+    check(runtime.bindEmission(writer, 0u, core::MetalCommandKind::DrawRun, locators, 17u) == expected,
+        "pending lookup preserves full-scan admission for every locator pair");
+    if (!expected) {
+      check(RenderTapeRuntimeIdentityV4TestAccess::same(before,
+          RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime)),
+          "invalid second locator cannot partially bind the first");
+    } else {
+      const auto bound = RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime);
+      check(bound.records[1].disposition.firstSubdraw == 17u &&
+          bound.records[3].disposition.firstSubdraw == 18u, "subdraw origins remain exact");
+      check(!runtime.bindEmission(writer, 1u, core::MetalCommandKind::DrawRun, locators) &&
+          RenderTapeRuntimeIdentityV4TestAccess::same(bound,
+              RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime)),
+          "consumed pending range cannot be rebound");
+    }
+  }
+
+  // setCut can describe a noncanonical cursor before later validation rejects
+  // it. A hint must not change first-match behavior even on that bad input.
+  for (const auto alteredEvent : {1u, 2u}) {
+    RenderTapeRuntimeIdentityV4 runtime;
+    check(runtime.begin(key, {.queue = writer.queue}), "nonmonotone locator root begins");
+    ReplayTransaction transaction;
+    for (std::uint32_t ordinal = 1u; ordinal <= 2u; ++ordinal) {
+      const ReplayTransactionRawIdentity raw{key.token, ordinal + 1u, ordinal, 1u};
+      {
+        ScopedReplayTransactionObserver scope(raw, runtime.replaySink());
+        transaction.begin(projectionIdentity(raw.rawOrdinal));
+        if (ordinal == 2u) check(runtime.setCut(alteredEvent, RenderTapeIdentityV3CutKind::BeforeEvent),
+            "altered cut reaches the original first-match contract");
+        record(runtime, transaction, 0u, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, true);
+        receiveAndCommit(transaction, ReplayDestinationKind::Compatibility);
+      }
+      check(runtime.acknowledgeRaw(raw, true), "altered raw acknowledges independently");
+      const std::array locators{RenderTapeRuntimeRecordLocator{ordinal == 1u ? 2u : alteredEvent, 0u}};
+      const auto before = RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime);
+      const auto expected = RenderTapeRuntimeIdentityV4TestAccess::referenceDrawLocators(runtime, locators);
+      check(runtime.bindEmission(writer, ordinal - 1u, core::MetalCommandKind::DrawRun, locators) == expected,
+          "unordered and duplicate keys preserve the old first-match predicate");
+      if (!expected) check(RenderTapeRuntimeIdentityV4TestAccess::same(before,
+          RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime)), "duplicate rejection changes no binding");
+    }
+  }
+}
+
+void pendingLookupAppendRollbackRefinement() {
+  // Exhaust all depth-four append/truncate traces over three locator keys.
+  // Use actual ordering-hint and rollback transitions, then compare every
+  // attempted consumption against the old linear first-match predicate.
+  std::vector<int> actions;
+  const auto enumerate = [&](auto&& self, unsigned depth, std::size_t size) -> void {
+    if (depth != 4u) {
+      for (int key = 1; key <= 3; ++key) {
+        actions.push_back(key);
+        self(self, depth + 1u, size + 1u);
+        actions.pop_back();
+      }
+      for (std::size_t keep = 0; keep <= size; ++keep) {
+        actions.push_back(-static_cast<int>(keep) - 1);
+        self(self, depth + 1u, keep);
+        actions.pop_back();
+      }
+      return;
+    }
+    RenderTapeRuntimeIdentityV4 runtime;
+    RenderTapeRuntimeIdentityV4Limits limits;
+    limits.provenance.maxSources = limits.provenance.maxCommands =
+        limits.provenance.maxDispositions = limits.provenance.maxCoordinators =
+        limits.provenance.maxSettlements = limits.provenance.maxInitializers = 8u;
+    check(runtime.begin(key, {.queue = writer.queue}, limits), "bounded lookup model begins");
+    RenderTapeRuntimeIdentityV4TestAccess::applyLookupTrace(runtime, actions);
+    const auto rows = RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime).records;
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+      const std::array locators{RenderTapeRuntimeRecordLocator{rows[index].disposition.eventOrdinal,
+          rows[index].disposition.firstRecord}};
+      const auto expected = RenderTapeRuntimeIdentityV4TestAccess::referenceDrawLocators(runtime, locators);
+      const auto before = RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime);
+      check(runtime.bindEmission(writer, static_cast<std::uint32_t>(index),
+          core::MetalCommandKind::DrawRun, locators) == expected,
+          "production indexed lookup refines linear lookup after every append/truncate history");
+      if (!expected) {
+        check(RenderTapeRuntimeIdentityV4TestAccess::same(before,
+            RenderTapeRuntimeIdentityV4TestAccess::bindings(runtime)), "bounded rejection preserves bindings");
+        break;
+      }
+    }
+  };
+  enumerate(enumerate, 0u, 0u);
+}
+
 void combinedDrawRunAndReusedSourceOrigins() {
   RenderTapeRuntimeIdentityV4 runtime;
   check(runtime.begin(key, {.queue = writer.queue}), "combined compatibility origin root begins");
@@ -1481,6 +1631,8 @@ int main() {
     exactSourceLocatorAndAttemptBudgetFailures();
     publishedSourceOriginsBeforeCoordinatorFinishes();
     combinedDrawRunAndReusedSourceOrigins();
+    pendingDrawLookupMatchesFirstScan();
+    pendingLookupAppendRollbackRefinement();
     generatedSourceOriginRollbackAndRetry();
     replayLeaseRetirementKeepsFrozenTransportImmutable();
     firstFailureAttributionIsSticky();

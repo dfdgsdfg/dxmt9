@@ -8,6 +8,17 @@ using detail::Counters;
 using detail::counters;
 using detail::load;
 
+BindingCounterSnapshot snapshotBindingCounters() {
+  const auto& c = counters();
+  return {{load(c.bindTexture), load(c.bindSampler), load(c.bindVertexBuffer),
+           load(c.bindIndexBuffer), load(c.bindUniformBuffer), load(c.bindPipeline),
+           load(c.bindDepthState), load(c.bindViewport), load(c.bindScissor), load(c.bindRasterizer)},
+          {load(c.bindTextureSkipped), load(c.bindSamplerSkipped)},
+          {load(c.bindVertexBufferSkipped), load(c.bindIndexBufferSkipped),
+           load(c.bindPipelineSkipped), load(c.bindDepthStateSkipped),
+           load(c.bindViewportSkipped), load(c.bindScissorSkipped), load(c.bindRasterizerSkipped)}};
+}
+
 ShaderDecoderRejectSnapshot snapshotShaderDecoderRejects() {
   const Counters& c = counters();
   return ShaderDecoderRejectSnapshot{

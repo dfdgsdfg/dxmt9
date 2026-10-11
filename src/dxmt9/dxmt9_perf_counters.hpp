@@ -1738,6 +1738,14 @@ void countShaderDecoderRejectDeclUsageUnsupported();
 void countShaderDecoderRejectDeclMethodUnsupported();
 
 namespace test {
+// Cold test seam; fields follow each binding recorder's argument order.
+struct BindingCounterSnapshot {
+  std::array<std::uint64_t, 10> binds{};
+  std::array<std::uint64_t, 2> skips{};
+  std::array<std::uint64_t, 7> extendedSkips{};
+};
+BindingCounterSnapshot snapshotBindingCounters();
+
 // Test-only seam: snapshot the `shader_decoder_reject_*` buckets in
 // declaration order. Returned values are raw counter atoms — when
 // `DXMT_PERF_COUNTERS` is unset the count*() helpers no-op and the

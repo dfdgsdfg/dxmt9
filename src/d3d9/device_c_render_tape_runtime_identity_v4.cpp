@@ -164,14 +164,29 @@ public:
       const auto priorWriter = std::find_if(writers_.begin(), writers_.end(),
           [&](const auto& owner) { return owner.identity == identity; });
       if (priorWriter != writers_.end() && priorWriter->sourceIndex != noIndex) return reject();
+      const auto findRecord = [&](RenderTapeRuntimeRecordLocator locator, std::size_t offset) {
+        if (kind == Command::DrawRun && recordLocatorsStrictlyOrdered_) {
+          // Pending draw order is already an admission predicate below. Use
+          // its existing index instead of rescanning every earlier record;
+          // the caller's full locator still has to match, never just its kind.
+          if (consumedDraws_ > pendingDraws_.size() ||
+              offset >= pendingDraws_.size() - consumedDraws_) return records_.end();
+          const auto index = pendingDraws_[consumedDraws_ + offset];
+          if (index >= records_.size()) return records_.end();
+          const auto found = records_.begin() + index;
+          return found->disposition.eventOrdinal == locator.eventOrdinal &&
+              found->disposition.firstRecord == locator.recordIndex ? found : records_.end();
+        }
+        return std::find_if(records_.begin(), records_.end(), [&](const auto& record) {
+          return record.disposition.eventOrdinal == locator.eventOrdinal &&
+              record.disposition.firstRecord == locator.recordIndex;
+        });
+      };
       // Validate the complete call before binding any record. Locators are
       // supplied by the actual assembler, never found by matching kind.
       for (std::size_t index = 0u; index < locators.size(); ++index) {
         const auto locator = locators[index];
-        const auto found = std::find_if(records_.begin(), records_.end(), [&](const auto& record) {
-          return record.disposition.eventOrdinal == locator.eventOrdinal &&
-              record.disposition.firstRecord == locator.recordIndex;
-        });
+        const auto found = findRecord(locator, index);
         if (found == records_.end()) return reject();
         const auto recordIndex = static_cast<std::size_t>(found - records_.begin());
         if (attemptActive_ && !current_.effectEdge && recordIndex < checkpoint_.records)
@@ -199,10 +214,7 @@ public:
       if (!owner) return false;
       for (std::size_t index = 0u; index < locators.size(); ++index) {
         const auto locator = locators[index];
-        auto found = std::find_if(records_.begin(), records_.end(), [&](const auto& record) {
-          return record.disposition.eventOrdinal == locator.eventOrdinal &&
-              record.disposition.firstRecord == locator.recordIndex;
-        });
+        auto found = findRecord(locator, index);
         if (found->disposition.kind == static_cast<std::uint32_t>(Kind::Coordinator)) {
           const auto coordinator = found->disposition.coordinatorIndex == noIndex
               ? static_cast<std::uint32_t>(coordinators_.size()) : found->disposition.coordinatorIndex;
@@ -465,7 +477,15 @@ private:
     return !queryBaselinesSeeded_ || (attemptActive_ && !rollbackPending_ && current_.effectEdge);
   }
 
-  void onRecordBegin() noexcept override { ordinaryAdmissionEdge_ = 0u; }
+  void onRecordBegin() noexcept override {
+    ordinaryAdmissionEdge_ = 0u;
+    if (recordLocatorsStrictlyOrdered_ && records_.size() > 1u) {
+      const auto& prior = records_[records_.size() - 2u].disposition;
+      const auto& next = records_.back().disposition;
+      recordLocatorsStrictlyOrdered_ = prior.eventOrdinal < next.eventOrdinal ||
+          (prior.eventOrdinal == next.eventOrdinal && prior.firstRecord < next.firstRecord);
+    }
+  }
 
   bool sessionReleaseAdmitted() const noexcept override {
     return context_.coordinatorDomain == TapeCoordinatorAuthority::SessionRelease &&
@@ -737,6 +757,10 @@ private:
   std::uint32_t maxAttempts_ = 0u, committedEnd_ = 0u;
   bool attemptActive_ = false, rollbackPending_ = false, destinationSeen_ = false;
   bool queryBaselinesSeeded_ = false;
+  // Locator keys are append-only; confirmed rollback only truncates them.
+  // True proves uniqueness, so the pending index equals a first-match scan.
+  // Once false, keep the reference scan even after rollback (conservative).
+  bool recordLocatorsStrictlyOrdered_ = true;
   bool haveCommitted_ = false, rawAcknowledged_ = false;
 };
 
