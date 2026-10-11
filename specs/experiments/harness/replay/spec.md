@@ -1378,6 +1378,39 @@ GPU pixels or of unimplemented candidate policy mappings.
 
 ### Normal-action capture diagnostic
 
+The initial attachment-history census (R-HARN-REPLAY-9.20) is owned by the
+production runtime binding, not the PE shadow or replay seed initializer.
+The registry allocates and bounds-checks a full surface-wrapper census before
+retaining any wrapper. Retained wrappers supply original identities and local
+handles; the queue observes touched/current/discard state only under its
+existing quiescent capture-admission lock. No registry lock survives into queue
+admission. The resulting pointer-free rows are frozen with the capture and
+never resampled at finish. Multiple wrappers may name the same storage or
+current backbuffer; logical identities remain distinct. The census is not a
+claim about future aliases or defined GPU contents.
+
+The history grammar is a 64-byte version-1 header followed by at most 4,096
+48-byte rows in strict surface-object-ID order. Texture-level wrappers name
+their parent texture generation and subresource; standalone wrappers name
+themselves. This is logical alias evidence, not a physical allocation map.
+The touched field is the queue's color-load history and asserts nothing about
+depth/stencil validity. Every row's content-authority value is zero (unknown).
+The cold transfer uses an explicit 32-byte D9RTSNV4 envelope around the unchanged
+D9RTSNV3 pair/witness payload plus history; nested envelopes are rejected.
+Absent history preserves the V3 encoding, and V2 remains legacy-unknown.
+
+PE attaches history and the V4 pair transactionally. Publication writes
+`attachment_history.bin` with its own byte count/SHA-256 and explicit bindings
+to events, identity, topology and action-profile digests. Inspection checks all
+of those bindings plus token/epoch/queue and completed baseline watermarks.
+No existing reserved byte is reinterpreted and no bridge operation is added.
+
+Transfer absence remains explicit for older captures and replay arms. The
+history component binds the capture baseline and must be published with the
+events/identity/topology/action bytes it describes; independent readback
+success cannot upgrade unknown content authority. This observational protocol
+does not enable Normal replay or alter stable-Exact qualification.
+
 `DXMT9_RENDER_TAPE_ACTION_PROFILE=normal` with capture enabled selects ordinary
 attachment actions at queue construction. The shared pure selector in
 `include/dxmt9/render_tape_capture_policy.hpp` is consumed by the PE capture gate

@@ -1964,3 +1964,25 @@ may be inspected, but must remain ineligible for the existing stable-Exact
 CPU/GPU policy qualification. It grants neither Normal replay authority nor
 unperturbed application timing. No `.gputrace` replay time may be attributed to
 dxmt9 Replay/Encode CPU work.
+
+**R-HARN-REPLAY-9.20** Production Normal capture must observe bounded initial
+attachment history at the same quiescent queue admission as its identity
+baseline. Each row must preserve the generation-qualified surface identity,
+storage/subresource alias, color-touched bit and current-backbuffer membership.
+Post-Present discard and queue/initializer completion watermarks belong to the
+same observation. Registry census must retain the complete admitted set before
+observing queue state; capacity or allocation failure must acquire no partial
+set. Releases must occur outside registry and queue locks.
+
+History is diagnostic evidence, not content validity: every current row must
+explicitly carry unknown content authority. Missing rows and legacy absence
+must remain unknown, never implicitly untouched. Replay setup must not mint
+original history. A versioned transfer and published byte-digest binding must
+join history to the actual capture token/epoch/queue and baseline. Invalid or
+partial history must fail capture rather than silently omit the observation.
+No hot-path signature or per-draw observation is required. This read-only cold
+slice changes no load/store decision, lifetime waterline or scheduling policy;
+native bounded truth tables and real admission tests bind its observation and
+failure predicates. Existing lifecycle models remain regression gates. Normal
+restoration, content authority and original GPU comparison remain separate
+prerequisites for replay qualification.

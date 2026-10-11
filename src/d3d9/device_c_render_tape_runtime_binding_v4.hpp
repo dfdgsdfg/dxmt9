@@ -90,6 +90,8 @@ struct RenderTapeRuntimeBindingV4State {
   bool actionWitnessFrozen = false;
   std::uint64_t frozenPresentOrdinal = 0u;
   RenderTapeActionWitnessV1 actionWitness{};
+  // Original production Normal arm only; replay initialization grants none.
+  std::vector<std::byte> attachmentHistory{};
   std::optional<D9CRenderTapeIdentityCaptureV4Result> receipt{};
   std::vector<std::byte> transfer{};
 };

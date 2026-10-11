@@ -9,6 +9,34 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Normal initial attachment history — partial
+
+R-HARN-REPLAY-9.20 specifies a bounded retained census and quiescent queue
+observation. Production Normal arm now freezes generation-qualified logical
+surface/storage rows, color-touched/current membership, discard and completed
+watermarks. D9RTSNV4 transports this observation without changing V2/V3 layouts;
+PE joins it atomically and the publisher emits a digest-bound
+`attachment_history.bin`. Inspection authenticates it without granting replay
+or content authority. Exact and replay arms do not mint this original history.
+
+Native evidence covers bounded retain/no-partial-allocation, stale generation,
+non-reentrant census, missing-current and nonquiescent arm rejection, reference
+release, immutable arm bytes, format truth tables, transfer truncation/nesting
+and allocation failures, PE ownership and publication. CLI negatives cover
+component digests, companion bindings, baseline, malformed rows and unknown
+content authority. The focused native/CLI suite passes (10 targets); the
+x86_64 suite plus Unix install-name audit passes (11 targets). Both PE
+architectures and the Unix provider build. All 230 existing TLA configurations
+meet their expected safety/progress/counterexample outcomes; they remain
+regression evidence, not a new content-validity or Normal replay proof.
+
+H479 still inspects successfully as history-absent/unknown; it predates this
+component and cannot retrospectively supply it. A fresh game capture with real
+rows remains missing. Content validity, history restoration, future-alias and
+physical-storage closure, and original-versus-replay GPU evidence remain
+missing; Normal replay qualification remains closed. This diagnostic change
+does not establish default-tail CPU ownership or a removable-cost estimate.
+
 ### Normal-action capture diagnostic — partial
 
 R-HARN-REPLAY-9.19 adds explicit capture-only `normal` action selection using a

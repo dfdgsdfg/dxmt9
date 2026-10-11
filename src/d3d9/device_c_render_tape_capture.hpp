@@ -209,6 +209,7 @@ struct RenderTapePublicationBundle {
   // Queue-owned action-policy observation joined atomically with the V4 pair.
   // Canonical absence keeps old captures unknown, never exact-policy qualified.
   RenderTapeActionWitnessV1 actionWitness{};
+  std::vector<std::byte> attachmentHistory{};
   RenderTapeIdentityEventSettlement identitySettlement{};
   std::vector<D9CRenderTapeIdentitySettlementEntry> identitySettlements{};
   // Captured presentation output is an authoritative comparison sidecar, not
@@ -402,13 +403,15 @@ public:
       std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
       std::span<const std::byte> completeIdentity,
       std::span<const std::byte> completeTopology,
-      const RenderTapeActionWitnessV1& actionWitness = {});
+      const RenderTapeActionWitnessV1& actionWitness = {},
+      std::span<const std::byte> attachmentHistory = {});
   RenderTapeCaptureStatus attachCaptureIdentityV4(
       RenderTapeIdentityV4CaptureKey expectedCapture,
       std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
       const RenderTapeIdentityV4View& identitySnapshot,
       const RenderTapeExecutionTopologyV1View& topologySnapshot,
-      const RenderTapeActionWitnessV1& actionWitness = {});
+      const RenderTapeActionWitnessV1& actionWitness = {},
+      std::span<const std::byte> attachmentHistory = {});
   RenderTapeIdentityV4Status identityV4ValidationStatus() const noexcept {
     return identityV4ValidationStatus_;
   }

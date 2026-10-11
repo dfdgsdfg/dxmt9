@@ -96,6 +96,51 @@ void copyTable(std::vector<T>& rows, std::span<const std::byte> bytes,
 
 } // namespace
 
+bool renderTapeAttachmentHistoryMatchesCapture(std::span<const std::byte> bytes,
+    const RenderTapeIdentityV4Header& identity,
+    const RenderTapeActionWitnessV1& witness) noexcept {
+  RenderTapeAttachmentHistoryHeader h;
+  std::vector<RenderTapeAttachmentHistoryRow> rows;
+  return decodeRenderTapeAttachmentHistory(bytes, h, rows) &&
+      renderTapeActionWitnessV1MatchesBinding(witness,
+          h.token, h.epoch, h.queue) && witness.armProfile == 0u &&
+      h.token == identity.captureToken && h.epoch == identity.captureEpoch &&
+      h.queue == identity.queue &&
+      h.completedSequence == identity.baselineCompletedSequence &&
+      h.completedSequence == identity.baselineSequence &&
+      h.completedInitializer == identity.baselineCompletedInitializer &&
+      h.completedInitializer == identity.baselineInitializer;
+}
+
+Status encodeRenderTapeIdentityV4SnapshotTransfer(
+    const RenderTapeIdentityV4View& identity,
+    const RenderTapeExecutionTopologyV1View& topology,
+    const RenderTapeActionWitnessV1& actionWitness,
+    std::span<const std::byte> attachmentHistory,
+    std::vector<std::byte>& out) noexcept {
+  if (attachmentHistory.empty())
+    return encodeRenderTapeIdentityV4SnapshotTransfer(identity, topology, actionWitness, out);
+  out.clear();
+  if (!renderTapeAttachmentHistoryMatchesCapture(attachmentHistory, identity.header, actionWitness))
+    return Status::CaptureMismatch;
+  std::vector<std::byte> snapshot;
+  const auto status = encodeRenderTapeIdentityV4SnapshotTransfer(identity, topology, actionWitness, snapshot);
+  if (status != Status::Valid) return status;
+  RenderTapeHistoryTransferHeader h;
+  h.totalBytes = std::uint64_t{sizeof(h)} + snapshot.size() + attachmentHistory.size();
+  if (h.totalBytes > UINT32_MAX) return Status::CapacityExceeded;
+  h.snapshotBytes = static_cast<std::uint32_t>(snapshot.size());
+  h.historyBytes = static_cast<std::uint32_t>(attachmentHistory.size());
+  try {
+    std::vector<std::byte> pending(h.totalBytes);
+    std::memcpy(pending.data(), &h, sizeof(h));
+    std::memcpy(pending.data() + sizeof(h), snapshot.data(), snapshot.size());
+    std::memcpy(pending.data() + sizeof(h) + snapshot.size(), attachmentHistory.data(), attachmentHistory.size());
+    out = std::move(pending);
+    return Status::Valid;
+  } catch (...) { return Status::AllocationFailed; }
+}
+
 Status encodeRenderTapeIdentityV4SnapshotTransfer(
     const RenderTapeIdentityV4View& identity,
     const RenderTapeExecutionTopologyV1View& topology,
@@ -161,10 +206,48 @@ Status decodeRenderTapeIdentityV4SnapshotTransfer(
     std::uint64_t expectedQueue,
     RenderTapeIdentityV4View& identityOut,
     RenderTapeExecutionTopologyV1View& topologyOut,
-    RenderTapeActionWitnessV1* witnessOut) noexcept {
+    RenderTapeActionWitnessV1* witnessOut,
+    std::vector<std::byte>* attachmentHistoryOut) noexcept {
   identityOut = {};
   topologyOut = {};
   if (witnessOut) *witnessOut = {};
+  if (attachmentHistoryOut) attachmentHistoryOut->clear();
+  RenderTapeHistoryTransferHeader envelope;
+  if (bytes.size() >= sizeof(envelope)) {
+    std::memcpy(&envelope, bytes.data(), sizeof(envelope));
+    if (envelope.magic == RenderTapeHistoryTransferHeader{}.magic) {
+      if (envelope.version != 4u || envelope.headerBytes != sizeof(envelope) ||
+          envelope.totalBytes != bytes.size() || envelope.totalBytes > UINT32_MAX ||
+          std::uint64_t(envelope.snapshotBytes) + envelope.historyBytes + sizeof(envelope) != bytes.size() ||
+          envelope.snapshotBytes < sizeof(RenderTapeIdentityV4TransferHeader) ||
+          envelope.historyBytes < sizeof(RenderTapeAttachmentHistoryHeader) ||
+          envelope.historyBytes > sizeof(RenderTapeAttachmentHistoryHeader) +
+              kAttachmentHistoryMaxRows * sizeof(RenderTapeAttachmentHistoryRow))
+        return Status::InvalidLayout;
+      const auto snapshot = bytes.subspan(sizeof(envelope), envelope.snapshotBytes);
+      std::uint64_t innerMagic;
+      std::memcpy(&innerMagic, snapshot.data(), sizeof(innerMagic));
+      // No recursion, nested wrappers or legacy unknown witness inside V4.
+      if (innerMagic != kRenderTapeIdentityV4TransferMagic) return Status::InvalidHeader;
+      RenderTapeIdentityV4View identity;
+      RenderTapeExecutionTopologyV1View topology;
+      RenderTapeActionWitnessV1 witness;
+      const auto status = decodeRenderTapeIdentityV4SnapshotTransfer(snapshot, expectedCapture,
+          expectedQueue, identity, topology, &witness);
+      if (status != Status::Valid) return status;
+      const auto history = bytes.subspan(sizeof(envelope) + envelope.snapshotBytes);
+      if (!renderTapeAttachmentHistoryMatchesCapture(history, identity.header, witness))
+        return Status::CaptureMismatch;
+      try {
+        std::vector<std::byte> ownedHistory(history.begin(), history.end());
+        identityOut = std::move(identity);
+        topologyOut = std::move(topology);
+        if (witnessOut) *witnessOut = witness;
+        if (attachmentHistoryOut) *attachmentHistoryOut = std::move(ownedHistory);
+        return Status::Valid;
+      } catch (...) { return Status::AllocationFailed; }
+    }
+  }
   RenderTapeIdentityV4TransferHeader transfer{};
   RenderTapeIdentityV4TransferLegacyHeader legacy{};
   if (bytes.size() < sizeof(legacy)) return Status::InvalidHeader;

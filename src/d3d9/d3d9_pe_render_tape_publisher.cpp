@@ -3,6 +3,7 @@
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_identity_v3.hpp"
 #include "device_c_render_tape_execution_topology_v1.hpp"
+#include "device_c_render_tape_identity_transfer_v4.hpp"
 
 #include "util/config/config.hpp"
 
@@ -244,6 +245,7 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
                         std::string_view identityDigest,
                         std::string_view executionTopologyDigest,
                         std::string_view actionProfileDigest,
+                        std::string_view attachmentHistoryDigest,
                         std::string_view outputOracleDigest,
                         std::string_view sourceOracleDigest,
                         std::string_view identitySchema) {
@@ -292,6 +294,15 @@ std::string manifestFor(const RenderTapePublicationBundle& bundle,
                 "\"schema\":\"" << dxmt9::d3d9::kRenderTapeActionProfileV1Schema
              << "\",\"bytes\":" << dxmt9::d3d9::kRenderTapeActionProfileV1Bytes
              << ",\"sha256\":\"" << actionProfileDigest << "\"}";
+  }
+  if (!attachmentHistoryDigest.empty()) {
+    manifest << ",\n    \"attachment_history\":{\"path\":\"attachment_history.bin\","
+                "\"schema\":\"dxmt9.render_tape.attachment_history.v1\",\"bytes\":"
+             << bundle.attachmentHistory.size() << ",\"sha256\":\"" << attachmentHistoryDigest
+             << "\",\"events_sha256\":\"" << eventDigest
+             << "\",\"identity_sha256\":\"" << identityDigest
+             << "\",\"execution_topology_sha256\":\"" << executionTopologyDigest
+             << "\",\"action_profile_sha256\":\"" << actionProfileDigest << "\"}";
   }
   if (!bundle.outputOracle.empty()) {
     manifest << ",\n    \"output_oracle\":{\"path\":\"output.rgba\",\"bytes\":"
@@ -498,6 +509,17 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
       return reject("orphan_action_witness");
     const auto actionProfileDigest = observedAction
         ? hexDigest(RenderTapeCaptureSession::sha256(actionProfileBytes)) : std::string{};
+    if (!bundle.attachmentHistory.empty()) {
+      using namespace dxmt9::d3d9;
+      if (!observedAction || identitySchema != kRenderTapeIdentityV4Schema)
+        return reject("orphan_attachment_history");
+      RenderTapeIdentityV4Header h;
+      std::memcpy(&h, bundle.identity.data(), sizeof(h));
+      if (!renderTapeAttachmentHistoryMatchesCapture(bundle.attachmentHistory, h, bundle.actionWitness))
+        return reject("attachment_history_binding");
+    }
+    const auto attachmentHistoryDigest = bundle.attachmentHistory.empty() ? std::string{}
+        : hexDigest(RenderTapeCaptureSession::sha256(bundle.attachmentHistory));
 
     const auto finalPath = root / std::filesystem::path(std::string(frameName));
     if (!existingPathIsSafeDirectory(finalPath)) {
@@ -554,9 +576,12 @@ bool dxmt9PePublishRenderTapeBundle(const RenderTapePublicationBundle& bundle,
     if (observedAction && !writeBytes(stagingPath / "action_profile.bin", actionProfileBytes)) {
       return fail("action_profile_write_or_sync");
     }
+    if (!bundle.attachmentHistory.empty() &&
+        !writeBytes(stagingPath / "attachment_history.bin", bundle.attachmentHistory))
+      return fail("attachment_history_write_or_sync");
     const auto manifest = manifestFor(
         bundle, eventDigest, blobDigests, identityDigest, executionTopologyDigest,
-        actionProfileDigest, outputOracleDigest,
+        actionProfileDigest, attachmentHistoryDigest, outputOracleDigest,
         sourceOracleDigest, identitySchema);
     if (!writeText(stagingPath / "manifest.json", manifest)) {
       return fail("manifest_write_or_sync");

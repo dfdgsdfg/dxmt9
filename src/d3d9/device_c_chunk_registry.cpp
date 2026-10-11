@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace dxmt9::d3d9 {
 
@@ -163,6 +164,25 @@ std::size_t WireObjectRegistry::activeCount() const {
   }
   std::lock_guard lock(mutex_);
   return activeCount_;
+}
+
+bool WireObjectRegistry::snapshotAndRetainKind(std::uint32_t kind,
+    std::size_t limit, std::vector<RetainedEntry>& out, RetainFn retain) const {
+  if (!out.empty() || !retain || kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+      wireRegistryRetainCallbackActive()) return false;
+  std::lock_guard lock(mutex_);
+  std::vector<RetainedEntry> pending;
+  for (std::size_t i = 0; i < slots_.size(); ++i) {
+    const auto& slot = slots_[i];
+    if (!identityMatches(slot, kind, slot.generation)) continue;
+    if (pending.size() == limit) return false;
+    pending.push_back({{kind, slot.generation,
+        (std::uint64_t(registryId_) << 32u) | (i + 1u)}, slot.object});
+  }
+  WireRegistryRetainCallbackScope callbackScope;
+  for (const auto& entry : pending) retain(kind, entry.object);
+  out = std::move(pending);
+  return true;
 }
 
 const WireObjectRegistry::Slot* WireObjectRegistry::findLocked(

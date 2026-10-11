@@ -203,6 +203,50 @@ def check_action_profile_bundles(runner, tool: pathlib.Path, bundle: pathlib.Pat
         manifest, *_ = runner.load_bundle(target, allow_identity_v4=True)
         return runner.load_action_profile(target, manifest)
 
+    history_target = clone("history")
+    write_action_profile(runner, history_target, profiles=(0, 0, 0))
+    identity_raw = (history_target / "identity.bin").read_bytes()
+    token = struct.unpack_from("<Q", identity_raw, 32)[0]
+    epoch, queue = struct.unpack_from("<QQ", identity_raw, 80)
+    sequence = struct.unpack_from("<Q", identity_raw, 112)[0]
+    initializer = struct.unpack_from("<Q", identity_raw, 128)[0]
+    history = struct.pack("<QIIQQQQQII", 0x31484154523944, 1, 64,
+                          token, epoch, queue, sequence, initializer, 1, 3)
+    history += struct.pack("<IIQIIQIIII", 1, 1, 22, 0, 2, 23, 0, 1, 1, 0)
+
+    def publish_history(raw):
+        (history_target / "attachment_history.bin").write_bytes(raw)
+        def update(value):
+            value["components"]["attachment_history"] = {
+                "path": "attachment_history.bin", "schema": "dxmt9.render_tape.attachment_history.v1",
+                "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                **{name + "_sha256": value["components"][name]["sha256"]
+                   for name in ("events", "identity", "execution_topology", "action_profile")}}
+        rewrite_manifest(history_target, update)
+
+    publish_history(history)
+    history_manifest, *_ = runner.load_bundle(history_target, allow_identity_v4=True)
+    observed = runner.load_attachment_history(history_target, history_manifest)
+    assert observed["present"] and not observed["replay_qualified"]
+    assert observed["content_authority"] == "unknown" and observed["post_present_discard"]
+    assert observed["rows"][0]["touched"] and observed["rows"][0]["storage"] == [0, 2, "23"]
+    for offset in (0, 8, 12, 16, 24, 32, 40, 48, 56, 60, 64, 68, 84, 104, 108):
+        damaged = bytearray(history)
+        # Invalid magic/identity/baseline, empty generation, unknown authority,
+        # and mismatched current flag are independently digest-authenticated.
+        if offset in (68, 84, 104):
+            struct.pack_into("<I", damaged, offset, 0)
+        else:
+            damaged[offset] ^= 8
+        publish_history(bytes(damaged))
+        reject(lambda: runner.load_bundle(history_target, allow_identity_v4=True), "attachment history")
+    publish_history(history)
+    rewrite_manifest(history_target, lambda v: v["components"]["attachment_history"].update(events_sha256="0" * 64))
+    reject(lambda: runner.load_bundle(history_target, allow_identity_v4=True), "binding mismatch")
+    publish_history(history)
+    (history_target / "attachment_history.bin").write_bytes(history + b"x")
+    reject(lambda: runner.load_bundle(history_target, allow_identity_v4=True), "attachment history")
+
     assert loaded_profile(bundle) == {
         "present": False, "evidence": "legacy-unknown", "stable_exact": False, "witness": None,
     }

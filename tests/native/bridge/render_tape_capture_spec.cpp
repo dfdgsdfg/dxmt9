@@ -1,4 +1,5 @@
 #include "device_c_render_tape_capture.hpp"
+#include "dxmt9/render_tape_attachment_history.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "render_tape_identity_v4_fixture.hpp"
@@ -2168,9 +2169,19 @@ void testCompleteCaptureIdentityV4Attachment() {
       witness.freezeProfile = 0u;
       witness.freezeRevision = 1u;
     }
+    std::vector<std::byte> history;
+    if (mode == 0u) {
+      const auto& base = pair.identity.header;
+      RenderTapeAttachmentHistoryHeader h{.token = 7u, .epoch = 8u, .queue = 9u,
+          .completedSequence = base.baselineCompletedSequence,
+          .completedInitializer = base.baselineCompletedInitializer};
+      check(encodeRenderTapeAttachmentHistory(h, {}, history), "empty census is observed, not absent");
+    }
     const auto status = (mode & 1u)
-        ? session.attachCaptureIdentityV4({7u, 8u}, 9u, 5u, pair.identity, pair.topology, witness)
-        : session.attachCaptureIdentityV4({7u, 8u}, 9u, 5u, pair.identityBytes, pair.topologyBytes, witness);
+        ? session.attachCaptureIdentityV4({7u, 8u}, 9u, 5u, pair.identity, pair.topology, witness, history)
+        : session.attachCaptureIdentityV4({7u, 8u}, 9u, 5u, pair.identityBytes, pair.topologyBytes, witness, history);
+    check(session.publicationBundle().attachmentHistory == history,
+        "original history is owned atomically with its identity pair");
     check(status == RenderTapeCaptureStatus::Complete &&
               session.publicationBundle().actionWitness == witness &&
               !renderTapeActionWitnessV1StableExact(session.publicationBundle().actionWitness) &&

@@ -7,6 +7,7 @@
 #include "../dxmt9/dxmt9_command_queue.hpp"
 #include "../dxmt9/dxmt9_device.hpp"
 #include "util/log/log.hpp"
+#include "dxmt9/render_tape_attachment_history.hpp"
 
 #include <cstring>
 #include <limits>
@@ -56,6 +57,17 @@ struct InstalledCaptureGuard {
   }
 };
 
+struct RetainedArmSurfaces {
+  std::vector<WireObjectRegistry::RetainedEntry> entries;
+  ~RetainedArmSurfaces() {
+    for (const auto& entry : entries)
+      dxmt9c_surface_release(static_cast<D9CSurface*>(entry.object));
+  }
+  static void retain(std::uint32_t, void* object) noexcept {
+    dxmt9c_surface_addref(static_cast<D9CSurface*>(object));
+  }
+};
+
 std::int32_t beginCapture(D9CDevice* device, std::uint64_t token,
     std::uint64_t epoch, std::span<const RenderTapeReplayQueryBaselineV4> queries,
     bool replay, D9CRenderTapeIdentityCaptureV4ArmResult* out,
@@ -66,6 +78,7 @@ std::int32_t beginCapture(D9CDevice* device, std::uint64_t token,
   if (!device || !token || !epoch) return core::D3DERR_INVALIDCALL;
   // Retain outside the binding lock, including failed/exceptional installs.
   std::shared_ptr<Root> root;
+  RetainedArmSurfaces surfaces;
   try {
     std::lock_guard lock(device->renderTapeRuntimeIdentityV4Mutex);
     if (acquireRenderTapeRuntimeIdentityV4(device) || device->renderTapeRuntimeBindingV4 ||
@@ -98,10 +111,56 @@ std::int32_t beginCapture(D9CDevice* device, std::uint64_t token,
     }
     root = std::make_shared<Root>();
     auto binding = std::make_unique<RenderTapeRuntimeBindingV4State>();
+    const auto profile = upper->queue().renderTapeActionProfileSnapshot();
+    const bool observeAttachments = !replay && !authority &&
+        profile.valid && profile.currentProfile == kRenderTapeActionProfileNormal;
+    std::vector<CommandQueue::TapeAttachmentProbe> probes;
+    std::vector<RenderTapeAttachmentHistoryRow> rows;
+    if (observeAttachments) {
+      if (!device->wireObjects.snapshotAndRetainKind(D9C_CHUNK_HANDLE_KIND_SURFACE,
+              kAttachmentHistoryMaxRows, surfaces.entries, RetainedArmSurfaces::retain))
+        return core::D3DERR_NOTAVAILABLE;
+      probes.reserve(surfaces.entries.size());
+      rows.reserve(surfaces.entries.size());
+      for (const auto& entry : surfaces.entries) {
+        const auto* surface = static_cast<D9CSurface*>(entry.object);
+        if (!surface || !surface->obj || surface->device != device ||
+            !renderTapeIdentityV3SameIdentity(entry.identity, surface->wireIdentity))
+          return core::D3DERR_NOTAVAILABLE;
+        const auto* texture = surface->ownerTex;
+        if (texture && (texture->device != device ||
+            !device->wireObjects.contains(texture->wireIdentity, texture)))
+          return core::D3DERR_NOTAVAILABLE;
+        rows.push_back({.surface = entry.identity,
+            .storage = texture ? texture->wireIdentity : entry.identity,
+            .subresource = texture ? surface->ownerLevel : 0u});
+        probes.push_back({.handle = surface->obj->handle()});
+      }
+    }
+    CommandQueue::TapeAttachmentObservation observation{.probes = probes};
     InstalledCaptureGuard installed{*upper, *root};
     render::TapeRuntimeBaseline baseline{};
-    if (!upper->queue().installTapeRuntimeCapture(root, baseline)) return core::D3DERR_NOTAVAILABLE;
+    if (!upper->queue().installTapeRuntimeCapture(root, baseline,
+            observeAttachments ? &observation : nullptr)) return core::D3DERR_NOTAVAILABLE;
     installed.installed = true;
+    if (observeAttachments) {
+      if (!observation.actionProfile.valid ||
+          observation.actionProfile.currentProfile != kRenderTapeActionProfileNormal)
+        return core::D3DERR_NOTAVAILABLE;
+      for (std::size_t i = 0; i < rows.size(); ++i) {
+        rows[i].touched = probes[i].touched;
+        rows[i].currentBackbuffer = probes[i].currentBackbuffer;
+      }
+      const RenderTapeAttachmentHistoryHeader history{
+          .token = token, .epoch = epoch, .queue = baseline.queue,
+          .completedSequence = baseline.completedSequence,
+          .completedInitializer = baseline.completedInitializer,
+          .count = static_cast<std::uint32_t>(rows.size()),
+          .flags = (observation.discard ? 1u : 0u) |
+                   (observation.hasCurrentBackbuffer ? 2u : 0u)};
+      if (!encodeRenderTapeAttachmentHistory(history, rows, binding->attachmentHistory))
+        return core::D3DERR_NOTAVAILABLE;
+    }
     if (!root->begin({token, epoch}, baseline)) return core::D3DERR_NOTAVAILABLE;
     if (replay) {
       bool seeded = false;
@@ -119,8 +178,11 @@ std::int32_t beginCapture(D9CDevice* device, std::uint64_t token,
     binding->captureToken = token;
     binding->captureEpoch = epoch;
     binding->queue = baseline.queue;
-    binding->armActionProfile = upper->queue().renderTapeActionProfileSnapshot();
-    if (!renderTapeRuntimeBindingV4ActionProfileCoherent(binding->armActionProfile))
+    binding->armActionProfile = observeAttachments ? observation.actionProfile
+        : upper->queue().renderTapeActionProfileSnapshot();
+    if (!renderTapeRuntimeBindingV4ActionProfileCoherent(binding->armActionProfile) ||
+        (!replay && !authority && !observeAttachments &&
+         binding->armActionProfile.currentProfile == kRenderTapeActionProfileNormal))
       return core::D3DERR_NOTAVAILABLE;
     if (authority) {
       std::lock_guard authorityLock(authority->mutex);
@@ -489,7 +551,7 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture_v4(
           identity.header.presentOrdinal != presentOrdinal || identity.header.queue != queue ||
           topology.header.queue != queue ||
           encodeRenderTapeIdentityV4SnapshotTransfer(
-              identity, topology, binding.actionWitness, binding.transfer) !=
+              identity, topology, binding.actionWitness, binding.attachmentHistory, binding.transfer) !=
               RenderTapeIdentityV4TransferStatus::Valid)
         return dxmt9::core::D3DERR_NOTAVAILABLE;
       binding.receipt = D9CRenderTapeIdentityCaptureV4Result{

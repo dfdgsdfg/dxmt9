@@ -159,10 +159,11 @@ bool D3D9DeviceImpl::finishRenderTapeIdentityCaptureV4(
         dxmt9::d3d9::RenderTapeIdentityV4View identity{};
         dxmt9::d3d9::RenderTapeExecutionTopologyV1View topology{};
         dxmt9::d3d9::RenderTapeActionWitnessV1 actionWitness{};
+        std::vector<std::byte> attachmentHistory;
         const dxmt9::d3d9::RenderTapeIdentityV4CaptureKey expected{token, epoch};
         const auto decoded =
             dxmt9::d3d9::decodeRenderTapeIdentityV4SnapshotTransfer(
-                bytes, expected, queue, identity, topology, &actionWitness);
+                bytes, expected, queue, identity, topology, &actionWitness, &attachmentHistory);
         if (decoded != dxmt9::d3d9::RenderTapeIdentityV4TransferStatus::Valid) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture identity_v4_transfer_rejected status=%s",
@@ -178,7 +179,7 @@ bool D3D9DeviceImpl::finishRenderTapeIdentityCaptureV4(
             return false;
         }
         return peCaptureState_->renderTapeCapture.attachCaptureIdentityV4(
-            expected, queue, presentOrdinal, identity, topology, actionWitness) ==
+            expected, queue, presentOrdinal, identity, topology, actionWitness, attachmentHistory) ==
             dxmt9::d3d9::RenderTapeCaptureStatus::Complete;
     } catch (...) {
         return false;

@@ -1,4 +1,5 @@
 #include "d3d9_pe_render_tape_publisher.hpp"
+#include "dxmt9/render_tape_attachment_history.hpp"
 #include "device_c_render_tape_action_profile_component.hpp"
 #include "device_c_render_tape_identity_v3.hpp"
 #include "render_tape_identity_v4_fixture.hpp"
@@ -470,6 +471,14 @@ void testPairedIdentityV4Publication(const std::filesystem::path& root) {
     auto changed = value;
     auto& witness = changed.actionWitness;
     if (mode == 0u) witness.constructionProfile = witness.armProfile = witness.freezeProfile = 0u;
+    if (mode == 0u) {
+      const auto& base = fixture.identity.header;
+      RenderTapeAttachmentHistoryHeader history{.token = 7u, .epoch = 8u, .queue = 9u,
+          .completedSequence = base.baselineCompletedSequence,
+          .completedInitializer = base.baselineCompletedInitializer};
+      check(encodeRenderTapeAttachmentHistory(history, {}, changed.attachmentHistory),
+          "Normal publisher fixture carries explicit empty observed history");
+    }
     if (mode == 1u) {
       witness.constructionProfile = 0u;
       witness.armRevision = witness.freezeRevision = 1u;
@@ -484,6 +493,17 @@ void testPairedIdentityV4Publication(const std::filesystem::path& root) {
               dxmt9PePublishRenderTapeBundle(changed, root.string(), name),
         "Normal, pre-arm policy change, ABA and in-interval change remain valid queue observations but not stable exact evidence");
     const auto changedManifest = readText(root / name / "manifest.json");
+    if (mode == 0u) {
+      check(readBytes(root / name / "attachment_history.bin") == changed.attachmentHistory &&
+          changedManifest.find("\"attachment_history\"") != std::string::npos &&
+          changedManifest.find("\"events_sha256\"") != std::string::npos &&
+          changedManifest.find("\"action_profile_sha256\"") != std::string::npos,
+          "published history owns bytes and binds all companion digests");
+      changed.attachmentHistory[16] ^= std::byte{1};
+      check(!dxmt9PePublishRenderTapeBundle(changed, root.string(), "history-mismatch") &&
+          !std::filesystem::exists(root / "history-mismatch"),
+          "mismatched original history cannot publish");
+    }
     RenderTapeActionProfileV1ComponentHeader profile;
     check(importRenderTapeActionProfileV1Component(readBytes(root / name / "action_profile.bin"), profile) &&
               profile.witness == witness && actionProfileMatchesBundle(profile, changed) &&

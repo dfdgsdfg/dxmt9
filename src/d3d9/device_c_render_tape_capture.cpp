@@ -1,4 +1,5 @@
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_identity_transfer_v4.hpp"
 #include "device_c_render_tape_identity.hpp"
 
 #include "device_c_render_tape_descriptors.hpp"
@@ -1330,7 +1331,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
     std::span<const std::byte> completeIdentity,
     std::span<const std::byte> completeTopology,
-    const RenderTapeActionWitnessV1& actionWitness) {
+    const RenderTapeActionWitnessV1& actionWitness,
+    std::span<const std::byte> attachmentHistory) {
   if (state_ != RenderTapeCaptureState::Sealed ||
       !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
     return RenderTapeCaptureStatus::InvalidState;
@@ -1358,6 +1360,9 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
         sealedArtifact_, catalogue_, completeIdentity, &identityView, true);
     if (identityV4ValidationStatus_ != RenderTapeIdentityV4Status::Valid) return reject();
     const auto& h = identityView.header;
+    if (!attachmentHistory.empty() &&
+        !renderTapeAttachmentHistoryMatchesCapture(attachmentHistory, h, actionWitness))
+      return reject();
     if (!expectedCapture.token || !expectedCapture.epoch || !expectedQueue || !presentOrdinal ||
         h.captureToken != expectedCapture.token || h.captureEpoch != expectedCapture.epoch ||
         h.queue != expectedQueue || h.presentOrdinal != presentOrdinal) {
@@ -1373,9 +1378,11 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     // are synthesized, and GPU/query output qualification remains separate.
     std::vector<std::byte> identity(completeIdentity.begin(), completeIdentity.end());
     std::vector<std::byte> topology(completeTopology.begin(), completeTopology.end());
+    std::vector<std::byte> history(attachmentHistory.begin(), attachmentHistory.end());
     publicationBundle_.identity = std::move(identity);
     publicationBundle_.executionTopology = std::move(topology);
     publicationBundle_.actionWitness = actionWitness;
+    publicationBundle_.attachmentHistory = std::move(history);
     return RenderTapeCaptureStatus::Complete;
   } catch (...) {
     identityV4ValidationStatus_ = RenderTapeIdentityV4Status::AllocationFailed;
@@ -1389,7 +1396,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     std::uint64_t expectedQueue, std::uint64_t presentOrdinal,
     const RenderTapeIdentityV4View& identitySnapshot,
     const RenderTapeExecutionTopologyV1View& topologySnapshot,
-    const RenderTapeActionWitnessV1& actionWitness) {
+    const RenderTapeActionWitnessV1& actionWitness,
+    std::span<const std::byte> attachmentHistory) {
   if (state_ != RenderTapeCaptureState::Sealed ||
       !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
     return RenderTapeCaptureStatus::InvalidState;
@@ -1431,7 +1439,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     return capacity ? RenderTapeCaptureStatus::CapacityExceeded : RenderTapeCaptureStatus::ValidationFailed;
   }
   return attachCaptureIdentityV4(expectedCapture, expectedQueue, presentOrdinal,
-      identity, topology, actionWitness);
+      identity, topology, actionWitness, attachmentHistory);
 }
 
 void RenderTapeCaptureSession::abortInternal() noexcept {

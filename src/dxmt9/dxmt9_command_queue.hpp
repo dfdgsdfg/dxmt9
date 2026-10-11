@@ -1093,9 +1093,21 @@ class CommandQueue {
   // checkpoint and never publishes a writer to make that checkpoint true.
   bool installTapeRuntimeObserver(render::TapeRuntimeObserverSink sink,
       render::TapeRuntimeBaseline& baseline) noexcept;
+  struct TapeAttachmentProbe {
+    core::Handle handle{};
+    bool touched = false;
+    bool currentBackbuffer = false;
+  };
+  struct TapeAttachmentObservation {
+    std::span<TapeAttachmentProbe> probes{};
+    bool discard = false;
+    bool hasCurrentBackbuffer = false;
+    RenderTapeActionProfileSnapshot actionProfile{};
+  };
   bool installTapeRuntimeCapture(
       std::shared_ptr<render::TapeRuntimeCaptureAttachment> owner,
-      render::TapeRuntimeBaseline& baseline) noexcept;
+      render::TapeRuntimeBaseline& baseline,
+      TapeAttachmentObservation* attachments = nullptr) noexcept;
   render::TapeRuntimeCaptureLease acquireTapeRuntimeCapture() noexcept;
   // Caller has admitted the real coordinator effect and owns no queue/Direct
   // lease lock. Only the matching retained V4 arm may receive this cold edge.

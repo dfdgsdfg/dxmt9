@@ -611,6 +611,115 @@ void allocationFailureAndIndependentGrammars() {
           "all bounded transport outcomes retain stable diagnostic text");
 }
 
+void attachmentHistoryRoundTrip() {
+  auto pair = snapshotFixture();
+  auto witness = knownWitness();
+  witness.constructionProfile = witness.armProfile = witness.freezeProfile = 0u;
+  RenderTapeAttachmentHistoryHeader h{.token = kCapture.token, .epoch = kCapture.epoch,
+      .queue = kQueue, .count = 2u};
+  const D9CWireObjectIdentity a{D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, 10u};
+  const D9CWireObjectIdentity b{D9C_CHUNK_HANDLE_KIND_SURFACE, 2u, 11u};
+  const D9CWireObjectIdentity storage{D9C_CHUNK_HANDLE_KIND_TEXTURE, 3u, 12u};
+  std::array<RenderTapeAttachmentHistoryRow, 2> rows{{{.surface = a, .storage = a},
+      {.surface = b, .storage = storage, .subresource = 2u}}};
+  for (std::uint32_t flags = 0; flags < 5; ++flags)
+    for (std::uint32_t touched = 0; touched < 3; ++touched)
+      for (std::uint32_t current = 0; current < 3; ++current)
+        for (std::uint32_t authority = 0; authority < 2; ++authority) {
+          h.flags = flags;
+          rows[0].touched = touched; rows[0].currentBackbuffer = current;
+          rows[1].contentAuthority = authority;
+          const bool expected = flags < 4 && flags != 1 && touched < 2 && current < 2 &&
+              !authority && bool(flags & 2u) == bool(current);
+          check(renderTapeAttachmentHistoryValid(h, rows) == expected,
+              "bounded observation truth table grants no defined-content authority");
+        }
+  h.flags = 3u; rows[0].touched = rows[0].currentBackbuffer = 1u; rows[1].contentAuthority = 0u;
+  std::vector<std::byte> history, bytes;
+  check(encodeRenderTapeAttachmentHistory(h, rows, history) &&
+      encodeRenderTapeIdentityV4SnapshotTransfer(pair.identity, pair.topology, witness, history, bytes) == Status::Valid,
+      "original Normal history wraps an unchanged V3 snapshot");
+  SnapshotPair decoded;
+  RenderTapeActionWitnessV1 observed;
+  std::vector<std::byte> owned;
+  check(decodeRenderTapeIdentityV4SnapshotTransfer(bytes, kCapture, kQueue,
+      decoded.identity, decoded.topology, &observed, &owned) == Status::Valid && owned == history &&
+      observed == witness && !renderTapeActionWitnessV1StableExact(observed),
+      "history crosses the transfer without becoming replay authority");
+  for (std::size_t size = 0; size < bytes.size(); ++size) {
+    owned = history;
+    check(decodeRenderTapeIdentityV4SnapshotTransfer(std::span(bytes).first(size), kCapture, kQueue,
+        decoded.identity, decoded.topology, &observed, &owned) != Status::Valid &&
+        emptyPair(decoded) && owned.empty() && observed == RenderTapeActionWitnessV1{},
+        "every truncated transfer rejects without partial ownership");
+  }
+  for (unsigned mutation = 0; mutation < 8; ++mutation) {
+    auto changed = bytes;
+    RenderTapeHistoryTransferHeader envelope;
+    std::memcpy(&envelope, changed.data(), sizeof(envelope));
+    if (mutation == 0) ++envelope.version;
+    if (mutation == 1) ++envelope.headerBytes;
+    if (mutation == 2) ++envelope.totalBytes;
+    if (mutation == 3) ++envelope.snapshotBytes;
+    if (mutation == 4) envelope.historyBytes = UINT32_MAX;
+    if (mutation == 5) envelope.snapshotBytes = 0u;
+    std::memcpy(changed.data(), &envelope, sizeof(envelope));
+    if (mutation == 6) std::memcpy(changed.data() + sizeof(envelope), &envelope.magic, 8u);
+    if (mutation == 7) changed.push_back(std::byte{});
+    check(decodeRenderTapeIdentityV4SnapshotTransfer(changed, kCapture, kQueue,
+        decoded.identity, decoded.topology, &observed, &owned) != Status::Valid &&
+        emptyPair(decoded) && owned.empty(), "bad wrapper layout and nesting fail closed");
+  }
+  auto maxHeader = h;
+  maxHeader.flags = 0u;
+  maxHeader.count = kAttachmentHistoryMaxRows;
+  std::vector<RenderTapeAttachmentHistoryRow> maxRows(kAttachmentHistoryMaxRows);
+  for (std::size_t i = 0; i < maxRows.size(); ++i) {
+    const D9CWireObjectIdentity id{D9C_CHUNK_HANDLE_KIND_SURFACE, 1u, i + 1u};
+    maxRows[i] = {.surface = id, .storage = id};
+  }
+  check(renderTapeAttachmentHistoryValid(maxHeader, maxRows), "full bounded census is admitted");
+  maxRows.push_back({}); ++maxHeader.count;
+  check(!renderTapeAttachmentHistoryValid(maxHeader, maxRows), "capacity plus one is rejected");
+  for (unsigned mutation = 0; mutation < 9; ++mutation) {
+    auto altered = h;
+    auto changedRows = rows;
+    if (mutation == 0) ++altered.token;
+    if (mutation == 1) ++altered.epoch;
+    if (mutation == 2) ++altered.queue;
+    if (mutation == 3) ++altered.completedSequence;
+    if (mutation == 4) ++altered.completedInitializer;
+    if (mutation == 5) changedRows[1].surface = a;
+    if (mutation == 6) changedRows[0].storage.generation++;
+    if (mutation == 7) changedRows[0].surface.generation = 0u;
+    if (mutation == 8) altered.count = 4097u;
+    std::vector<std::byte> changed;
+    const bool encoded = encodeRenderTapeAttachmentHistory(altered, changedRows, changed);
+    check(!encoded || !renderTapeAttachmentHistoryMatchesCapture(changed, pair.identity.header, witness),
+        "stale binding, baseline, duplicate or malformed generation cannot attach");
+  }
+  std::vector<std::byte> legacy;
+  check(encodeRenderTapeIdentityV4SnapshotTransfer(pair.identity, pair.topology, witness, legacy) == Status::Valid &&
+      decodeRenderTapeIdentityV4SnapshotTransfer(legacy, kCapture, kQueue,
+          decoded.identity, decoded.topology, &observed, &owned) == Status::Valid && owned.empty(),
+      "old snapshot absence stays unknown");
+  check(!renderTapeAttachmentHistoryMatchesCapture(history, pair.identity.header, knownWitness()),
+      "Exact arm cannot claim original Normal history");
+  // Enumerate every allocation in the wrapper decoder until first success.
+  bool succeeded = false;
+  for (std::size_t index = 0; index < 32u; ++index) {
+    transfer_v4_allocation_probe::failAfter = index;
+    transfer_v4_allocation_probe::enabled = true;
+    const auto status = decodeRenderTapeIdentityV4SnapshotTransfer(bytes, kCapture, kQueue,
+        decoded.identity, decoded.topology, &observed, &owned);
+    transfer_v4_allocation_probe::enabled = false;
+    if (status == Status::Valid) { succeeded = true; break; }
+    check(emptyPair(decoded) && owned.empty() && observed == RenderTapeActionWitnessV1{},
+        "allocation failure at any wrapper stage publishes no partial evidence");
+  }
+  check(succeeded, "all wrapper allocation boundaries exercised");
+}
+
 } // namespace
 
 int main() {
@@ -621,6 +730,7 @@ int main() {
     malformedHeadersAndTrustedPair();
     malformedCanonicalLayoutAndCapacity();
     allocationFailureAndIndependentGrammars();
+    attachmentHistoryRoundTrip();
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "render tape v4 paired identity transfer spec failed: " << error.what() << '\n';

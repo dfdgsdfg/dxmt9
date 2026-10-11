@@ -14,6 +14,16 @@
 #include <thread>
 #include <vector>
 
+namespace dxmt9 {
+struct CommandQueueArenaLeaseTestAccess {
+  static void attachmentState(CommandQueue& queue, core::Handle current, bool discard) {
+    queue.currentBackBuffer_ = current;
+    queue.backBufferDiscardAfterPresent_ = discard;
+  }
+  static void inflight(CommandQueue& queue, std::size_t count) { queue.inflightCount_ = count; }
+};
+}
+
 namespace {
 using namespace dxmt9;
 using namespace dxmt9::d3d9;
@@ -239,7 +249,8 @@ void bindingContract() {
       1u, &queried, nullptr, 0u) == core::D3D_OK &&
       queried.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE && queried.version == 4u &&
       queried.captureToken == 5u && queried.captureEpoch == 6u && queried.queue == queue &&
-      queried.presentOrdinal == 1u && queried.byteCount == sizeof(RenderTapeIdentityV4TransferHeader),
+      queried.presentOrdinal == 1u && queried.byteCount == sizeof(RenderTapeIdentityV4TransferHeader) +
+          sizeof(RenderTapeHistoryTransferHeader) + sizeof(RenderTapeAttachmentHistoryHeader),
       "genuine finish freezes paired empty-ledger size receipt without a Metal fence");
   check(!oldLease.active() && !fixture.queue->acquireTapeRuntimeCapture(),
       "frozen capture closes retained endpoint admission");
@@ -525,6 +536,52 @@ void retainedQueueRetirement() {
       "joined retirement leaves revoked lease and no current capture root");
 }
 
+void originalAttachmentHistory() {
+  Fixture fixture;
+  auto surface = std::make_shared<core::Surface>(std::shared_ptr<core::Device>{},
+      core::Handle{123u}, core::SurfaceDesc{});
+  using OwnedSurface = std::unique_ptr<D9CSurface, decltype(&dxmt9c_surface_release)>;
+  OwnedSurface first(new D9CSurface(surface, nullptr, 0u, fixture.device.get()), dxmt9c_surface_release);
+  OwnedSurface alias(new D9CSurface(surface, nullptr, 0u, fixture.device.get()), dxmt9c_surface_release);
+  fixture.queue->markColorHandleTouched(surface->handle());
+  CommandQueueArenaLeaseTestAccess::attachmentState(*fixture.queue, surface->handle(), true);
+  D9CRenderTapeIdentityCaptureV4ArmResult arm;
+  check(dxmt9c_device_begin_render_tape_identity_capture_v4(fixture.device.get(), 81u, 82u, &arm) == core::D3D_OK,
+      "real Normal arm observes retained wrappers at quiescence");
+  RenderTapeAttachmentHistoryHeader h;
+  std::vector<RenderTapeAttachmentHistoryRow> rows;
+  const auto bytes = fixture.device->renderTapeRuntimeBindingV4->attachmentHistory;
+  check(decodeRenderTapeAttachmentHistory(bytes, h, rows) && h.flags == 3u && h.queue == arm.queue &&
+      rows.size() == 2u && rows[0].touched && rows[1].touched &&
+      rows[0].currentBackbuffer && rows[1].currentBackbuffer &&
+      rows[0].surface.objectId != rows[1].surface.objectId &&
+      first->refs == 1u && alias->refs == 1u,
+      "both logical wrappers observe the same physical current/touch history; census retains are released");
+  fixture.queue->clearAllTouchedColorHandles();
+  check(bytes == fixture.device->renderTapeRuntimeBindingV4->attachmentHistory,
+      "arm bytes cannot follow later queue mutations");
+  dxmt9c_device_cancel_render_tape_identity_capture_v4(fixture.device.get(), 81u, 82u, arm.queue);
+  CommandQueueArenaLeaseTestAccess::attachmentState(*fixture.queue, core::Handle{999u}, true);
+  check(dxmt9c_device_begin_render_tape_identity_capture_v4(fixture.device.get(), 83u, 84u, &arm) == core::D3DERR_NOTAVAILABLE &&
+      !fixture.queue->acquireTapeRuntimeCapture() && first->refs == 1u && alias->refs == 1u,
+      "missing current identity rejects atomically and releases the census");
+  CommandQueueArenaLeaseTestAccess::attachmentState(*fixture.queue, surface->handle(), false);
+  CommandQueueArenaLeaseTestAccess::inflight(*fixture.queue, 1u);
+  check(dxmt9c_device_begin_render_tape_identity_capture_v4(fixture.device.get(), 83u, 84u, &arm) == core::D3DERR_NOTAVAILABLE &&
+      !fixture.queue->acquireTapeRuntimeCapture() && first->refs == 1u,
+      "nonquiescent arm cannot observe encoder-owned history");
+  CommandQueueArenaLeaseTestAccess::inflight(*fixture.queue, 0u);
+  check(beginRenderTapeIdentityCaptureV4ForReplay(fixture.device.get(), 83u, 84u, {}, &arm) == core::D3D_OK &&
+      fixture.device->renderTapeRuntimeBindingV4->attachmentHistory.empty(),
+      "replay setup cannot mint original history");
+  dxmt9c_device_cancel_render_tape_identity_capture_v4(fixture.device.get(), 83u, 84u, arm.queue);
+  fixture.queue->setRenderTapeExactAttachmentPreservation(true);
+  check(dxmt9c_device_begin_render_tape_identity_capture_v4(fixture.device.get(), 85u, 86u, &arm) == core::D3D_OK &&
+      fixture.device->renderTapeRuntimeBindingV4->attachmentHistory.empty(),
+      "Exact capture keeps its existing transfer without original Normal history");
+  dxmt9c_device_cancel_render_tape_identity_capture_v4(fixture.device.get(), 85u, 86u, arm.queue);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -559,6 +616,7 @@ int main(int argc, char** argv) {
     replayBaselineAdmission();
     replayBaselineRejections();
     retainedQueueRetirement();
+    originalAttachmentHistory();
     std::cout << "render tape runtime binding v4: " << checks << " checks\n";
     return 0;
   } catch (const std::exception& error) {

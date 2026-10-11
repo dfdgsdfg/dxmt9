@@ -9111,7 +9111,8 @@ CommandQueue::inspectRenderTapeArmState() noexcept {
 
 bool CommandQueue::installTapeRuntimeCapture(
     std::shared_ptr<render::TapeRuntimeCaptureAttachment> owner,
-    render::TapeRuntimeBaseline& baseline) noexcept {
+    render::TapeRuntimeBaseline& baseline,
+    TapeAttachmentObservation* attachments) noexcept {
   baseline = {};
   if (!owner || !owner->edges().active()) return false;
   const auto sink = owner->sink();
@@ -9137,7 +9138,26 @@ bool CommandQueue::installTapeRuntimeCapture(
         : resources::Initializer::QueryProgress{};
     if (uploads.failed || uploads.published != uploads.completed ||
         (initializer_ && initializer_->hasPendingUploadsUnlocked())) return false;
+    if (attachments) {
+      // Only the already-quiescent cold arm may read encoder-owned history.
+      // Unknown/missing current identities cannot be reported as untouched.
+      bool foundCurrent = !currentBackBuffer_;
+      for (const auto& probe : attachments->probes) {
+        if (!probe.handle) return false;
+        foundCurrent |= probe.handle == currentBackBuffer_;
+      }
+      if (!foundCurrent) return false;
+    }
     if (!tapeRuntimeObserverEndpoint_.attachRetained(owner)) return false;
+    if (attachments) {
+      for (auto& probe : attachments->probes) {
+        probe.touched = isColorHandleTouched(probe.handle);
+        probe.currentBackbuffer = probe.handle == currentBackBuffer_;
+      }
+      attachments->discard = backBufferDiscardAfterPresent_;
+      attachments->hasCurrentBackbuffer = bool(currentBackBuffer_);
+      attachments->actionProfile = renderTapeActionProfileSnapshot();
+    }
     tapeRuntimeObserver_ = sink;
     baseline = {queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
                 uploads.published, uploads.completed, cpuReadySessionLaneEnabled_};

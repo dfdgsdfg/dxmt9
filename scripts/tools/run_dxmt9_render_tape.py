@@ -957,6 +957,73 @@ def pack(args: argparse.Namespace) -> int:
     return 0
 
 
+def load_attachment_history(bundle: pathlib.Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Cold original-arm evidence only; no content or Normal replay authority."""
+    components = manifest["components"]
+    component = components.get("attachment_history")
+    if "attachment_history" not in components:
+        return {"present": False, "content_authority": "unknown", "replay_qualified": False}
+    def reject(reason: str) -> None:
+        raise SystemExit(f"render tape attachment history {reason}")
+    if (not isinstance(component, dict) or component.get("path") != "attachment_history.bin"
+            or component.get("schema") != "dxmt9.render_tape.attachment_history.v1"):
+        reject("component path/schema is invalid")
+    path = bundle / "attachment_history.bin"
+    size = component.get("bytes")
+    if (type(size) is not int or not 64 <= size <= 64 + 4096 * 48
+            or path.is_symlink() or not path.is_file() or path.stat().st_size != size):
+        reject("size or file is invalid")
+    with path.open("rb") as stream:
+        raw = stream.read(size + 1)
+    if len(raw) != size or hashlib.sha256(raw).hexdigest() != component.get("sha256"):
+        reject("digest mismatch")
+    for name in ("events", "identity", "execution_topology", "action_profile"):
+        target = components.get(name)
+        if (not isinstance(target, dict) or component.get(name + "_sha256") != target.get("sha256")
+                or not isinstance(target.get("sha256"), str)):
+            reject(f"{name} binding mismatch")
+        # Canonical filenames, never paths supplied by the history component.
+        if digest(bundle / (name + ".bin")) != target["sha256"]:
+            reject(f"{name} digest mismatch")
+    action = load_action_profile(bundle, manifest)
+    witness = action.get("witness")
+    if not witness or witness["arm_profile"] != 0:
+        reject("requires observed Normal arm")
+    magic, version, header, token, epoch, queue, sequence, initializer, count, flags = \
+        struct.unpack_from("<QIIQQQQQII", raw)
+    if (magic != 0x31484154523944 or version != 1 or header != 64 or count > 4096
+            or len(raw) != 64 + 48 * count or flags > 3 or flags == 1
+            or (str(token), str(epoch), str(queue)) !=
+                (witness["capture_token"], witness["capture_epoch"], witness["queue"])):
+        reject("header/binding mismatch")
+    with (bundle / IDENTITY_NAME).open("rb") as stream:
+        identity = stream.read(136)
+    if len(identity) != 136:
+        reject("identity baseline truncated")
+    published, uploads, completed, _init_epoch, completed_uploads = struct.unpack_from("<QQQQQ", identity, 96)
+    if sequence != published or sequence != completed or initializer != uploads or initializer != completed_uploads:
+        reject("baseline mismatch")
+    rows = []
+    previous = 0
+    for offset in range(64, len(raw), 48):
+        kind, generation, object_id, storage_kind, storage_gen, storage_id, subresource, touched, current, authority = \
+            struct.unpack_from("<IIQIIQIIII", raw, offset)
+        if (kind != 1 or not generation or object_id <= previous or not storage_gen or not storage_id
+                or storage_kind not in (0, 1) or touched not in (0, 1) or current not in (0, 1) or authority
+                or (storage_kind == 1 and (subresource or storage_id != object_id or storage_gen != generation))):
+            reject("row is invalid")
+        previous = object_id
+        rows.append({"surface": [kind, generation, str(object_id)],
+                     "storage": [storage_kind, storage_gen, str(storage_id)],
+                     "subresource": subresource, "touched": bool(touched),
+                     "current_backbuffer": bool(current), "content_authority": "unknown"})
+    if any(row["current_backbuffer"] for row in rows) != bool(flags & 2):
+        reject("current backbuffer mismatch")
+    return {"present": True, "content_authority": "unknown", "replay_qualified": False,
+            "completed_sequence": str(sequence), "completed_initializer": str(initializer),
+            "post_present_discard": bool(flags & 1), "rows": rows}
+
+
 def load_action_profile(bundle: pathlib.Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Authenticate observed queue evidence without upgrading execution scope."""
     components = manifest["components"]
@@ -1070,7 +1137,7 @@ def load_bundle(
     if not isinstance(components, dict):
         raise SystemExit("render tape components must be an object")
     unknown_components = set(components) - {
-        "events", "blobs", "identity", "execution_topology", "action_profile", "output_oracle", "source_oracle",
+        "events", "blobs", "identity", "execution_topology", "action_profile", "attachment_history", "output_oracle", "source_oracle",
     }
     if unknown_components:
         raise SystemExit(f"render tape unknown components: {sorted(unknown_components)}")
@@ -1266,6 +1333,7 @@ def load_bundle(
                 or digest(topology_path) != claimed_digest):
             raise SystemExit("render tape execution topology digest mismatch")
     load_action_profile(manifest_path.parent, manifest)
+    load_attachment_history(manifest_path.parent, manifest)
     allowed = {"manifest.json", EVENTS_NAME}
     if blobs_directory.exists():
         allowed.add("blobs")
@@ -1279,6 +1347,8 @@ def load_bundle(
         allowed.add(EXECUTION_TOPOLOGY_NAME)
     if "action_profile" in components:
         allowed.add(ACTION_PROFILE_NAME)
+    if "attachment_history" in components:
+        allowed.add("attachment_history.bin")
     actual = {path.name for path in manifest_path.parent.iterdir()}
     if actual != allowed:
         raise SystemExit(
@@ -1433,6 +1503,7 @@ def validate_or_inspect(args: argparse.Namespace) -> int:
     result["events_sha256"] = manifest["components"]["events"]["sha256"]
     result["scope"] = manifest.get("scope", {})
     result["action_profile_validation"] = load_action_profile(events.parent, manifest)
+    result["attachment_history_validation"] = load_attachment_history(events.parent, manifest)
     if identity_result is not None and identity_result["schema"] in (IDENTITY_V3_SCHEMA, IDENTITY_V4_SCHEMA):
         result["identity_validation"] = identity_result
     print(json.dumps(result, sort_keys=True))

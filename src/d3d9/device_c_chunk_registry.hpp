@@ -45,6 +45,12 @@ class WireObjectRegistry {
 
   std::size_t activeCount() const;
 
+  struct RetainedEntry { D9CWireObjectIdentity identity{}; void* object = nullptr; };
+  // Cold capture census. Allocate/check the entire bounded set before the
+  // first retain; failure acquires no reference. Caller releases outside lock.
+  bool snapshotAndRetainKind(std::uint32_t kind, std::size_t limit,
+      std::vector<RetainedEntry>& out, RetainFn retain) const;
+
  private:
   struct Slot {
     void* object = nullptr;

@@ -2,6 +2,7 @@
 
 #include "device_c_render_tape_action_witness.hpp"
 #include "device_c_render_tape_execution_topology_v1.hpp"
+#include "dxmt9/render_tape_attachment_history.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +75,29 @@ enum class RenderTapeIdentityV4TransferStatus : std::uint8_t {
   AllocationFailed,
 };
 
+// Explicit V4 envelope: unchanged V3 payload followed by original arm history.
+// No V2/V3 reserved byte changes meaning. Empty history continues to emit V3.
+struct RenderTapeHistoryTransferHeader {
+  std::uint64_t magic = 0x34564e5354523944ull;
+  std::uint64_t totalBytes = 0u;
+  std::uint32_t version = 4u;
+  std::uint32_t headerBytes = 32u;
+  std::uint32_t snapshotBytes = 0u;
+  std::uint32_t historyBytes = 0u;
+};
+static_assert(sizeof(RenderTapeHistoryTransferHeader) == 32u);
+
+bool renderTapeAttachmentHistoryMatchesCapture(std::span<const std::byte> bytes,
+    const RenderTapeIdentityV4Header& identity,
+    const RenderTapeActionWitnessV1& witness) noexcept;
+
+RenderTapeIdentityV4TransferStatus encodeRenderTapeIdentityV4SnapshotTransfer(
+    const RenderTapeIdentityV4View& identity,
+    const RenderTapeExecutionTopologyV1View& topology,
+    const RenderTapeActionWitnessV1& actionWitness,
+    std::span<const std::byte> attachmentHistory,
+    std::vector<std::byte>& out) noexcept;
+
 // Structural transfer success is not provenance, lifecycle, query-result or
 // Metal execution qualification. PE must validate both against its real sealed
 // Tape before binding byte lengths/digests and publishing final sidecars.
@@ -98,7 +122,8 @@ RenderTapeIdentityV4TransferStatus decodeRenderTapeIdentityV4SnapshotTransfer(
     std::uint64_t expectedQueue,
     RenderTapeIdentityV4View& identityOut,
     RenderTapeExecutionTopologyV1View& topologyOut,
-    RenderTapeActionWitnessV1* witnessOut = nullptr) noexcept;
+    RenderTapeActionWitnessV1* witnessOut = nullptr,
+    std::vector<std::byte>* attachmentHistoryOut = nullptr) noexcept;
 
 const char* renderTapeIdentityV4TransferStatusName(
     RenderTapeIdentityV4TransferStatus status) noexcept;
