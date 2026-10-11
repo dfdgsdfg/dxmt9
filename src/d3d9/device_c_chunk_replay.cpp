@@ -3530,6 +3530,18 @@ private:
   const dxmt9::d3d9::ProviderReplayRecordConsumer* previous_;
 };
 
+bool observeProviderSlotValidation(const dxmt9::core::ChunkSlot& slot) noexcept {
+  using namespace dxmt9;
+  diagnostic::ScopedSlotValidationProbe disable(nullptr);
+  const auto attempt = supply::nextWaitAttempt();
+  // Stored parameter extent is not the number visited (runs may overlap).
+  supply::record(supply::Event::SlotValidationExtent, &slot, attempt, slot.drawParams.size());
+  supply::record(supply::Event::SlotValidationBegin, &slot, attempt, slot.commandHeaders.size());
+  const bool valid = slot.commandPayloadsInRange();
+  supply::record(supply::Event::SlotValidationEnd, &slot, attempt, valid);
+  return valid;
+}
+
 int32_t runProviderReplay(
     D9CDevice* device, std::span<const std::byte> bytes,
     const dxmt9::d3d9::CommandChunkEnvelope& envelope,
@@ -3679,31 +3691,36 @@ int32_t runProviderReplay(
         observationResultV4 && observationResultV4->captureAccepted ? &observationStateV4 : nullptr);
     if (recordConsumer) markLegacyResources(device, raw);
     cpuPhase(1u);
-    const int32_t hr = recordConsumer
-        ? replayCompatibilityChunk(device, raw, false,
-               std::any_of(imported.records.begin(), imported.records.end(),
-                   [](const auto& record) {
-                     return record.type == D9C_COMMAND_RECORD_QUERY_ISSUE ||
-                            record.type == D9C_COMMAND_RECORD_READBACK ||
-                            record.type == D9C_COMMAND_RECORD_UPDATE_TEXTURE;
-                   }),
-               ReplayRecordRange{.orderedControlPreflightDone = true})
-        : sourceConsumer
-        ? replayProviderSourcePolicy(device, raw, imported, policy, ranges,
-                                     *sourceConsumer)
-        : sourceCutDriver
-        ? replayProviderRecordRanges(device, raw, ranges,
-                                     completed, batchCuts,
-                                     completedBatchCuts ? *completedBatchCuts
-                                                        : localCompletedBatchCuts)
-        : replayPlannedChunk(
-              device, raw, /*pacedByPresentOrdinal=*/false,
-              /*allowDirectArena=*/
-                  policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
-              /*forceEventSerial=*/false,
-              /*reportOffloadReplayStage=*/false,
-              /*allowDirectSlot=*/
-                  policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
+    int32_t hr;
+    {
+      dxmt9::diagnostic::ScopedSlotValidationProbe validationProbe(
+          traceCpu ? observeProviderSlotValidation : nullptr);
+      hr = recordConsumer
+          ? replayCompatibilityChunk(device, raw, false,
+                 std::any_of(imported.records.begin(), imported.records.end(),
+                     [](const auto& record) {
+                       return record.type == D9C_COMMAND_RECORD_QUERY_ISSUE ||
+                              record.type == D9C_COMMAND_RECORD_READBACK ||
+                              record.type == D9C_COMMAND_RECORD_UPDATE_TEXTURE;
+                     }),
+                 ReplayRecordRange{.orderedControlPreflightDone = true})
+          : sourceConsumer
+          ? replayProviderSourcePolicy(device, raw, imported, policy, ranges,
+                                       *sourceConsumer)
+          : sourceCutDriver
+          ? replayProviderRecordRanges(device, raw, ranges,
+                                       completed, batchCuts,
+                                       completedBatchCuts ? *completedBatchCuts
+                                                          : localCompletedBatchCuts)
+          : replayPlannedChunk(
+                device, raw, /*pacedByPresentOrdinal=*/false,
+                /*allowDirectArena=*/
+                    policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+                /*forceEventSerial=*/false,
+                /*reportOffloadReplayStage=*/false,
+                /*allowDirectSlot=*/
+                     policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
+    }
     cpuPhase(2u);
     if (!failed(hr)) {
       if (!sourceCutDriver && !sourceConsumer && !recordConsumer) {

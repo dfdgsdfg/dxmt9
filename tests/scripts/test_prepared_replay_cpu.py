@@ -72,6 +72,53 @@ class PreparedReplayCpu(unittest.TestCase):
             value=i, wall_ns=t*1000, cpu_ns=t*500)
             for i,t in enumerate((230,250,340,370))]
 
+    def slot_rows(self):
+        return [dict(kind='slot_validation_'+kind, owner=8, tid=2, id=7,
+            value=value, wall_ns=t*1000, cpu_ns=t*500)
+            for kind,value,t in (('extent',9,260),('begin',3,270),('end',1,300))]
+
+    def test_slot_partition(self):
+        rows=self.rows+self.provider_rows()+self.slot_rows()
+        p=probe.analyze(self.meta,rows,1,True,True)['slot_validation']
+        self.assertEqual(p['calls'],1)
+        self.assertEqual(p['cpu_ms'],0.015)
+        self.assertEqual(p['accepted_command_visits'],3)
+        self.assertEqual(p['stored_param_extent_sum'],9)
+        self.assertEqual(p['raws'][0]['event_ordinal'],42)
+        rows[-1]['value']=0
+        p=probe.analyze(self.meta,rows,1,True,True)['slot_validation']
+        self.assertEqual(p['accepted_command_visits'],0)
+        self.assertEqual(p['rejected'],1)
+
+    def test_slot_missing_or_duplicate(self):
+        base=self.rows+self.provider_rows()
+        slots=self.slot_rows()
+        self.assertIsNone(probe.analyze(self.meta,base,1)['slot_validation'])
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,base,1,True,True)
+        for i in range(3):
+            for rows in (slots[:i]+slots[i+1:],slots+[slots[i]]):
+                with self.subTest(i=i),self.assertRaises(ValueError):
+                    probe.analyze(self.meta,base+rows,1,True,True)
+
+    def test_slot_bad_identity_clocks_or_result(self):
+        for i,field,value in ((0,'owner',0),(0,'value',-1),(1,'owner',9),
+                (1,'tid',9),(1,'id',9),(2,'value',2),(2,'cpu_ns',0),
+                (2,'wall_ns',250000),(2,'wall_ns',350000),
+                (0,'wall_ns',240000),(0,'cpu_ns',-1)):
+            slots=self.slot_rows()
+            slots[i][field]=value
+            with self.subTest(i=i,field=field),self.assertRaises(ValueError):
+                probe.analyze(self.meta,self.rows+self.provider_rows()+slots,1,True,True)
+
+    def test_slot_overlap_and_missing_provider(self):
+        slots=self.slot_rows()
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,self.rows+slots,1)
+        duplicate=[dict(r,id=8) for r in slots]
+        with self.assertRaises(ValueError):
+            probe.analyze(self.meta,self.rows+self.provider_rows()+slots+duplicate,1)
+
     def test_provider_partition(self):
         p=probe.analyze(self.meta,self.rows+self.provider_rows(),1,True)['provider']
         self.assertEqual(p['preparation_cpu_ms'],0.01)

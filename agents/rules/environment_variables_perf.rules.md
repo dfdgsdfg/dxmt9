@@ -153,6 +153,14 @@ enclose exactly one complete same-thread phase set. Preparation includes owned
 raw/capture/ledger admission; planned replay still includes V4 hooks; settlement
 includes publication and snapshot/coverage. The enclosing-call residual includes
 entry import and resource/scope destruction. Missing phases reject, never zero-fill.
+Within those observed planned-replay calls, `SlotValidationExtent/Begin/End`
+bracket the unchanged full-Slot payload validator through a scoped TLS callback.
+The trace-OFF path checks only the cached trace gate. Attempt IDs and Slot
+addresses are diagnostic, not source/lifetime identities. The extent is stored
+DrawParam count, not visited parameters; only accepted calls guarantee all
+command headers were visited. `--require-slot-validation` requires complete,
+same-thread, nonoverlapping scopes inside provider planned replay. CPU includes
+clock overhead and does not establish a removable budget or default-game cost.
 `analyze_publication_progress.py` partitions these with source preparation,
 context preparation and return/relock residuals. Missing endpoints in older
 traces or unsupported Arena/session/lookahead paths are unqualified, not zero

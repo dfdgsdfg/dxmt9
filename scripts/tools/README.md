@@ -633,6 +633,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `--require-provider` additionally partitions observed provider calls into
   preparation, planned replay, settlement and outer-call residual without
   attributing embedded V4 qualification to pure renderer work.
+  `--require-slot-validation` checks scoped full-Slot validator calls nested
+  in planned replay and reports observer-inclusive CPU and successful command
+  visits; stored parameter extent is deliberately not called parameter visits.
 - `analyze_cpu_supply.py` — strict V2 ordinary-worker supply trace analysis:
   native thread CPU vs elapsed scopes, empty/reserved/ready FIFO residence,
   publication-to-encode delay and explicitly conditional fixed-arrival replay

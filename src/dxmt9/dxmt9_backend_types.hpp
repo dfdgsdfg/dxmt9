@@ -5,6 +5,7 @@
 #include "dxmt9_chunk_slot_dimensions.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_append_diag.hpp"
+#include "dxmt9_slot_validation_probe.hpp"
 #include "dxmt9/query_occlusion.hpp"
 #include "render/query_scope_range_owner.hpp"
 
@@ -2769,6 +2770,10 @@ struct ChunkSlot {
   }
 
   bool commandPayloadsInRange() const noexcept {
+    // OFF pays only the cached trace gate, not a TLS lookup.
+    if (supply::enabled()) {
+      if (auto probe = diagnostic::slotValidationProbe) return probe(*this);
+    }
     if (!drawStateStorageConsistent()) {
       return false;
     }

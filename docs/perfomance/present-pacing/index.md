@@ -11,6 +11,14 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H492](present-pacing-validation-reuse.492.md) rejects local uniform-validation
+reuse on frozen CPU noise gates despite 30 passing original-image oracles.
+Runtime restored; no default-tail owner or removable-budget claim follows.
+
+[H491](present-pacing-slot-validation.491.md) directly observes 208 full-Slot
+checks / 84,587 command visits and 3.17–3.39 ms inclusive CPU. Validation is
+preserved; no removable budget or live-game FPS improvement is established.
+
 [H490](present-pacing-provider-stack.490.md) finds capture qualification in
 26 of 52 planned-replay wall-stack observations; this is not CPU-share evidence.
 Repeated full-Slot payload validation is a separate product candidate requiring

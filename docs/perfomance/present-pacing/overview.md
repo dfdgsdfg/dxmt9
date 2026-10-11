@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H492](present-pacing-validation-reuse.492.md) tests invocation-local uniform
+validation reuse. All 30 original-input oracles pass, but its 0.312 ms validator
+and 0.397 ms planned-replay paired medians fail the frozen A/A noise gates.
+The runtime candidate is reverted. Do not call H491's whole envelope a proven
+removal budget; capture-qualification overhead and default Primary attribution
+remain unresolved.
+
+[H491](present-pacing-slot-validation.491.md) measures 208 full-Slot checks and
+84,587 successful command visits per original interval, with 3.17–3.39 ms of
+observer-inclusive validator CPU. All three original GPU oracles pass. Checks
+remain intact; prefix-witness safety, OFF savings and default-game transfer
+remain unproved.
+
 [H490](present-pacing-provider-stack.490.md) confirms capture/identity hooks
 inside the observed planned-replay envelope, including command-emission record
 lookup. Wall-stack counts are not CPU proportions. A distinct product-path

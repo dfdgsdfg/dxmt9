@@ -58,6 +58,7 @@ enum class Event : std::uint32_t {
   DrawRunPhase,
   PreparedReplayPhaseBegin, PreparedReplayPhaseEnd,
   ProviderReplayPhase,
+  SlotValidationExtent, SlotValidationBegin, SlotValidationEnd,
 };
 
 inline bool planningSplitEnabled() noexcept {

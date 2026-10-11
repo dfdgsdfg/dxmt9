@@ -44,7 +44,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'session_release_post session_release_raw session_release_policy '
           'session_release_queue session_release_action_begin session_release_ack '
           'session_release_return session_release_close session_release_reuse draw_run_phase '
-          'prepared_replay_phase_begin prepared_replay_phase_end provider_replay_phase').split()
+          'prepared_replay_phase_begin prepared_replay_phase_end provider_replay_phase '
+          'slot_validation_extent slot_validation_begin slot_validation_end').split()
 
 
 def load(path):

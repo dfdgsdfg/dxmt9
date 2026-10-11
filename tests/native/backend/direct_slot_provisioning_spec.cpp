@@ -1820,9 +1820,88 @@ void lookupRestoreIsExactAndAllocationFree() {
         "a coordinator-only plan needs no lookup storage in either predicate");
 }
 
+unsigned validationProbeCalls = 0;
+
+void uniformValidationMatchesReferenceTruthTable() {
+  ChunkSlot slot;
+  slot.drawHotStates.resize(1);
+  slot.drawShaderLayouts.resize(1);
+  slot.drawDebugSnapshots.resize(1);
+  slot.drawPsoSubviews.resize(1);
+  slot.drawRunRecords.resize(1);
+  slot.drawParams.resize(4);
+  slot.commandHeaders.push_back({MetalCommandKind::DrawRun, 0});
+  slot.drawUniformPayloads.resize(2);
+  const DrawUniformHandle a{0, 1, 31}, b{1, 2, 42};
+  slot.drawUniformPayloads[0].handle = a;
+  slot.drawUniformPayloads[1].handle = b;
+  const std::array<DrawUniformHandle, 7> handles{
+      DrawUniformHandle{}, a, b, DrawUniformHandle{0, 2, 31},
+      DrawUniformHandle{0, 1, 32}, DrawUniformHandle{2, 1, 31},
+      DrawUniformHandle{9, 0, 99}};
+  auto& run = slot.drawRunRecords[0];
+  run.paramCount = 4;
+  // A/B/A, invalid tokens, stale generation/hash and out-of-range indices.
+  for (const auto h : handles) {
+    run.uniformHandle = h;
+    for (std::size_t code = 0; code < 2401; ++code) {
+      auto rest = code;
+      bool reference = !h.valid() || slot.drawUniformPayloadRecord(h);
+      for (auto& param : slot.drawParams) {
+        param.uniformHandle = handles[rest % handles.size()];
+        rest /= handles.size();
+        reference = reference && (!param.uniformHandle.valid() ||
+            slot.drawUniformPayloadRecord(param.uniformHandle));
+      }
+      check(slot.commandPayloadsInRange() == reference,
+            "uniform validation equals every-handle reference");
+    }
+  }
+  run.uniformHandle = a;
+  for (auto& param : slot.drawParams) param.uniformHandle = a;
+  check(slot.commandPayloadsInRange(), "positive fixture validates");
+  slot.drawUniformPayloads[0].handle.generation = 2;
+  check(!slot.commandPayloadsInRange(), "no validation survives between calls");
+  slot.drawUniformPayloads[0].handle = a;
+  for (auto& param : slot.drawParams) {
+    for (auto* range : {&param.userVertexRange, &param.userIndexRange,
+                       &param.bindingOverrideRange, &param.bindingSnapshotRange}) {
+      range->size = 1;
+      check(!slot.commandPayloadsInRange(), "uniform identity cannot bypass range checks");
+      *range = {};
+    }
+  }
+}
+
+bool countValidation(const ChunkSlot& slot) noexcept {
+  ++validationProbeCalls;
+  dxmt9::diagnostic::ScopedSlotValidationProbe disable(nullptr);
+  return slot.commandPayloadsInRange();
+}
+
+void validationProbePreservesResultAndScope() {
+  ChunkSlot valid, invalid;
+  invalid.commandHeaders.push_back({MetalCommandKind::Clear, 0});
+  check(valid.commandPayloadsInRange(), "empty Slot validates without observer");
+  check(!invalid.commandPayloadsInRange(), "absent Clear payload rejects without observer");
+  {
+    dxmt9::diagnostic::ScopedSlotValidationProbe scope(countValidation);
+    check(valid.commandPayloadsInRange(), "observer preserves acceptance");
+    check(!invalid.commandPayloadsInRange(), "observer preserves rejection");
+    check(validationProbeCalls == 2, "observer delegates exactly once without recursion");
+    check(dxmt9::diagnostic::slotValidationProbe == countValidation,
+          "nested suppression restores outer callback");
+  }
+  check(dxmt9::diagnostic::slotValidationProbe == nullptr,
+        "provider scope restores disabled observer");
+}
+
 }  // namespace
 
 int main() {
+  setenv("DXMT9_CPU_SUPPLY_TRACE", "1", 1);
+  validationProbePreservesResultAndScope();
+  uniformValidationMatchesReferenceTruthTable();
   schemaInventoryIsClosedAndRoleTagged();
   exactFitReservationRejectsEveryAdjacentSource();
   consecutiveMeanSizedSourcesShareOneProvisionedSlot();

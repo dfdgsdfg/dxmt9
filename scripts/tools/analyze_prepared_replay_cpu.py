@@ -56,7 +56,71 @@ def provider_partition(rows, calls, required):
         qualifications='Planned replay still includes V4 per-record qualification. Settlement includes publication, ACK and snapshot/coverage. Boundary residual includes import and scope/resource destruction. No exclusive renderer or removable-cost claim.')
 
 
-def analyze(meta, rows, expected_raw_count, require_provider=False):
+def slot_validation_partition(rows, provider, required):
+    kinds = ('slot_validation_extent', 'slot_validation_begin', 'slot_validation_end')
+    attempts = {}
+    for r in rows:
+        if r['kind'] not in kinds:
+            continue
+        group = attempts.setdefault(r['id'], {})
+        if r['kind'] in group or r['id'] <= 0 or r['owner'] == 0:
+            raise ValueError('duplicate/invalid Slot validation identity')
+        group[r['kind']] = r
+    if not attempts:
+        if required:
+            raise ValueError('missing Slot validation scopes')
+        return None
+    if provider is None:
+        raise ValueError('Slot validation requires provider scopes')
+    phases = {}
+    for r in rows:
+        if r['kind'] == 'provider_replay_phase':
+            phases.setdefault(r['id'], {})[r['value']] = r
+    spans = []
+    for identity, group in attempts.items():
+        if set(group) != set(kinds):
+            raise ValueError('incomplete Slot validation scope')
+        extent, a, b = (group[k] for k in kinds)
+        if len({(p['owner'], p['tid']) for p in (extent, a, b)}) != 1:
+            raise ValueError('Slot validation owner/thread mismatch')
+        if min(extent['value'], a['value']) < 0 or b['value'] not in (0, 1):
+            raise ValueError('invalid Slot validation extent/result')
+        for p, q in ((extent, a), (a, b)):
+            wall, cpu = q['wall_ns']-p['wall_ns'], q['cpu_ns']-p['cpu_ns']
+            if min(p['wall_ns'], p['cpu_ns'], wall, cpu) < 0 or cpu > wall+100000:
+                raise ValueError('invalid Slot validation clock/order')
+        matches = [r for r in provider['raws']
+            if phases[r['event_ordinal']][1]['tid'] == a['tid'] and
+            phases[r['event_ordinal']][1]['wall_ns'] <= extent['wall_ns'] <= b['wall_ns'] <= phases[r['event_ordinal']][2]['wall_ns'] and
+            phases[r['event_ordinal']][1]['cpu_ns'] <= extent['cpu_ns'] <= b['cpu_ns'] <= phases[r['event_ordinal']][2]['cpu_ns']]
+        if len(matches) != 1:
+            raise ValueError('Slot validation does not uniquely nest in planned replay')
+        spans.append(dict(id=identity, raw_id=matches[0]['id'],
+            event_ordinal=matches[0]['event_ordinal'], owner=a['owner'], tid=a['tid'],
+            begin=extent['wall_ns'], end=b['wall_ns'],
+            cpu_begin=extent['cpu_ns'], cpu_end=b['cpu_ns'],
+            cpu_ms=(b['cpu_ns']-a['cpu_ns'])/1e6,
+            headers=a['value'], stored_params=extent['value'], accepted=b['value']))
+    spans.sort(key=lambda s:s['begin'])
+    if any(a['end'] > b['begin'] or a['cpu_end'] > b['cpu_begin']
+           for a,b in zip(spans,spans[1:])):
+        raise ValueError('overlapping Slot validation scopes')
+
+    def summarize(items):
+        return dict(calls=len(items), accepted=sum(s['accepted'] for s in items),
+            rejected=sum(not s['accepted'] for s in items),
+            cpu_ms=sum(s['cpu_ms'] for s in items),
+            accepted_command_visits=sum(s['headers'] for s in items if s['accepted']),
+            stored_param_extent_sum=sum(s['stored_params'] for s in items),
+            max_command_extent=max((s['headers'] for s in items),default=0))
+    return dict(**summarize(spans),
+        raws=[dict(id=r['id'],event_ordinal=r['event_ordinal'],
+                   **summarize([s for s in spans if s['raw_id']==r['id']]))
+              for r in provider['raws']],
+        qualifications='Observer-inclusive CPU, not removable cost or FPS. Successful command visits are exact; stored DrawParam extents are not visits. Slot address is diagnostic only, not lifetime identity. Only synchronous observed provider planned replay is covered.')
+
+
+def analyze(meta, rows, expected_raw_count, require_provider=False, require_slot_validation=False):
     if (meta.get('closed'), meta.get('overflow'), meta.get('incomplete'),
             meta.get('cpu_clock')) != (1, 0, 0, 1):
         raise ValueError('incomplete/unqualified trace')
@@ -121,8 +185,10 @@ def analyze(meta, rows, expected_raw_count, require_provider=False):
     other_cpu = root['cpu_ns']-envelope_cpu-sum(s['cpu_ns'] for s in readbacks)
     if envelope_cpu < call_cpu or other_cpu < 0:
         raise ValueError('negative prepared residual')
+    provider = provider_partition(rows, calls, require_provider)
     return dict(scope_complete=True, owner=root['owner'], tid=root['tid'], phases=totals,
-        provider=provider_partition(rows, calls, require_provider),
+        provider=provider,
+        slot_validation=slot_validation_partition(rows, provider, require_slot_validation),
         raw_envelope_residual_cpu_ms=(envelope_cpu-call_cpu)/1e6,
         interval_other_cpu_ms=other_cpu/1e6,
         interval_excluding_readback_cpu_ms=(root['cpu_ns']-readbacks[0]['cpu_ns'])/1e6,
@@ -136,9 +202,11 @@ def main():
     p.add_argument('trace', type=Path)
     p.add_argument('--expected-raw-count', required=True, type=int)
     p.add_argument('--require-provider', action='store_true')
+    p.add_argument('--require-slot-validation', action='store_true')
     args=p.parse_args()
     meta,rows=supply.load(args.trace)
-    print(json.dumps(analyze(meta,rows,args.expected_raw_count,args.require_provider),indent=2))
+    print(json.dumps(analyze(meta,rows,args.expected_raw_count,args.require_provider,
+                            args.require_slot_validation),indent=2))
 
 
 if __name__=='__main__':
