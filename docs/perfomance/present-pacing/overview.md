@@ -11,6 +11,27 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H500](present-pacing-tail-input-scope.500.md) closes a scope question, not the
+CPU goal: H481's complete input predates its 102–110-second target window,
+with publication observed no later than 94.035 s after the bracketed initial
+running transition. Skip-count selection is not an engine/camera identity gate.
+Next qualify one-shot late capture selection and source provenance; do not
+use additional H481 micro-optimizations as a substitute for default-tail work.
+
+[H499](present-pacing-vertex-shadow.499.md) completes H498's combined experiment.
+Actual pushes fall 3,497 -> 138 with 45 original oracles passing. Incremental
+body saving is 0.370 ms, positive 8/8, but below the 0.523 ms A/A gate; combined
+default saving is 0.301 ms, positive 5/8. Runtime restored. This is a small
+directional signal, not zero-benefit proof, an upper bound or default-tail
+ownership. Isolated binding reuse has not established the large missing cost.
+
+[H498](present-pacing-volatile-multiplicity.498.md) narrows the next work to
+native base vertex plus physical-encoder-local VS immediate reuse. In the same
+original input, exact repeated pushes increase from 166 to 3,359 of 3,497,
+while both source/output oracles match. Actual pushes remain 3,497: no elision,
+CPU saving or default promotion yet. Historical full-payload materialization
+is 0.511 ms observer-inclusive elapsed, not a demonstrated dominant CPU owner.
+
 [H497](present-pacing-command-raster-reuse.497.md) implements H496's bounded
 raster-target reuse candidate. All 30 original oracles and bounded native
 refinement pass, but paired command-body saving is −0.177 ms versus 0.787 ms

@@ -11,6 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H500](present-pacing-tail-input-scope.500.md) proves the H481 input was already
+published by elapsed 94.035 s, before the 102–110 s target window. Keep it as a
+local regression fixture; qualify late-input selection before more optimization.
+
+[H499](present-pacing-vertex-shadow.499.md) actually removes 3,359 VS pushes
+and passes 45 original oracles. Incremental 0.370 ms (8/8 positive) and combined
+0.301 ms (5/8) fail the 0.523 ms noise gate; candidate runtime restored.
+
+[H498](present-pacing-volatile-multiplicity.498.md) finds 166/3,497 repeated VS
+immediate pushes by default, versus 3,359 with native base vertex. Both original
+readbacks pass; combined push elision is a candidate, not measured savings.
+
 [H497](present-pacing-command-raster-reuse.497.md) rejects command-local target
 lookup reuse: 30 original oracles pass, but paired body saving is −0.177 ms
 with only 3/8 positive pairs. Runtime restored; no cache/knob retained.

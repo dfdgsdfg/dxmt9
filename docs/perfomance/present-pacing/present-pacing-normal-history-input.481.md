@@ -11,6 +11,10 @@ related: present-pacing-normal-history.480.md; present-pacing-root-game.477.md; 
 
 # Normal history input is available; replay qualification remains closed
 
+Subsequent [H500 scope audit](present-pacing-tail-input-scope.500.md) establishes
+that this bundle was published by elapsed 94.035 s, before the 102–110 s target
+window. It remains a local original-image fixture, not a selected tail input.
+
 H481 publishes a genuine Normal bundle on its first arm using `229ed0a0`.
 The bounded supervisor stops only the owned engine after manifest publication,
 checking PID and process birth identity, and restores all five shared Wine

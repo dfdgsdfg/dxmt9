@@ -14,6 +14,13 @@ remain in `docs/perfomance/`.
 
 ## Pass-wide immutable access metadata (2026-09-20)
 
+H499 experimental native-base-vertex + VS immediate reuse is **not retained**.
+The bounded production-shadow checker covers 3,110,400 transitions; 45 original
+readback oracles pass and actual pushes fall 3,497 -> 138. Incremental and
+combined CPU gates nevertheless fail; runtime/tests/proposed contract are
+restored. The existing native-base-vertex selector remains unchanged and OFF.
+See [H499](../../../docs/perfomance/present-pacing/present-pacing-vertex-shadow.499.md).
+
 H497 command-local raster extent reuse is **rejected on the local CPU gate**.
 Bounded production-helper refinement covers 46,080 reads and all 30 original
 GPU/source oracles pass, but paired command-body saving is −0.177 ms with only
