@@ -40,27 +40,23 @@ global CLI installation alone does not perform those steps.
 
 ## Native Provider Preflight
 
-Native PE analysis requires a configured Hopper, Ghidra, or IDA provider.
-Installing REA alone does not install a decompiler. Discover availability:
+Use Ghidra from the repository's Homebrew dependencies (`brew bundle`).
+REA also supports Hopper and IDA. Installing REA alone does not install a
+decompiler. Set the Homebrew installation root explicitly; REA 6.4.0 may not
+discover it through the `ghidraRun` wrapper:
 
 ```sh
+export GHIDRA_INSTALL_DIR="$(brew --prefix ghidra)/libexec"
+rea doctor --provider ghidra --json
 rea providers --json | jq '{providers: [.analysis_provider_candidates[] |
   {provider: .provider, availability: .availability}]}'
-rea doctor --provider ghidra --json
-```
-
-For headless analysis, configure an existing Ghidra installation:
-
-```sh
-export GHIDRA_INSTALL_DIR=/absolute/path/to/ghidra_12.1.4_PUBLIC
-export JAVA_HOME=/absolute/path/to/compatible-jdk
-rea doctor --provider ghidra --json
 ```
 
 REA 6.4.0 accepts Ghidra 12.1.x with a full JDK satisfying that release's
 requirements (12.1 requires JDK 21+). Ghidra's native decompiler and JDK must
 match the host architecture, even when analyzing a 32-bit x86 PE on Apple
-Silicon. See upstream installation instructions for native component setup.
+Silicon. If JDK discovery fails, set `JAVA_HOME` to a compatible full JDK.
+Recheck provider compatibility after Homebrew upgrades.
 
 For existing Hopper, use `HOPPER_LAUNCHER_PATH` if discovery fails and run
 `rea doctor --provider hopper --json`; complete its first-run UI before
@@ -68,23 +64,15 @@ unattended analysis. IDA uses `REA_IDA_MCP_CONFIG` as documented upstream.
 Pass `--provider` explicitly to make evidence reproducible. A failed preflight
 is an environment limitation, not evidence about the target's behavior.
 
-### Homebrew Installation on This Host
+### Existing Ghidra Projects
 
-Ghidra 12.1.4 is installed at `/opt/homebrew/opt/ghidra/libexec`. REA 6.4.0
-does not discover this installation through Homebrew's `ghidraRun` wrapper;
-set the installation root explicitly in the shell running REA:
-
-```sh
-export GHIDRA_INSTALL_DIR=/opt/homebrew/opt/ghidra/libexec
-rea doctor --provider ghidra --json
-```
-
-This passes the scoped provider check with the host's arm64 decompiler and
-Temurin JDK 25.0.4. Recheck after upgrades. The local
-`~/workspaces/ghidra/eotfs/` directory contains an existing Ghidra project
-(`.gpr`/`.rep`), not the installation root. REA's Ghidra provider creates a
-temporary project from the original executable; it does not reuse that saved
-project or its annotations.
+REA's Ghidra provider imports the original executable into a temporary project;
+it does not open existing `.gpr`/`.rep` projects or inherit their annotations.
+Its snapshots cache analysis results, not the complete Ghidra project database.
+Use a project-connected Ghidra MCP integration when continuing accumulated
+function names, types, structures, and comments. REA is useful for independent
+binary investigations and structured evidence export; it does not replace that
+persistent project workflow.
 
 ## Select and Identify the Target
 
