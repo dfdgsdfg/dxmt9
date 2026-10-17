@@ -65,6 +65,10 @@ dxmt9_frontend_provider_srcs = files(
   'device_c_swapchain_query_stateblock.cpp',
 )
 
+if host_machine.system() == 'darwin'
+  dxmt9_frontend_provider_srcs += files('device_c_trace.cpp')
+endif
+
 dxmt9_frontend_bridge_srcs = files(
   'device_c_bridge_factory.cpp',
   'device_c_bridge_device_state_draw.cpp',
@@ -74,6 +78,7 @@ dxmt9_frontend_bridge_srcs = files(
 )
 
 dxmt9_pe_core_srcs = files(
+  'd3d9_pe_trace.cpp',
   'd3d9_pe_chunk_builder.cpp',
   'd3d9_pe_chunk_draw.cpp',
   'd3d9_pe_chunk_nondraw.cpp',

@@ -1,3 +1,4 @@
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 #include "device_c_provider.hpp"
 
 #include "dxmt9/dxmt9_device.hpp"
@@ -297,6 +298,7 @@ extern "C" int32_t dxmt9c_factory_create_device2(D9CFactory* f, uint32_t adapter
       "behavior=0x%x fullscreen=%d",
       adapter, pp->windowed, pp->backBufferWidth, pp->backBufferHeight, pp->backBufferFormat,
       static_cast<unsigned long long>(pp->deviceWindow), behaviorFlags, fullscreen ? 1 : 0);
+  const bool tracingConfigured = dxmt9::tracing::initialize_from_environment();
   auto params = ppFromC(*pp);
   dxmt9::com::IDirect3DDevice9Ex* dev = nullptr;
 
@@ -312,5 +314,11 @@ extern "C" int32_t dxmt9c_factory_create_device2(D9CFactory* f, uint32_t adapter
   }
   dxmt9DebugLog("factory_create_device ok iface=%p", static_cast<void*>(dev));
   *outDevice = new D9CDevice(dev);
+  if (tracingConfigured) {
+    if (auto upper = (*outDevice)->dev().upperDevice())
+      (void)dxmt9::tracing::attach_metal_device(upper->wmtDevice().handle);
+    dxmt9::tracing::register_owner(*outDevice);
+    dxmt9::tracing::register_owner(&(*outDevice)->replayDrainLedger);
+  }
   return dxmt9::core::D3D_OK;
 }

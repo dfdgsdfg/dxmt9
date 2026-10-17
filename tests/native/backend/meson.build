@@ -2115,3 +2115,80 @@ draw_texture_dump_policy_spec = executable(
 )
 test('dxmt9-draw-texture-dump-policy-spec', draw_texture_dump_policy_spec,
      env: dxmt9_native_test_env)
+
+tracing_lifecycle_spec = executable(
+  'dxmt9-tracing-lifecycle-spec', 'tracing_lifecycle_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+)
+test('dxmt9-tracing-lifecycle-spec', tracing_lifecycle_spec)
+tracing_gpu_spec = executable(
+  'dxmt9-tracing-gpu-spec', 'tracing_gpu_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_dep, dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-gpu-spec', tracing_gpu_spec, env: dxmt9_native_test_env)
+
+tracing_config_spec = executable(
+  'dxmt9-tracing-config-spec', 'tracing_config_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-config-spec', tracing_config_spec)
+
+foreach spec : ['tracing-concurrency', 'tracing-gpu-retirement']
+  target = executable('dxmt9-' + spec + '-spec', spec.replace('-', '_') + '_spec.cpp',
+    include_directories: [dxmt9_inc, include_directories('../../../src')])
+  test('dxmt9-' + spec + '-spec', target)
+endforeach
+tracing_runtime_spec = executable(
+  'dxmt9-tracing-runtime-spec', 'tracing_runtime_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  cpp_args: ['-DDXMT9_TEST_PERFETTO=' + (get_option('dxmt9_perfetto') ? '1' : '0')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-runtime-spec', tracing_runtime_spec, env: dxmt9_native_test_env)
+
+tracing_artifact_spec = executable(
+  'dxmt9-tracing-artifact-spec', 'tracing_artifact_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-artifact-spec', tracing_artifact_spec)
+
+tracing_session_spec = executable(
+  'dxmt9-tracing-session-spec', 'tracing_session_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  cpp_args: ['-DDXMT9_TEST_PERFETTO=' + (get_option('dxmt9_perfetto') ? '1' : '0')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-session-spec', tracing_session_spec, env: dxmt9_native_test_env, timeout: 30)
+tracing_observer_cost = executable(
+  'dxmt9-tracing-observer-cost', 'tracing_observer_cost.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+tracing_relations_spec = executable(
+  'dxmt9-tracing-relations-spec', 'tracing_relations_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-tracing-relations-spec', tracing_relations_spec)
+
+if get_option('dxmt9_perfetto')
+  tracing_sdk_coexistence_spec = executable(
+    'dxmt9-tracing-sdk-coexistence-spec', 'tracing_sdk_coexistence_spec.cpp',
+    include_directories: [dxmt9_inc, include_directories('../../../src')],
+    dependencies: [dxmt9_dep, dxmt9_winemetal_dep, dxmt9_perfetto_private_dep],
+    link_args: dxmt9_test_link_args,
+  )
+  test('dxmt9-tracing-sdk-coexistence-spec', tracing_sdk_coexistence_spec,
+       env: dxmt9_native_test_env, timeout: 30)
+endif

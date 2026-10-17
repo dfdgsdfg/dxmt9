@@ -1,3 +1,4 @@
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 // Batched-chunk C ABI: dxmt9c_device_commit_chunk and the packet->state
 // replay machinery it invokes. Per-call dxmt9c_* setters live in
 // device_c_draw.cpp (interactive entry points) and device_c_state.cpp
@@ -1407,6 +1408,15 @@ int32_t replayResolvedChunk(
     const dxmt9::core::DirectReplayDrawAppendCapability*
         directRangeAppender = nullptr,
     ReplayRecordRange range = {}) {
+  auto traceScope = dxmt9::tracing::enabled()
+      ? dxmt9::tracing::TraceScope(
+            static_cast<uint8_t>(dxmt9::tracing::Category::Replay),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::ReplayBegin),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::ReplayEnd),
+            0, raw.replaySeq, dxmt9::tracing::owner_id(device),
+            device ? dxmt9::tracing::owner_id(&device->replayDrainLedger)
+                   : 0u)
+      : dxmt9::tracing::TraceScope{};
   dxmt9::d3d9::ImportedChunkView imported;
   if (!raw.preflightValidated ||
       !importRawChunk(raw, imported) ||
@@ -1492,12 +1502,16 @@ int32_t replayResolvedChunk(
   auto& replayScratch = replayScratchArena();
   ScopedReplayScratchUse replayScratchUse(replayScratch);
   replayScratch.bindingSnapshots.reserve(raw.recordCount);
-  bool captureIdentity = arenaLease &&
+  const bool legacyCaptureIdentityRequested =
       dxmt9::d3d9::legacyRenderTapeCaptureRouteRequested(
           raw.renderTapeCaptureToken != 0u, v4Selected);
+  bool captureIdentity = arenaLease &&
+      (dxmt9::tracing::enabled() || legacyCaptureIdentityRequested);
   if (captureIdentity &&
       !arenaLease->beginCaptureIdentity(raw.recordCount)) {
-    return commitChunkFail("chunk-capture-identity-begin");
+    if (legacyCaptureIdentityRequested)
+      return commitChunkFail("chunk-capture-identity-begin");
+    captureIdentity = false;
   }
   // A private destination keeps replay rollbackable. The ordinary serial
   // path uses the same borrowed-state ingress but publishes directly into
@@ -2184,6 +2198,32 @@ dxmt9::d3d9::ReplayDestinationReceipt publishedReplayReceipt(
   };
 }
 
+void traceReplayPublication(D9CDevice* device, std::uint64_t rawReplayId,
+                            std::uint64_t queueSequence,
+                            std::uint64_t queueIdentity) noexcept {
+  if (!dxmt9::tracing::enabled() || !device || rawReplayId == 0u ||
+      queueSequence == 0u || queueIdentity == 0u) {
+    return;
+  }
+  // This typed ticket is the only evidence for raw-to-queue identity. Equal
+  // numeric values in either sequence domain are not a relation by themselves.
+  dxmt9::tracing::observe(
+      dxmt9::tracing::Category::Replay,
+      dxmt9::tracing::EventId::ReplayPublish,
+      dxmt9::tracing::owner_id(device), rawReplayId, queueSequence,
+      dxmt9::tracing::Phase::Instant, queueIdentity);
+}
+
+void traceReplayPublication(
+    D9CDevice* device, std::uint64_t rawReplayId,
+    const dxmt9::core::CpuReadyPublicationTicket& ticket,
+    std::uint64_t queueIdentity) noexcept {
+  if (!ticket.strictIdentityValid() || ticket.rawOrdinal != rawReplayId) {
+    return;
+  }
+  traceReplayPublication(device, rawReplayId, ticket.seqId, queueIdentity);
+}
+
 bool commitReplayTransaction(
     dxmt9::d3d9::ReplayTransaction& transaction,
     dxmt9::d3d9::ReplayDestinationReceipt receipt) noexcept {
@@ -2518,6 +2558,8 @@ int32_t replayEmissionSpans(
       (void)transaction.failStop();
       return commitChunkFail("chunk-span-commit", span.firstRecordIndex);
     }
+    traceReplayPublication(device, raw.replaySeq, destinationTicket,
+                           queue.queryQueueIdentity());
     if (!transaction.commit()) {
       outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
       return commitChunkFail("chunk-span-state-commit", span.firstRecordIndex);
@@ -2568,6 +2610,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
       device->dev().upperDevice()->queue().segmentSerialEnabled();
   const bool captureSegmentSerialRequested =
       captureIdentityRequested && segmentSerialRequested;
+  const bool traceBatchIdentityRequested = dxmt9::tracing::enabled();
   const bool directReplayObservabilityEnabled = dxmt9::perf::enabled();
   static_assert(
       static_cast<std::uint8_t>(
@@ -3083,7 +3126,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
   const auto publishStatus = segmentSerial
       ? transfer.publishBatch(
-            captureIdentityRequested ? &captureBatch : nullptr)
+            (captureIdentityRequested || traceBatchIdentityRequested)
+                ? &captureBatch : nullptr)
       : transfer.publish(
             captureIdentityRequested ? &captureIdentity : nullptr);
   if (publishStatus ==
@@ -3116,6 +3160,17 @@ int32_t replayPlannedChunk(D9CDevice* device,
     (void)transaction.failStop();
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
+  }
+  if (segmentSerial) {
+    if (captureBatch.valid()) {
+      for (const auto& segment : captureBatch.segments) {
+        traceReplayPublication(device, transferRaw.replaySeq, segment.seqId,
+                               queue->queryQueueIdentity());
+      }
+    }
+  } else {
+    traceReplayPublication(device, transferRaw.replaySeq, admissionTicket,
+                           queue->queryQueueIdentity());
   }
   // publish/publishBatch has validated every source reservation, segment
   // assembler, storage generation, and commit evidence under the queue's
@@ -4015,6 +4070,13 @@ static int32_t dxmt9c_device_commit_chunk_impl(
   if (!d || (!chunk && !preparedRaw)) {
     return commitChunkFail("bad-header");
   }
+  auto nativeTraceScope = dxmt9::tracing::enabled()
+      ? dxmt9::tracing::TraceScope(
+            static_cast<uint8_t>(dxmt9::tracing::Category::Import),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::ImportBegin),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::ImportEnd),
+            0, 0, dxmt9::tracing::owner_id(d))
+      : dxmt9::tracing::TraceScope{};
   const bool traceSupply = dxmt9::supply::enabled();
   if (traceSupply)
     dxmt9::supply::record(dxmt9::supply::Event::ImportBegin, d);

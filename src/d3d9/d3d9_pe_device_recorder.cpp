@@ -7,6 +7,7 @@
 
 #include "d3d9_pe_device_impl.hpp"
 #include "d3d9_pe_append_preparation.hpp"
+#include "d3d9_pe_trace.hpp"
 
 #include <new>
 
@@ -849,11 +850,15 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 poisonStateBlockTransaction();
                 return D3DERR_DEVICELOST;
             }
+            const bool peTraceRequested = dxmt9PeTraceEnabled();
+            const bool peTraceActive =
+                peTraceRequested && dxmt9PeTraceChunkBegin();
             const HRESULT bridgeHr = hr32(
                 segmented
                     ? dxmt9c_device_commit_chunk_segmented(
                           dev_, &segmented->transport)
                     : dxmt9c_device_commit_chunk(dev_, &submittedChunk));
+            if (peTraceActive) dxmt9PeTraceChunkEnd(dev_);
             // This is the only authoritative PE-side acceptance point for a
             // capture event. Stamp before any later capture settlement or
             // diagnostics can fail; callers may then wait on this exact

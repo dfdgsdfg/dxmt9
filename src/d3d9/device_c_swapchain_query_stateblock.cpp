@@ -1,5 +1,6 @@
 #include "device_c_provider.hpp"
 #include "device_c_query_receipt_observer.hpp"
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 #include "dxmt9/dxmt9_wait_trace.hpp"
 #include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 #include "util/config/config.hpp"
@@ -450,7 +451,19 @@ std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* q, void* data, uint32_t size, uint32_t flags) {
-  const auto result = q->device->iface->GetQueryData(q->obj, data, size, flags);
+  int32_t result;
+  if (dxmt9::tracing::enabled()) {
+    auto traceScope = dxmt9::tracing::TraceScope(
+        static_cast<uint8_t>(dxmt9::tracing::Category::Wait),
+        static_cast<uint16_t>(dxmt9::tracing::EventId::QueryPollBegin),
+        static_cast<uint16_t>(dxmt9::tracing::EventId::QueryPollEnd),
+        0, q->obj->identity(),
+        dxmt9::tracing::owner_id(q->device),
+        dxmt9::tracing::owner_id(&q->device->replayDrainLedger));
+    result = q->device->iface->GetQueryData(q->obj, data, size, flags);
+  } else {
+    result = q->device->iface->GetQueryData(q->obj, data, size, flags);
+  }
   if (auto* runtime = q->device->renderTapeRuntimeIdentityV3.get())
     runtime->queryPoll(q->wireIdentity,
         q->device->dev().captureQueryPollSnapshot(q->obj), result);

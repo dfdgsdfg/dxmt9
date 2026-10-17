@@ -10,6 +10,8 @@ tlc_workers="${DXMT9_TLC_WORKERS:-auto}"
 # intentionally absent from this list: they are imported by an owning model
 # and must not acquire a standalone configuration by filename convention.
 normal_models=(
+  TracingGpuRetirement
+  TracingSessionLifecycle
   AutogenMipGeneration
   BufferBackingVersioning
   BufferMutationOffload
@@ -80,11 +82,13 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=68
-expected_progress_count=6
-expected_counterexample_count=163
-expected_cfg_count=237
+expected_normal_count=70
+expected_progress_count=8
+expected_counterexample_count=174
+expected_cfg_count=252
 progress_configs=(
+  TracingGpuRetirement.progress
+  TracingSessionLifecycle.progress
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
   QueryReplayReceipt.progress
@@ -131,6 +135,17 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "TracingGpuRetirement|.early-publication.counterexample|Invariant NoCompletionBeforePublication is violated"
+  "TracingGpuRetirement|.stale-ticket.counterexample|Invariant NoStaleCompletion is violated"
+  "TracingGpuRetirement|.early-reuse.counterexample|Invariant NoReuseBeforeConsumption is violated"
+  "TracingGpuRetirement|.session-reuse.counterexample|Invariant SessionReuseRequiresQuiescence is violated"
+  "TracingGpuRetirement|.early-retire.counterexample|Invariant NoRetireBeforeGpuCompletion is violated"
+  "TracingGpuRetirement|.reader-retire.counterexample|Invariant NoRetireWithCpuReaders is violated"
+  "TracingSessionLifecycle|.late-admission.counterexample|Invariant AdmittedOnlyDuringCollection is violated"
+  "TracingSessionLifecycle|.premature-seal.counterexample|Invariant SealWaitsForQuiescence is violated"
+  "TracingSessionLifecycle|.append-after-seal.counterexample|Invariant NoAppendToSealedStorage is violated"
+  "TracingSessionLifecycle|.reuse-before-quiescence.counterexample|Invariant NoReuseWithLiveWriter is violated"
+  "TracingSessionLifecycle|.stale-generation.counterexample|Invariant NoStaleGenerationAdmission is violated"
   "QueryInitializerFence|.ignore-upload.counterexample|Invariant CompletionSafety is violated"
   "QueryInitializerFence|.signal-only.counterexample|Invariant CompletionSafety is violated"
   "QueryInitializerFence|.capacity.counterexample|Invariant CapacitySafety is violated"

@@ -3,6 +3,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_trace_bindings.hpp"
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_draw_internal.hpp"
 #include "dxmt9_draw_fetch_address.hpp"
@@ -3002,6 +3003,11 @@ bool encodeDraw(EncodeContext& ctx,
   // is permitted on this path; the guard is debug-only and asserts this when
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
+  if (::dxmt9::tracing::enabled_detail()) {
+    ::dxmt9::tracing::observe(::dxmt9::tracing::Category::Detail,
+        ::dxmt9::tracing::EventId::DetailDraw, ctx.queue.queryQueueIdentity(),
+        seqId, native.commandDrawIndex);
+  }
   if (auto* recorder = ctx.drawRecorder; recorder && recorder->beginDraw) {
     recorder->beginDraw(recorder->userdata, seqId, native.commandIndex,
                         native.commandDrawIndex);

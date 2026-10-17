@@ -72,6 +72,9 @@ if host_machine.system() == 'darwin'
     subdir('tests')
   endif
 elif host_machine.system() == 'windows'
+  if get_option('dxmt9_perfetto')
+    error('Perfetto is private to the unix provider; PE SDK linkage is forbidden.')
+  endif
   # Cross-build: produces the PE d3d9.dll + winemetal_dxmt9.dll thunk pair.
   # Native winemetal_dxmt9.so (Mach-O) comes from the darwin build.
   subdir('src/util')

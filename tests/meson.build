@@ -625,3 +625,19 @@ test('dxmt9-symbolicate-xctrace-pe', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+
+# Deterministic tracing protocol and pure adapters; GPU runs are explicit.
+foreach tracing_test : ['harness', 'normalize', 'consumer', 'external']
+  test('dxmt9-tracing-' + tracing_test, python3,
+       args: [join_paths(meson.project_source_root(),
+              'tests/scripts/test_tracing_' + tracing_test + '.py')])
+endforeach
+test('dxmt9-tracing-lifecycle-binding', python3,
+     args: [join_paths(meson.project_source_root(),
+            'scripts/check/check_tracing_lifecycle.py')])
+
+test('dxmt9-tracing-gpu-retirement-binding', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/check_tracing_gpu_retirement.py')])
+
+test('dxmt9-tracing-sdk-pin', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/check_tracing_sdk_pin.py')])

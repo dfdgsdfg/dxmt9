@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,23 @@ from scripts.run_apps.benchmark_result_artifacts import (  # noqa: E402
     BenchmarkResultCapturePlan,
     collect_benchmark_result_files,
     prepare_benchmark_result_capture,
+)
+from scripts.run_apps.tracing_harness import (  # noqa: E402
+    TRACE_PROFILES,
+    attempt_paths,
+    atomic_write_json,
+    binary_architecture,
+    apply_trace_launch_configuration,
+    host_identity,
+    make_trace_request,
+    parent_envelope,
+    parent_result_binding,
+    seal_trace_manifest,
+    trace_launch_configuration,
+    sha256_file,
+    source_identity,
+    utc_now,
+    verify_engine_receipt,
 )
 
 
@@ -877,22 +895,190 @@ def create_temp_prefix(app_name: str) -> Path:
         return Path(tempfile.mkdtemp(prefix=prefix_name))
 
 
+def resolve_trace_runtime(app: ExperimentApp, args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve the runtime/build inputs used by run without creating or staging."""
+    entry: WineEntry | None = None
+    source: str | None = None
+    cli_wine_id = getattr(args, "wine_id", None)
+    env_wine_id = os.environ.get("DXMT_EXPERIMENT_WINE_ID")
+    if app.wine_id or cli_wine_id or env_wine_id:
+        manifest_path = getattr(args, "wine_manifest", None) or DEFAULT_MANIFEST_PATH
+        entries = load_manifest(manifest_path)
+        entry, source = resolve_wine_id(
+            entries=entries, cli_arg=cli_wine_id, env_var=env_wine_id,
+            catalogue_value=app.wine_id, app_name=app.name,
+        )
+        validate_wsi_spawn(entry, allow_unsupported_negative_test=getattr(
+            args, "allow_unsupported_wsi_negative_test", False
+        ))
+    wine_root = entry.path if entry is not None else (
+        Path(args.wine_root).expanduser().resolve() if args.wine_root
+        else detect_heroic_wine_root()
+    )
+    if entry is not None and not args.wine_bin:
+        wine_bin = entry.wine_bin()
+    elif args.wine_bin:
+        wine_bin = Path(args.wine_bin).expanduser().resolve()
+    elif wine_root is not None:
+        wine_bin = resolve_wine_bin(wine_root)
+    elif app.requires_wine:
+        raise FileNotFoundError("no Wine root supplied and Heroic runtime auto-detect failed")
+    else:
+        wine_bin = None
+    build_dirs = {
+        "pe": Path(args.pe_build_dir).expanduser().resolve() if args.pe_build_dir else DEFAULT_PE_BUILD_DIR,
+        "runtime_pe": Path(args.runtime_pe_build_dir).expanduser().resolve() if args.runtime_pe_build_dir else DEFAULT_RUNTIME_PE_BUILD_DIR,
+        "unix": Path(args.unix_build_dir).expanduser().resolve() if args.unix_build_dir else DEFAULT_UNIX_BUILD_DIR,
+        "wow64_pe": Path(args.wow64_pe_build_dir).expanduser().resolve() if args.wow64_pe_build_dir else DEFAULT_WOW64_PE_BUILD_DIR,
+        "wow64_runtime_pe": Path(args.wow64_runtime_pe_build_dir).expanduser().resolve() if args.wow64_runtime_pe_build_dir else DEFAULT_WOW64_RUNTIME_PE_BUILD_DIR,
+    }
+    mingw_dirs = {
+        "mingw": Path(args.mingw_bin_dir).expanduser().resolve() if args.mingw_bin_dir else DEFAULT_MINGW_BIN_DIR,
+        "wow64_mingw": Path(args.wow64_mingw_bin_dir).expanduser().resolve() if args.wow64_mingw_bin_dir else DEFAULT_WOW64_MINGW_BIN_DIR,
+    }
+    if entry is not None:
+        prefix = Path(args.prefix).expanduser().resolve() if args.prefix else PREFIXES_ROOT / app.name
+        prefix_mode = "persistent"
+    elif args.prefix:
+        prefix = Path(args.prefix).expanduser().resolve()
+        prefix_mode = "persistent"
+    else:
+        prefix = None
+        prefix_mode = "temporary"
+    binary_path = Path(args.binary).expanduser().resolve() if args.binary else app.binary_path
+    return {
+        "wine": ({"id": entry.id, "source": source, "version": entry.version,
+                  "variant": entry.variant, "root": str(entry.path)} if entry else None),
+        "wine_root": str(wine_root) if wine_root else None,
+        "wine_bin": str(wine_bin) if wine_bin else None,
+        "build_dirs": {name: str(path) for name, path in build_dirs.items()},
+        "mingw_dirs": {name: str(path) for name, path in mingw_dirs.items()},
+        "staged_build": describe_staged_build(wine_root, build_dirs),
+        "skip_stage": bool(app.skip_stage or args.skip_stage),
+        "stage_mingw_runtime": bool(getattr(args, "stage_mingw_runtime", False)),
+        "prefix": str(prefix) if prefix else None,
+        "prefix_mode": prefix_mode,
+        "binary": str(binary_path),
+    }
+
+
 def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
-    if not app.launcher_path.exists():
-        raise FileNotFoundError(f"launcher not found: {app.launcher_path}")
+    trace_profile_name = getattr(args, "trace_profile", None)
+    trace_profile = TRACE_PROFILES.get(trace_profile_name) if trace_profile_name else None
+    if trace_profile_name and trace_profile is None:
+        raise ValueError(f"unknown trace profile {trace_profile_name!r}")
+    if trace_profile is not None and trace_profile.name not in ("timeline", "gpu-detail") and (
+        getattr(args, "trace_include_pe", False)
+        or getattr(args, "trace_include_metal", False)
+        or getattr(args, "trace_detail", False)
+        or getattr(args, "trace_duration_ms", None) is not None
+        or getattr(args, "trace_delay_ms", 0)
+        or getattr(args, "trace_gpu_level", None) is not None
+        or getattr(args, "trace_gpu_capacity", None) is not None
+    ):
+        raise ValueError("trace window and source options require --trace-profile timeline or gpu-detail")
+    trace_run_id = uuid.uuid4().hex if trace_profile is not None else None
+    effective_trace_timeout = (
+        getattr(args, "timeout", None)
+        if getattr(args, "timeout", None) is not None else app.run_timeout_sec
+    )
+    trace_duration_ms = None
+    trace_delay_ms = int(getattr(args, "trace_delay_ms", 0) or 0)
+    trace_window_error: str | None = None
+    if trace_profile is not None and trace_profile.window_mode == "duration":
+        if effective_trace_timeout <= 0:
+            trace_window_error = "timeline requires a positive runner timeout to reserve finalization time"
+        else:
+            timeout_ms = int(effective_trace_timeout * 1000)
+            finalize_ms = trace_profile.finalize_timeout_ms
+            available_ms = timeout_ms - finalize_ms - trace_delay_ms
+            requested_ms = getattr(args, "trace_duration_ms", None)
+            trace_duration_ms = min(5_000, available_ms) if requested_ms is None else int(requested_ms)
+            if trace_delay_ms < 0 or trace_duration_ms <= 0:
+                trace_window_error = "trace delay must be nonnegative and capture duration must be positive"
+            elif trace_delay_ms + trace_duration_ms + finalize_ms > timeout_ms:
+                trace_window_error = (
+                    "runner timeout must cover trace delay, capture duration, and finalize deadline"
+                )
+            elif trace_duration_ms > 1_800_000:
+                trace_window_error = "trace duration exceeds the frozen 30 minute profile bound"
+    gpu_requested = bool(
+        trace_profile is not None and trace_profile.name == "gpu-detail"
+    ) or bool(getattr(args, "trace_include_metal", False))
+    gpu_level = getattr(args, "trace_gpu_level", None) or "command-buffer"
+    requested_gpu_capacity = getattr(args, "trace_gpu_capacity", None)
+    gpu_capacity = 256 if requested_gpu_capacity is None else requested_gpu_capacity
+    if (trace_profile is not None and getattr(args, "trace_gpu_level", None)
+            and not gpu_requested):
+        trace_window_error = "--trace-gpu-level requires gpu-detail or --trace-include-metal"
+    if (trace_profile is not None and getattr(args, "trace_gpu_capacity", None) is not None
+            and not gpu_requested):
+        trace_window_error = "--trace-gpu-capacity requires gpu-detail or --trace-include-metal"
+    if gpu_requested and (gpu_capacity < 1 or gpu_capacity > 256):
+        trace_window_error = "GPU timing capacity must be between 1 and 256"
+    if getattr(args, "trace_dry_run", False):
+        if trace_profile is None:
+            raise ValueError("--trace-dry-run requires --trace-profile")
+        runtime_error = None
+        try:
+            resolved_runtime = resolve_trace_runtime(app, args)
+        except (ManifestError, OSError, ValueError) as exc:
+            runtime_error = str(exc)
+            resolved_runtime = None
+        suffix = f"-{args.output_suffix}" if getattr(args, "output_suffix", None) else ""
+        output_dir = DEFAULT_OUTPUT_ROOT / f"{app.name}{suffix}-trace-{trace_run_id}"
+        paths = attempt_paths(output_dir, trace_run_id or "dry-run")
+        request = (make_trace_request(trace_profile, run_id=trace_run_id or "dry-run",
+                                      attempt_id=uuid.uuid4().hex, paths=paths,
+                                      duration_ms=trace_duration_ms,
+                                      delay_ms=trace_delay_ms,
+                                      include_pe=getattr(args, "trace_include_pe", False),
+                                      include_metal=getattr(args, "trace_include_metal", False),
+                                      include_detail=getattr(args, "trace_detail", False),
+                                      gpu_level=gpu_level, gpu_capacity=gpu_capacity)
+                   if trace_profile.name != "baseline" and not trace_window_error else None)
+        source = source_identity(REPO_ROOT)
+        provenance_error = None
+        if not source.get("available") or not source.get("content_identity_complete"):
+            provenance_error = "source provenance is unavailable or incomplete"
+        preflight_error = trace_window_error or runtime_error or provenance_error
+        launch_trace_config = trace_launch_configuration(
+            trace_profile, request, request_path=paths["request"],
+            receipt_path=paths["receipt"],
+            requested_pe=getattr(args, "trace_include_pe", False),
+        )
+        print(json.dumps({
+            "app": app.name, "profile": trace_profile.frozen_config(),
+            "supported": trace_profile.supported and preflight_error is None,
+            "unsupported_reason": trace_profile.unsupported_reason,
+            "preflight_error": preflight_error,
+            "run_id": trace_run_id, "output_dir": str(output_dir),
+            "paths": {name: str(path) for name, path in paths.items()},
+            "request": request, "runtime": resolved_runtime,
+            "observer_config": launch_trace_config,
+            "source": source, "will_launch": False,
+        }, indent=2, sort_keys=True))
+        return 0 if trace_profile.supported and preflight_error is None else 2
     blockers = catalogue_blockers(app)
-    if blockers and args.binary is None:
-        raise FileNotFoundError(
+    launch_preflight_error = None
+    if not app.launcher_path.exists():
+        launch_preflight_error = f"launcher not found: {app.launcher_path}"
+    elif blockers and args.binary is None:
+        launch_preflight_error = (
             f"{app.name}: source/build lane unavailable ({', '.join(blockers)}); "
             f"not running generated/ignored binary {app.binary_path}"
         )
     binary_path = Path(args.binary).expanduser().resolve() if args.binary else app.binary_path
-    if not binary_path.exists():
-        raise FileNotFoundError(f"binary not found: {binary_path}")
+    if not binary_path.exists() and launch_preflight_error is None:
+        launch_preflight_error = f"binary not found: {binary_path}"
+    if trace_profile is None and launch_preflight_error:
+        raise FileNotFoundError(launch_preflight_error)
 
     output_name = app.name
     if getattr(args, "output_suffix", None):
         output_name = f"{app.name}-{args.output_suffix}"
+    if trace_run_id:
+        output_name = f"{output_name}-trace-{trace_run_id}"
     output_dir = DEFAULT_OUTPUT_ROOT / output_name
     output_dir.mkdir(parents=True, exist_ok=True)
     actual_path = output_dir / "actual.png"
@@ -902,6 +1088,9 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     ssim_path = output_dir / "ssim.txt"
     log_path = output_dir / "dxmt9.log"
     result_path = output_dir / "result.json"
+    trace_paths = attempt_paths(output_dir, trace_run_id) if trace_run_id else None
+    trace_request: dict[str, Any] | None = None
+    trace_manifest: dict[str, Any] | None = None
     for path in (actual_path, actual_dump_path, diff_path, ssim_path, reference_link_path, log_path, result_path):
         if path.exists() or path.is_symlink():
             path.unlink()
@@ -910,6 +1099,103 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         benchmark_result_dir.unlink()
     elif benchmark_result_dir.is_dir():
         shutil.rmtree(benchmark_result_dir)
+
+    trace_attempt_id: str | None = None
+    trace_source = source_identity(REPO_ROOT) if trace_profile is not None else None
+    if trace_source is not None and (
+        not trace_source.get("available") or not trace_source.get("content_identity_complete")
+    ):
+        launch_preflight_error = "source provenance is unavailable or incomplete"
+    if trace_profile is not None and trace_run_id is not None and trace_paths is not None:
+        trace_paths["root"].mkdir(parents=True, exist_ok=False)
+        trace_attempt_id = uuid.uuid4().hex
+        trace_request = (
+            make_trace_request(trace_profile, run_id=trace_run_id,
+                               attempt_id=trace_attempt_id, paths=trace_paths,
+                               duration_ms=trace_duration_ms,
+                               delay_ms=trace_delay_ms,
+                               include_pe=getattr(args, "trace_include_pe", False),
+                               include_metal=getattr(args, "trace_include_metal", False),
+                               include_detail=getattr(args, "trace_detail", False),
+                               gpu_level=gpu_level, gpu_capacity=gpu_capacity)
+            if trace_profile.name != "baseline" and not trace_window_error else None
+        )
+        launch_trace_config = trace_launch_configuration(
+            trace_profile, trace_request,
+            request_path=trace_paths["request"], receipt_path=trace_paths["receipt"],
+            requested_pe=getattr(args, "trace_include_pe", False),
+        )
+        profile_value = trace_profile.frozen_config()
+        trace_manifest = {
+            **parent_envelope(
+                producer="scripts/run_apps/run_experiment.py", inputs=[],
+                env_snapshot=launch_trace_config["environment"],
+                validity={"status": "pending", "checks": []},
+            ),
+            "run_id": trace_run_id,
+            "attempt_id": trace_attempt_id,
+            "created_at": utc_now(),
+            "question": trace_profile.question,
+            "profile": profile_value,
+            "profile_sha256": hashlib.sha256(
+                json.dumps(profile_value, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            "request": trace_request,
+            "observer_config": launch_trace_config,
+            "host": host_identity(),
+            "source": trace_source,
+            "app": {"name": app.name, "binary": str(binary_path),
+                    "binary_sha256": sha256_file(binary_path) if binary_path.exists() else None,
+            },
+            "collectors": [
+                {"name": name, "required": True, "status": "pending"}
+                for name in trace_profile.required_collectors
+            ] + [
+                {"name": name, "required": False, "status": "not_preflighted"}
+                for name in trace_profile.optional_collectors
+            ],
+            "artifacts": [],
+        }
+        if trace_request is not None:
+            atomic_write_json(trace_paths["request"], trace_request)
+        atomic_write_json(trace_paths["state_manifest"], trace_manifest)
+        if not trace_profile.supported or trace_window_error:
+            reason = trace_window_error or trace_profile.unsupported_reason or "profile unsupported"
+            trace_manifest["validity"] = {"status": "invalid", "checks": [reason]}
+            trace_manifest["collectors"] = [
+                {"name": collector["name"], "required": collector["required"],
+                 "status": "unsupported", "reason": reason}
+                for collector in trace_manifest["collectors"]
+            ]
+            sealed = seal_trace_manifest(trace_paths, trace_manifest)
+            result_path.write_text(json.dumps({
+                "name": app.name, "status": "fail", "returncode": None,
+                "failures": [{"type": "trace_preflight", "message": reason}],
+                "trace": {"run_id": trace_run_id, "attempt_id": trace_attempt_id,
+                          "profile": trace_profile.name, "qualified": False,
+                          **sealed, **parent_result_binding(
+                              run_id=trace_run_id, attempt_id=trace_attempt_id,
+                              workload_status="fail", trace_qualified=False, sealed=sealed)},
+            }, indent=2, sort_keys=True) + "\n")
+            print(f"trace profile unsupported: {reason}", file=sys.stderr)
+            return 2
+        if launch_preflight_error:
+            reason = launch_preflight_error
+            trace_manifest["validity"] = {"status": "invalid", "checks": [reason]}
+            trace_manifest["qualification"] = {"status": "failed", "errors": [reason]}
+            trace_manifest["completed_at"] = utc_now()
+            sealed = seal_trace_manifest(trace_paths, trace_manifest)
+            result_path.write_text(json.dumps({
+                "name": app.name, "status": "fail", "returncode": None,
+                "failures": [{"type": "trace_preflight", "message": reason}],
+                "trace": {"run_id": trace_run_id, "attempt_id": trace_attempt_id,
+                          "profile": trace_profile.name, "qualified": False,
+                          **sealed, **parent_result_binding(
+                              run_id=trace_run_id, attempt_id=trace_attempt_id,
+                              workload_status="fail", trace_qualified=False, sealed=sealed)},
+            }, indent=2, sort_keys=True) + "\n")
+            print(f"trace preflight failed: {reason}", file=sys.stderr)
+            return 2
 
     # Resolve a manifest entry first when the app or CLI requests one. This
     # implements R-RT-6.1 (CLI > env > CATALOGUE) and feeds both the prefix
@@ -1141,11 +1427,53 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         )
         env.pop("DXMT9_WINE_METAL_SURFACE_PROTOCOL", None)
         env.pop("DXMT9_WINE_MANIFEST_ID", None)
+        if trace_profile is not None:
+            apply_trace_launch_configuration(env, launch_trace_config)
         if manifest_entry is not None:
             env["DXMT9_WINE_METAL_SURFACE_PROTOCOL"] = (
                 manifest_entry.metal_surface_protocol
             )
             env["DXMT9_WINE_MANIFEST_ID"] = manifest_entry.id
+        if trace_manifest is not None:
+            staged_full_hashes: dict[str, Any] = {}
+            if wine_root is not None:
+                for relative in STAGED_ARTIFACTS:
+                    staged_path = wine_root / relative
+                    try:
+                        staged_full_hashes[relative] = {
+                            "sha256": sha256_file(staged_path),
+                            "bytes": staged_path.stat().st_size,
+                            "architecture": binary_architecture(staged_path),
+                        }
+                    except OSError:
+                        staged_full_hashes[relative] = None
+            trace_manifest["runtime"] = {
+                "wine_id": manifest_entry.id if manifest_entry else None,
+                "wine_version": manifest_entry.version if manifest_entry else None,
+                "wine_root": str(wine_root) if wine_root else None,
+                "wine_bin": str(wine_bin),
+                "staged_build": staged_build,
+                "staged_artifacts_full": staged_full_hashes,
+                "bridge_abi_source_sha256": sha256_file(
+                    REPO_ROOT / "src/winemetal/winemetal_thunks.hpp"
+                ),
+                "lane": app.name,
+                "launcher_env": effective_launcher_env,
+                "env_snapshot": {
+                    key: value for key, value in env.items()
+                    if key.startswith(("DXMT_", "DXMT9_", "DXMT_EXPERIMENT_"))
+                    or key == "WINEDEBUG"
+                },
+            }
+            trace_manifest["target"] = {
+                "module": str(binary_path),
+                "sha256": sha256_file(binary_path),
+                "architecture": binary_architecture(binary_path),
+            }
+            trace_manifest["inputs"] = [
+                {"path": str(binary_path), "sha256": sha256_file(binary_path)},
+            ]
+            atomic_write_json(trace_paths["state_manifest"], trace_manifest, replace_existing=True)  # type: ignore[index]
         if app.wine_dll_overrides:
             env["DXMT_EXPERIMENT_WINE_DLLOVERRIDES"] = app.wine_dll_overrides
         if app.cx_bottle:
@@ -1211,6 +1539,129 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 benchmark_result_plan,
                 output_dir=output_dir,
             )
+
+        trace_result: dict[str, Any] | None = None
+        if trace_request is not None and trace_paths is not None:
+            trace_result = verify_engine_receipt(
+                trace_paths["receipt"], trace_request, trace_paths["pftrace"]
+            )
+            if trace_result["qualified"]:
+                raw_path = Path(str(trace_paths["pftrace"]) + ".raw.jsonl")
+                normalized_path = trace_paths["root"] / "normalized-bundle.json"
+                consumer_path = trace_paths["root"] / "trace-processor-receipt.json"
+                try:
+                    from scripts.tools.tracing_normalize import adapt, validate_bundle
+                    from scripts.tools.tracing_consumer import derive_expected, qualify_trace
+
+                    receipt = trace_result["receipt"]
+                    process_incarnation = str(
+                        receipt.get("process", {}).get("incarnation", "unknown")
+                    ) if isinstance(receipt.get("process"), dict) else "unknown"
+                    bundle = adapt(raw_path, "auto", run_id=trace_run_id or "unknown",
+                                   process_incarnation=process_incarnation)
+                    normalization = validate_bundle(bundle, require_complete=True)
+                    expected = derive_expected(bundle)
+                    atomic_write_json(normalized_path, bundle)
+                    processor_receipt = qualify_trace(
+                        trace_paths["pftrace"], expected=expected, require_complete=True
+                    )
+                    atomic_write_json(consumer_path, processor_receipt)
+                    trace_result["normalization"] = {
+                        "qualified": True, "validity": normalization,
+                        "path": str(normalized_path), "sha256": sha256_file(normalized_path),
+                    }
+                    trace_result["trace_processor"] = {
+                        "qualified": processor_receipt.get("verdict") == "qualified",
+                        "path": str(consumer_path), "sha256": sha256_file(consumer_path),
+                        "consumer": processor_receipt.get("consumer"),
+                        "queries": processor_receipt.get("queries"),
+                    }
+                    if processor_receipt.get("verdict") != "qualified":
+                        raise ValueError("pinned Trace Processor returned an unqualified verdict")
+                except Exception as exc:  # noqa: BLE001
+                    trace_result["qualified"] = False
+                    trace_result["status"] = "failed"
+                    trace_result["errors"].append(f"normalization_or_consumer_failed:{exc}")
+            trace_receipt_path = trace_paths["receipt"]
+            trace_manifest["completed_at"] = utc_now()  # type: ignore[index]
+            trace_manifest["process"] = {
+                "returncode": process.returncode if process else None,
+                "timed_out": timed_out,
+            }
+            trace_manifest["collectors"] = [
+                {"name": "engine-perfetto", "required": True,
+                 "status": "qualified" if trace_result["qualified"] else "failed",
+                 "errors": trace_result["errors"]},
+                *[{
+                    "name": name,
+                    "required": name in trace_profile.required_collectors,
+                    "status": (
+                        (trace_result.get("receipt", {}).get(
+                            "collector_status" if name in trace_profile.required_collectors
+                            else "optional_collectors", {}).get(name, {})
+                         or {}).get("status", "outcome_missing")
+                        if trace_request and name in (
+                            trace_request.get("required_collectors", []) +
+                            trace_request.get("optional_collectors", []))
+                        else "not_requested"
+                    ),
+                    "outcome": (
+                        trace_result.get("receipt", {}).get(
+                            "collector_status" if name in trace_profile.required_collectors
+                            else "optional_collectors", {}).get(name)
+                        if trace_request and name in (
+                            trace_request.get("required_collectors", []) +
+                            trace_request.get("optional_collectors", []))
+                        else None
+                    ),
+                } for name in dict.fromkeys(
+                    [*trace_profile.required_collectors, *trace_profile.optional_collectors])
+                  if name != "engine-perfetto"],
+            ]
+            trace_manifest["qualification"] = {
+                "status": trace_result["status"],
+                "required_trace_qualified": trace_result["qualified"],
+                "errors": trace_result["errors"],
+                "normalization": trace_result.get("normalization"),
+                "trace_processor": trace_result.get("trace_processor"),
+                "claims": {
+                    "engine_timeline": {
+                        "status": "qualified" if trace_result["qualified"] else "unqualified",
+                        "sources": ["engine-perfetto"],
+                    },
+                    "pe_observation": {
+                        "status": (
+                            ((trace_result.get("receipt", {}).get("optional_collectors", {})
+                              .get("pe-events", {}) or {}).get("status", "unknown"))
+                            if trace_request and "pe-events" in trace_request["optional_collectors"]
+                            else "not_requested"
+                        ),
+                        "reason": "optional PE source outcome is independent of engine timeline qualification",
+                    },
+                    "metal_timing": {
+                        "status": (
+                            ((trace_result.get("receipt", {}).get(
+                                "collector_status" if "metal-timing" in
+                                trace_profile.required_collectors else "optional_collectors", {})
+                              .get("metal-timing", {}) or {}).get("status", "unknown"))
+                            if trace_request and "metal-timing" in (
+                                trace_request["required_collectors"] +
+                                trace_request["optional_collectors"])
+                            else "not_requested"
+                        ),
+                        "reason": (
+                            "Metal timing is required by this profile"
+                            if trace_profile and "metal-timing" in trace_profile.required_collectors
+                            else "optional Metal source outcome is independent of engine timeline qualification"
+                        ),
+                    },
+                },
+            }
+            trace_manifest["validity"] = {
+                "status": "valid" if trace_result["qualified"] else "invalid",
+                "checks": trace_result["errors"],
+            }
+            atomic_write_json(trace_paths["state_manifest"], trace_manifest, replace_existing=True)
 
         performance: dict[str, Any] = {}
         if process_started_at is not None and process_finished_at is not None:
@@ -1347,7 +1798,46 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         elif not app.reference_path.exists() and not app.reference_optional:
             result["failures"].append({"type": "missing_reference"})
 
+        if trace_profile is not None and trace_profile.name == "baseline":
+            result["trace"] = {
+                "run_id": trace_run_id, "attempt_id": trace_attempt_id,
+                "profile": trace_profile.name, "qualified": True,
+                "manifest": str(trace_paths["manifest"]) if trace_paths else None,
+            }
+            trace_manifest["completed_at"] = utc_now()  # type: ignore[index]
+            trace_manifest["process"] = {
+                "returncode": process.returncode if process else None,
+                "timed_out": timed_out,
+            }
+            trace_manifest["validity"] = {"status": "valid", "checks": ["no tracing requested by baseline"]}
+            atomic_write_json(trace_paths["state_manifest"], trace_manifest, replace_existing=True)  # type: ignore[index]
+        elif trace_profile is not None and trace_request is not None and trace_paths is not None:
+            result["trace"] = {
+                "run_id": trace_run_id, "attempt_id": trace_attempt_id,
+                "profile": trace_profile.name,
+                "qualified": bool(trace_result and trace_result["qualified"]),
+                "status": trace_result["status"] if trace_result else "failed",
+                "manifest": str(trace_paths["manifest"]),
+                "receipt": str(trace_paths["receipt"]),
+                "pftrace": str(trace_paths["pftrace"]),
+                "errors": trace_result["errors"] if trace_result else ["receipt_not_verified"],
+            }
+            if not trace_result or not trace_result["qualified"]:
+                result["failures"].append({
+                    "type": "trace_qualification",
+                    "errors": trace_result["errors"] if trace_result else ["receipt_not_verified"],
+                    "workload_status_independent": True,
+                })
+
         result["status"] = "pass" if not result["failures"] else "fail"
+        if trace_manifest is not None and trace_paths is not None:
+            sealed = seal_trace_manifest(trace_paths, trace_manifest)
+            result.setdefault("trace", {}).update(sealed)
+            result["trace"].update(parent_result_binding(
+                run_id=trace_run_id or "", attempt_id=trace_attempt_id or "",
+                workload_status=result["status"],
+                trace_qualified=bool(result.get("trace", {}).get("qualified")), sealed=sealed,
+            ))
         result_path.write_text(json.dumps(result, indent=2, sort_keys=True))
 
         print(f"experiment: {app.name}")
@@ -1368,6 +1858,47 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         return 0 if result["status"] == "pass" else 1
     finally:
+        if (trace_manifest is not None and trace_paths is not None
+                and not trace_manifest.get("sealed")):
+            validity = trace_manifest.get("validity", {})
+            if validity.get("status") == "pending":
+                trace_manifest["completed_at"] = utc_now()
+                trace_manifest["validity"] = {
+                    "status": "invalid",
+                    "checks": ["runner_exited_before_trace_qualification"],
+                }
+                trace_manifest["qualification"] = {
+                    "status": "failed",
+                    "errors": ["runner_exited_before_trace_qualification"],
+                }
+                try:
+                    sealed = seal_trace_manifest(trace_paths, trace_manifest)
+                    if not result_path.exists():
+                        binding = parent_result_binding(
+                            run_id=trace_run_id or "", attempt_id=trace_attempt_id or "",
+                            workload_status="fail",
+                            trace_qualified=bool(trace_manifest.get("qualification", {}).get(
+                                "required_trace_qualified", False)),
+                            sealed=sealed,
+                        )
+                        result_path.write_text(json.dumps({
+                            "name": app.name,
+                            "binary": str(binary_path),
+                            "launcher": str(app.launcher_path),
+                            "reference": str(app.reference_path),
+                            "returncode": process.returncode if process else None,
+                            "failures": [{"type": "trace_runner_exit",
+                                          "message": "runner exited before result publication"}],
+                            "timed_out": timed_out,
+                            "trace": {
+                                "run_id": trace_run_id, "attempt_id": trace_attempt_id,
+                                "profile": trace_profile.name if trace_profile else None,
+                                "qualified": binding["parent_result_envelope"]["trace_qualified"],
+                                **sealed, **binding,
+                            },
+                        }, indent=2, sort_keys=True) + "\n")
+                except OSError:
+                    print("[trace] failed to seal attempt failure metadata", file=sys.stderr)
         if process is not None and process.poll() is None:
             terminate_process_group(process, signal.SIGTERM)
             try:
@@ -1404,9 +1935,33 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("list", help="List catalogue entries")
+    subparsers.add_parser("trace-profiles", help="List frozen tracing profiles and collector requirements")
 
     run_parser = subparsers.add_parser("run", help="Run one experiment")
     run_parser.add_argument("name", help="Catalogue entry name")
+    run_parser.add_argument(
+        "--trace-profile", choices=tuple(TRACE_PROFILES),
+        help="Freeze and record a tracing profile for this unique run attempt.",
+    )
+    run_parser.add_argument(
+        "--trace-dry-run", action="store_true",
+        help="Print the resolved tracing request and artifact paths without launching.",
+    )
+    run_parser.add_argument("--trace-duration-ms", type=int,
+                            help="Override the bounded trace window duration in milliseconds.")
+    run_parser.add_argument("--trace-delay-ms", type=int, default=0,
+                            help="Delay trace collection after engine preparation (milliseconds).")
+    run_parser.add_argument("--trace-include-pe", action="store_true",
+                            help="Request optional PE events for the timeline profile.")
+    run_parser.add_argument("--trace-include-metal", action="store_true",
+                            help="Request optional Metal timing for the timeline profile.")
+    run_parser.add_argument("--trace-detail", action="store_true",
+                            help="Request bounded detail events for the selected trace window.")
+    run_parser.add_argument("--trace-gpu-level", choices=("command-buffer", "encoder-stage"),
+                            default=None,
+                            help="GPU timestamp scope for gpu-detail or --trace-include-metal.")
+    run_parser.add_argument("--trace-gpu-capacity", type=int, default=None,
+                            help="Bounded GPU timing sample capacity (maximum 256).")
     run_parser.add_argument("--wine-root", help="Wine runtime root")
     run_parser.add_argument("--wine-bin", help="Wine executable path")
     run_parser.add_argument(
@@ -1470,6 +2025,10 @@ def main() -> int:
     apps = load_catalogue(CATALOGUE_PATH)
     if args.command == "list":
         print_catalogue(apps)
+        return 0
+    if args.command == "trace-profiles":
+        print(json.dumps({name: profile.frozen_config()
+                          for name, profile in TRACE_PROFILES.items()}, indent=2, sort_keys=True))
         return 0
 
     app = next((item for item in apps if item.name == args.name), None)

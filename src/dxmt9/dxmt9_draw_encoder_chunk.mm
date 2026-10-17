@@ -2,6 +2,8 @@
 #import <Metal/Metal.h>
 
 #include "dxmt9_capture.hpp"
+#include "dxmt9_trace_bindings.hpp"
+#include "dxmt9_trace_gpu_bridge.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_render_tape_topology_scope.hpp"
 #include <stdexcept>
@@ -2833,7 +2835,28 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     if (!next) return;
     const auto commitStarted = std::chrono::steady_clock::now();
     if (!testSplit) {
-      commandBuffer.commit();
+      if (::dxmt9::tracing::enabled()) {
+        using namespace ::dxmt9::tracing;
+        const auto queueId = ctx.queue.queryQueueIdentity();
+        const auto cbId = ::dxmt9::trace::gpu::processCommandBufferId(
+            commandBuffer.handle, queueId, sourceSeqId);
+        if (::dxmt9::trace::gpu::processGpuTraceEnabled()) {
+          const auto deviceId = ::dxmt9::trace::gpu::processGpuDeviceGeneration(
+              ctx.device.handle);
+          ::dxmt9::trace::gpu::setProcessCommandBufferDeviceGeneration(
+              commandBuffer.handle, queueId, sourceSeqId, deviceId);
+          (void)::dxmt9::trace::gpu::observeProcessGpuSubmission(
+              {.deviceGeneration = deviceId,
+               .queueGeneration = queueId, .commandBufferId = cbId,
+               .sequenceId = sourceSeqId}, commandBuffer.handle);
+        }
+        observe(Category::Submit, EventId::SubmitBegin, queueId, cbId);
+        commandBuffer.commit();
+        observe(Category::Submit, EventId::Submit, queueId, cbId);
+        observe(Category::Submit, EventId::SubmitMember, queueId, sourceSeqId, cbId);
+      } else {
+        commandBuffer.commit();
+      }
     }
     perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -5247,6 +5270,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     core::SourcePayloadView payload,
     std::uint64_t sourceSeqId,
     EncodeChunkOptions options) {
+  auto traceEncodeScope = ::dxmt9::tracing::enabled()
+      ? ::dxmt9::tracing::TraceScope(
+            static_cast<uint8_t>(::dxmt9::tracing::Category::Encode),
+            static_cast<uint16_t>(::dxmt9::tracing::EventId::EncodeBegin),
+            static_cast<uint16_t>(::dxmt9::tracing::EventId::EncodeEnd),
+            0, sourceSeqId, ctx.queue.queryQueueIdentity())
+      : ::dxmt9::tracing::TraceScope{};
+  auto traceStageScope = ::dxmt9::trace::gpu::processGpuTraceEnabled()
+      ? ::dxmt9::trace::gpu::StageWorkScope({
+            .deviceGeneration = ::dxmt9::trace::gpu::processGpuDeviceGeneration(
+                ctx.device.handle),
+            .queueGeneration = ctx.queue.queryQueueIdentity(),
+            .sequenceId = sourceSeqId})
+      : ::dxmt9::trace::gpu::StageWorkScope{};
   const auto queryRanges = payload.isLegacy() && payload.legacyPayload()
       ? payload.legacyPayload()->queryRanges : nullptr;
   const query::OcclusionScopeRef occlusionScope =

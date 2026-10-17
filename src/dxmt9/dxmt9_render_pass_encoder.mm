@@ -9,6 +9,7 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_query_policy.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_trace_gpu_bridge.hpp"
 
 #include <algorithm>
 #include <array>
@@ -968,10 +969,26 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
     WMT::Buffer visibilityBuffer, RenderPassActionSummary* actionSummary,
     LateRenderPassStoreState* lateStoreState) {
+  constexpr std::size_t kMaxSampleBufferAttachments = 4;
+  std::array<WMTSampleBufferAttachmentInfo, kMaxSampleBufferAttachments>
+      tracedAttachments{};
+  const std::size_t suppliedCount = std::min<std::size_t>(
+      sampleBufferAttachments.size(), kMaxSampleBufferAttachments);
+  std::copy_n(sampleBufferAttachments.begin(), suppliedCount,
+              tracedAttachments.begin());
+  std::size_t attachmentCount = suppliedCount;
+  if (attachmentCount < tracedAttachments.size()) {
+    const auto traced = trace::gpu::reserveCurrentStageAttachment(
+        static_cast<std::uintptr_t>(ctx.device.handle),
+        static_cast<std::uintptr_t>(commandBuffer.handle));
+    if (traced) tracedAttachments[attachmentCount++] = traced.attachment;
+  }
+  const auto effectiveSampleAttachments = std::span<const WMTSampleBufferAttachmentInfo>(
+      tracedAttachments.data(), attachmentCount);
   PreparedRenderPass prepared{};
   if (!prepareRenderPassWithStoreProofLookahead(
           ctx, drawState, clear, lookaheadSources, activePass,
-          sampleBufferAttachments, visibilityBuffer, prepared)) {
+          effectiveSampleAttachments, visibilityBuffer, prepared)) {
     if (actionSummary) {
       *actionSummary = {};
     }

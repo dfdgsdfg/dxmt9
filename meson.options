@@ -39,3 +39,10 @@ option(
   value: 'auto',
   description: 'Compile the per-draw heap allocation guard. auto = enabled in buildtype=debug only. Runtime override via DXMT_DEBUG_NO_PER_DRAW_ALLOC env (set to "0" to disable).',
 )
+
+option(
+  'dxmt9_perfetto',
+  type: 'boolean',
+  value: false,
+  description: 'Private unix Perfetto tracing SDK (runtime opt-in remains required).',
+)

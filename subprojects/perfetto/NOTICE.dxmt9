@@ -1,0 +1,6 @@
+Perfetto SDK (optional unix tracing dependency)
+Copyright (C) 2019 The Android Open Source Project and upstream contributors.
+Licensed under the Apache License, Version 2.0; see LICENSE.
+Source revision and exact file digests are recorded in PINNED.md.
+The vendored SDK files are unmodified. Their embedded copyright/license
+notices remain part of this distribution. No Perfetto SDK is linked into PE.

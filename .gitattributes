@@ -1,0 +1,3 @@
+# Preserve the hash-pinned upstream SDK byte-for-byte, including its final blank line.
+subprojects/perfetto/sdk/perfetto.cc whitespace=-blank-at-eof
+subprojects/perfetto/sdk/perfetto.h whitespace=-blank-at-eof

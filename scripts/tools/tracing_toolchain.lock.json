@@ -1,0 +1,29 @@
+{
+  "name": "Perfetto Trace Processor Shell",
+  "version": "v58.2",
+  "revision": "add693d8b338ba9599dbcbc3e300b1ab8c000897",
+  "license": "Apache-2.0",
+  "source": "https://github.com/google/perfetto",
+  "prebuilts": {
+    "darwin-arm64": {
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v58.2/mac-arm64/trace_processor_shell",
+      "sha256": "d29864d1ba3b36855527bb1b0ca3aa7f703cdce338b9680bb922c5c151b358fa",
+      "size": 13597976
+    },
+    "darwin-x86_64": {
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v58.2/mac-amd64/trace_processor_shell",
+      "sha256": "3927a2767eadd140db3ff4fe0dfbf1bde35c1f56501149cd367f5cee898bef27",
+      "size": 14854504
+    },
+    "linux-aarch64": {
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v58.2/linux-arm64/trace_processor_shell",
+      "sha256": "0e6e0c5452c505c8d46fe472fd196a0d17d963460727e2ce2013b02aa1309555",
+      "size": 14086160
+    },
+    "linux-x86_64": {
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v58.2/linux-amd64/trace_processor_shell",
+      "sha256": "58042408e6cc861fb1a731c26bb082dc222285561eaa4e12a48a8b2b90dca7b9",
+      "size": 14897560
+    }
+  }
+}

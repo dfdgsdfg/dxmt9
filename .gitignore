@@ -47,3 +47,5 @@ specs/**/plan.md
 uv-cache/
 .claude/scheduled_tasks.lock
 .claude/worktrees
+# Meson subproject resolver lock; the pinned SDK sources remain tracked.
+/subprojects/.wraplock

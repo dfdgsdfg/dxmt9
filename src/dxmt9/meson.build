@@ -1,3 +1,45 @@
+# The SDK is compiled and linked privately. No SDK include directory or type
+# propagates through dxmt9_runtime_dep or the generated PE bridge.
+dxmt9_trace_srcs = files(
+  'dxmt9_trace.cpp',
+  'tracing/config.cpp',
+  'tracing/artifact.cpp',
+  'tracing/relations.cpp',
+  'dxmt9_trace_bindings.cpp',
+  'dxmt9_trace_gpu.cpp',
+  'dxmt9_trace_gpu.mm',
+  'dxmt9_trace_gpu_bridge.mm',
+)
+dxmt9_trace_links = []
+dxmt9_trace_inc = []
+dxmt9_trace_args = ['-DDXMT9_HAS_PERFETTO=0']
+if get_option('dxmt9_perfetto')
+  dxmt9_perfetto_project = subproject('perfetto')
+  dxmt9_perfetto_private_dep = dxmt9_perfetto_project.get_variable('perfetto_private_dep')
+  dxmt9_perfetto_export = static_library(
+    'dxmt9_perfetto_export', 'tracing/perfetto_export.cpp',
+    include_directories: [dxmt9_inc, include_directories('..')],
+    dependencies: dxmt9_perfetto_private_dep,
+    gnu_symbol_visibility: 'hidden',
+    install: false,
+  )
+  dxmt9_trace_links += dxmt9_perfetto_export
+  dxmt9_trace_args = ['-DDXMT9_HAS_PERFETTO=1']
+endif
+dxmt9_trace_lib = static_library(
+  'dxmt9_trace', dxmt9_trace_srcs,
+  include_directories: [dxmt9_inc, include_directories('..')] + dxmt9_trace_inc,
+  cpp_args: dxmt9_trace_args,
+  objcpp_args: dxmt9_trace_args,
+  link_with: dxmt9_trace_links,
+  dependencies: [dxmt9_util_dep],
+  install: false,
+)
+dxmt9_trace_dep = declare_dependency(
+  link_with: dxmt9_trace_lib,
+  dependencies: dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+)
+
 dxmt9_shader_service_core_srcs = files('dxmt9_shader_service.cpp')
 dxmt9_provider_service_abi_srcs = files('dxmt9_shader_service_exports.cpp')
 
@@ -129,12 +171,12 @@ dxmt9_runtime_lib = static_library(
   include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
   cpp_args: dxmt9_runtime_cpp_args,
   objcpp_args: dxmt9_runtime_cpp_args,
-  dependencies: [dxmt9_util_dep],
+  dependencies: [dxmt9_util_dep, dxmt9_trace_dep],
   install: false,
 )
 
 dxmt9_runtime_dep = declare_dependency(
   link_with: dxmt9_runtime_lib,
   include_directories: [dxmt9_inc, dxmt9_runtime_internal_inc],
-  dependencies: [dxmt9_util_dep],
+  dependencies: [dxmt9_util_dep, dxmt9_trace_dep],
 )

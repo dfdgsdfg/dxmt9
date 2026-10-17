@@ -1,3 +1,4 @@
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 // ReplayOffloadWorker: device-owned background thread draining the Task 2
 // ReplayOffloadQueue. Kept in its own TU so device_c_common.hpp only needs a
 // forward declaration of ReplayOffloadWorker for the D9CDevice member (the
@@ -509,6 +510,13 @@ dxmt9::query::ReplayReceiptState ReplayDrainLedger::classifyReceiptLocked(
 
 dxmt9::query::ReplayReceiptState ReplayDrainLedger::waitReceipt(
     const ReplayDrainReceipt& receipt) noexcept {
+  auto traceScope = dxmt9::tracing::enabled()
+      ? dxmt9::tracing::TraceScope(
+            static_cast<uint8_t>(dxmt9::tracing::Category::Wait),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::WaitBegin),
+            static_cast<uint16_t>(dxmt9::tracing::EventId::WaitEnd),
+            0, receipt.capturedSequence, dxmt9::tracing::owner_id(this))
+      : dxmt9::tracing::TraceScope{};
   if (!receipt.target) {
     return dxmt9::query::ReplayReceiptState::Failed;
   }
@@ -864,9 +872,12 @@ bool ReplayOffloadWorker::start(D9CDevice* device) noexcept {
     owner_ = nullptr;
     return false;
   }
+  const bool tracingConfigured = dxmt9::tracing::session_configured();
+  if (tracingConfigured) dxmt9::tracing::register_owner(&queue_);
   try {
     thread_ = std::thread([this, device] { run(device); });
   } catch (...) {
+    if (tracingConfigured) dxmt9::tracing::unregister_owner(&queue_);
     owner_ = nullptr;
     return false;
   }
@@ -924,6 +935,7 @@ void ReplayOffloadWorker::stop() {
   queue_.drainRemaining(drained);
   releaseDrainedQueueItems(drained, owner_ ?
       owner_->mutationCompositionObserver.get() : nullptr);
+  dxmt9::tracing::unregister_owner(&queue_);
 }
 
 void ReplayOffloadWorker::run(D9CDevice* device) {
@@ -1079,13 +1091,23 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
     const auto invokeReplay = [&]() -> int32_t {
       return replay_ ? replay_(device, chunk) : replayRawChunk(device, chunk);
     };
+    const auto invokeTracedReplay = [&]() -> int32_t {
+      if (!dxmt9::tracing::enabled()) return invokeReplay();
+      auto traceScope = dxmt9::tracing::TraceScope(
+          static_cast<uint8_t>(dxmt9::tracing::Category::Replay),
+          static_cast<uint16_t>(dxmt9::tracing::EventId::ReplayDispatchBegin),
+          static_cast<uint16_t>(dxmt9::tracing::EventId::ReplayDispatchEnd),
+          0, chunk.replaySeq, dxmt9::tracing::owner_id(device),
+          dxmt9::tracing::owner_id(&queue_));
+      return invokeReplay();
+    };
     try {
       if (dxmt9::core::querydiag::enabled()) {
         dxmt9::core::querydiag::ScopedReplayRawOrdinal rawOrdinalScope(
             chunk.replaySeq);
-        hr = invokeReplay();
+        hr = invokeTracedReplay();
       } else {
-        hr = invokeReplay();
+        hr = invokeTracedReplay();
       }
     } catch (const std::bad_alloc&) {
       hr = dxmt9::core::E_OUTOFMEMORY;

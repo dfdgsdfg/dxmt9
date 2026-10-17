@@ -41,3 +41,11 @@ if host_machine.system() == 'darwin'
     install: false,
   )
 endif
+
+tracing_gpu_smoke = executable(
+  'dxmt9-tracing-gpu-smoke', 'tracing_gpu_smoke.mm',
+  include_directories: [dxmt9_inc, include_directories('../src')],
+  dependencies: [dxmt9_runtime_dep, dxmt9_winemetal_dep,
+                 dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  install: false,
+)

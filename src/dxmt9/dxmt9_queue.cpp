@@ -1,3 +1,5 @@
+#include "dxmt9_trace_bindings.hpp"
+#include "dxmt9_trace_gpu_bridge.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_render_tape_emission_observer.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
@@ -1846,6 +1848,15 @@ void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
   const auto lifecycleEvent = classifyTransition(record);
+  if (::dxmt9::tracing::enabled()) {
+    using namespace ::dxmt9::tracing;
+    if (lifecycleEvent == QueueLifecycleEvent::CommitPublish)
+      observe(Category::Queue, EventId::QueuePublish,
+              submissionBinding_.queryQueueIdentity, record.eventSeqId);
+    else if (lifecycleEvent == QueueLifecycleEvent::ReclaimFree)
+      observe(Category::Completion, EventId::Retire,
+              submissionBinding_.queryQueueIdentity, record.eventSeqId);
+  }
   if (directLifecycleObserverEnabled()) {
     const auto source = record.beforeSourceId.valid() &&
             record.beforeStorage.valid()
@@ -5720,6 +5731,13 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
   }
   const bool waitNeeded =
       completedSeqId->load(std::memory_order_relaxed) < targetSeqId;
+  auto nativeTraceScope = ::dxmt9::tracing::enabled()
+      ? ::dxmt9::tracing::TraceScope(
+            static_cast<uint8_t>(::dxmt9::tracing::Category::Wait),
+            static_cast<uint16_t>(::dxmt9::tracing::EventId::WaitBegin),
+            static_cast<uint16_t>(::dxmt9::tracing::EventId::WaitEnd),
+            0, targetSeqId, submissionBinding_.queryQueueIdentity)
+      : ::dxmt9::tracing::TraceScope{};
   const auto waitStarted = std::chrono::steady_clock::now();
   if (waitNeeded) {
     auto* encodeCv = submissionBinding_.encodeCv;
@@ -6483,7 +6501,31 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
                                  static_cast<unsigned long long>(record.seqId));
       if (::dxmt9::supply::enabled())
         ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 4);
-      record.commandBuffer.commit();
+      if (::dxmt9::tracing::enabled()) {
+        using namespace ::dxmt9::tracing;
+        const auto queueId = submissionBinding_.queryQueueIdentity;
+        const auto cbId = ::dxmt9::trace::gpu::processCommandBufferId(
+            record.commandBuffer.handle, queueId, record.seqId);
+        if (::dxmt9::trace::gpu::processGpuTraceEnabled()) {
+          const auto deviceId =
+              ::dxmt9::trace::gpu::processCommandBufferDeviceGeneration(
+                  record.commandBuffer.handle);
+          ::dxmt9::trace::gpu::setProcessCommandBufferDeviceGeneration(
+              record.commandBuffer.handle, queueId, record.seqId, deviceId);
+          (void)::dxmt9::trace::gpu::observeProcessGpuSubmission(
+              {.deviceGeneration = deviceId, .queueGeneration = queueId,
+               .commandBufferId = cbId, .sequenceId = record.seqId},
+              record.commandBuffer.handle);
+        }
+        observe(Category::Submit, EventId::SubmitBegin, queueId, cbId);
+        record.commandBuffer.commit();
+        observe(Category::Submit, EventId::Submit, queueId, cbId);
+        for (const auto& source : completionSources)
+          observe(Category::Submit, EventId::SubmitMember,
+                  queueId, source.seqId, cbId);
+      } else {
+        record.commandBuffer.commit();
+      }
       if (::dxmt9::supply::enabled())
         ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 5);
       if (::dxmt9::supply::enabled())
@@ -6655,6 +6697,10 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     return false;
   }
 
+  if (::dxmt9::tracing::enabled())
+    ::dxmt9::tracing::observe(::dxmt9::tracing::Category::Completion,
+        ::dxmt9::tracing::EventId::CompletionDequeue,
+        submissionBinding_.queryQueueIdentity, pending.seqId);
   const WMTCommandBufferStatus dequeueStatus =
       pending.commandBuffer ? pending.commandBuffer.status()
                             : WMTCommandBufferStatusNotEnqueued;
@@ -6741,6 +6787,11 @@ bool QueueLifecycleController::processOnePendingCompletion() {
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::CompletionObserved, this,
                           pending.seqId);
+  if (::dxmt9::tracing::enabled()) {
+    ::dxmt9::tracing::observe(::dxmt9::tracing::Category::Completion,
+        ::dxmt9::tracing::EventId::Completion,
+        submissionBinding_.queryQueueIdentity, pending.seqId);
+  }
   delayCompletionSignalForPerfProbe();
 
   if (pending.commandBuffer &&
@@ -6751,6 +6802,18 @@ bool QueueLifecycleController::processOnePendingCompletion() {
       (!pending.commandBuffer ||
        pending.commandBuffer.status() != WMTCommandBufferStatusError) &&
       !queryCompletionFailed_.load(std::memory_order_acquire);
+
+  if (::dxmt9::tracing::enabled()) {
+    if (::dxmt9::trace::gpu::processGpuTraceEnabled()) {
+      ::dxmt9::trace::gpu::publishCompletedProcessGpuCommandBuffer(
+          pending.commandBuffer.handle, submissionBinding_.queryQueueIdentity,
+          pending.seqId, completionSucceeded
+              ? ::dxmt9::trace::gpu::CommandBufferStatus::Completed
+              : ::dxmt9::trace::gpu::CommandBufferStatus::Failed);
+    }
+    ::dxmt9::trace::gpu::retireProcessCommandBufferIdsThrough(
+        submissionBinding_.queryQueueIdentity, pending.seqId);
+  }
 
   // The Metal tail has completed, but a corrupt shadow must fail-stop before
   // diagnostics, callbacks, waterline publication, or Tape completion.

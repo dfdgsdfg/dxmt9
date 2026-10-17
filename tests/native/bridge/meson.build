@@ -1036,3 +1036,9 @@ draw_parent_completion_spec = executable(
 )
 
 test('dxmt9-draw-parent-completion-spec', draw_parent_completion_spec)
+
+tracing_batch_spec = executable(
+  'dxmt9-tracing-batch-spec', 'tracing_batch_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-tracing-batch-spec', tracing_batch_spec)

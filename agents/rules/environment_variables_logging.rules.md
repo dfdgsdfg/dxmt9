@@ -22,3 +22,16 @@ for global notes.
 | `DXMT9_TRACE_DRAW_GEOMETRY` / `DXMT9_TRACE_DRAW_GEOMETRY_LIMIT` | Draw geometry diagnostics | unset |
 | `DXMT9_BRIDGE_VERBOSE` | Log rejected or suspicious winemetal bridge handles | `0` |
 | `DXMT9_BRIDGE_TRACE_CALLS` | Log the first N winemetal PE→unix bridge calls with opcode names, status, and duration | `0` |
+
+## Native Perfetto Capture
+
+| Variable | Meaning |
+|---|---|
+| `DXMT9_TRACE_CONFIG` | Absolute path to the immutable `dxmt9.trace.request.v1` request written by the catalogue runner. Requires an explicit `-Ddxmt9_perfetto=true` unix build; absent means no session or SDK initialization. |
+| `DXMT9_TRACE_RECEIPT` | Runner-selected receipt destination, bound to the frozen request. A missing or incomplete receipt fails the requested tracing gate independently of workload status. |
+| `DXMT9_TRACE_PE` | Exact value `1` enables bounded PE chunk-boundary batches with QPC and creation identities. The runner sets this only for explicitly requested PE coverage. Disabled paths do not read clocks or cross the bridge. |
+
+Use `run_experiment.py run <app-id> --trace-profile timeline --trace-dry-run`
+to inspect the resolved window and paths. GPU/PE clocks retain their source
+identity until calibration qualifies alignment. See
+[`specs/experiments/harness/tracing/spec.md`](../../specs/experiments/harness/tracing/spec.md).

@@ -413,3 +413,24 @@ scripts/         Purpose-organized helper scripts; see scripts/README.md
                  (codegen, check, build_apps, run_apps, run_suites, install,
                  tools)
 ```
+
+## Optional native Perfetto tracing
+
+`-Ddxmt9_perfetto=true` enables the pinned in-process Perfetto SDK in the unix
+provider. The default is `false`; PE builds reject enabling this option. Build
+both PE architectures after any bridge schema change, even though neither PE
+binary links Perfetto.
+
+```sh
+meson configure build -Ddxmt9_perfetto=true
+meson compile -C build
+meson configure build-x86_64-builtin -Ddxmt9_perfetto=true
+meson compile -C build-x86_64-builtin
+meson compile -C build-win32-x64-builtin
+meson compile -C build-win32-x86-builtin
+```
+
+An enabled build remains idle without a validated `DXMT9_TRACE_CONFIG` request.
+Use the catalogue runner to create requests and check receipts; a trace viewer
+opening a file does not qualify it. See [tracing usage](../scripts/tools/tracing_tools.md)
+and the [requirement evidence matrix](../specs/experiments/harness/tracing/evidence.md).

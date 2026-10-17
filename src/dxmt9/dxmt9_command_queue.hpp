@@ -412,6 +412,9 @@ class CommandQueue {
       void* state) noexcept;
 
  public:
+  // Stable process-local queue incarnation already owned by query fencing.
+  std::uint64_t queryQueueIdentity() const noexcept { return queryQueueIdentity_; }
+
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the queue-owned pool / pipeline cache / shader archive /
   // ResourceInitializer, binds queueLifecycle_ to own state, and spawns

@@ -25,6 +25,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_managed_mutation_lease.hpp"
 #include "dxmt9/dxmt9_cpu_supply_trace.hpp"
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 #include "dxmt9/query_replay_receipt.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -814,6 +815,14 @@ class ReplayOffloadQueue {
     if (supply::enabled()) {
       supply::record(supply::Event::RawReady, this, queue_.back().chunk.replaySeq);
       traceQueueStateLocked();
+    }
+    if (dxmt9::tracing::enabled()) {
+      dxmt9::tracing::observe(
+          dxmt9::tracing::Category::Replay,
+          dxmt9::tracing::EventId::RawReady,
+          dxmt9::tracing::owner_id(ledger),
+          queue_.back().chunk.replaySeq,
+          dxmt9::tracing::owner_id(this));
     }
     workCv_.notify_one();
     return ReplayQueuePushDisposition::Accepted;

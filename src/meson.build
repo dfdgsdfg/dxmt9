@@ -57,7 +57,9 @@ dxmt9_native_lib = shared_library(
 dxmt9_dep = declare_dependency(
   include_directories: dxmt9_inc,
   link_with: dxmt9_native_lib,
-  dependencies: [dxmt9_util_dep],
+  # Header-inlined diagnostic gates are owned by the Unix provider alongside
+  # the shared native Metal facade. Preserve that owner in native test links.
+  dependencies: [dxmt9_util_dep, dxmt9_winemetal_dep],
 )
 
 meson.override_dependency('dxmt9', dxmt9_dep)

@@ -9,6 +9,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "dxmt9/trace_batch.h"
 
 #ifndef DXMT9_NODISCARD
 #if defined(__cplusplus) && __cplusplus >= 201703L
@@ -1360,6 +1361,11 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk_segmented(
     D9CDevice*, const D9CCommandChunkSegmentedTransportV1*);
+/* Optional diagnostic transport. This call never changes render state or the
+ * D3D9 operation result; the receipt reports trace admission and a host clock
+ * anchor sampled by the unix handler. */
+int32_t dxmt9c_device_trace_batch(
+    D9CDevice*, const D9CTraceBatch*, D9CTraceBatchReceipt* outReceipt);
 /* Cold metadata observation under the serialized PE recorder capture guard.
  * Resolves the exact surface facade identity and compares its retained core
  * backing to current primary swapchain0/backbuffer0. No drain, flush, snapshot,

@@ -11,37 +11,31 @@ Owns implementation/evidence status for [requirements](requirements.md) and
 [spec](spec.md). This inventory distinguishes existing components from the
 integrated contract; source presence is not a fresh runtime qualification.
 
-| Contract | Status | Current evidence | Missing implementation or evidence |
-|---|---|---|---|
-| R-HARN-TRACE-1.1–1.3: run/profile lifecycle | partial | Existing catalogue runner, staged-build provenance, perf-probe and system-trace sidecar. | Shared tracing profile/manifest, per-collector required/optional outcomes, retry/seal and unified claim gates. |
-| R-HARN-TRACE-2.1–2.3: identity/relations | partial | CPU supply replay-ledger bindings and `join_replay_wait_trace.py`; Metal `seq/encoder` joins. | Shared incarnation schema, PE/native mapping, many-to-many submission relations and cross-source adversarial fixtures. |
-| R-HARN-TRACE-3.1–3.4: clocks/metrics | partial | Existing CPU/wall distinction and guest-PC restrictions. | Reusable calibrated clock adapter, uncertainty propagation, GPU mapping and source-specific coverage qualification. |
-| R-HARN-TRACE-4.1–4.3: observer boundary | partial | Existing bounded CPU supply/wait collectors and project observer rules. | Integrated collector disabled/enabled cost evidence, bounded lifecycle model/code binding and diagnostic transport qualification if added. |
-| R-HARN-TRACE-5.1: bundle/envelope | not started | Existing raw artifacts and parent envelope design are inputs. | Versioned trace bundle, source-digest graph, normalized schema and compatibility fixtures. |
-| R-HARN-TRACE-5.2: Perfetto | not started | Engine integration is selected; no Perfetto exporter/SDK integration found in the inspected runtime/tools. | Engine-produced native protobuf and pinned consumer round trip; legacy JSON conversion is a compatibility adapter. |
-| R-HARN-TRACE-5.3: integrated validity | partial | `analyze_cpu_supply.py` and `summarize_wait_trace.py` reject incomplete native inputs; existing external joins enforce coverage. | Unified loss/closure/clock/identity qualification and nonzero required-claim failures. |
-| R-HARN-TRACE-6.1: REA evidence | partial | [REA rule](../../../../agents/rules/rea.rules.md) defines static evidence provenance. | Machine-readable static annotation/probe manifest linked to runtime run IDs and source records. |
-| R-HARN-TRACE-6.2–6.4: target probes | partial | PE sampler provides guest-context observations; target-specific probe experiments do not qualify a general injector. | Reusable target-probe backend and manifest validator; supported ABI/lifecycle matrix, actual-hit joins and matched controls. |
-| R-HARN-TRACE-7.3: QEMU | not started | Separate structural lane specified; no runtime-performance equivalence asserted. | Only if needed: pinned emulator/mode, fixtures and artifact adapter. Not an initial Perfetto dependency. |
-| R-HARN-TRACE-8.1–8.3: acceptance | partial | Existing workload rules separate diagnostics from baseline timing. | Integrated deterministic counterexamples, observer budgets/controls, pinned-viewer checks and bounded qualified-runtime run. |
-| R-HARN-TRACE-9.1–9.3: SDK/build boundary | not started | Private unix ownership and bounded POD capture are specified. | Pin SDK release/digest/license; Meson opt-in, private SDK module, SDK-free facade, native serialization and disabled-path verification. |
-| R-HARN-TRACE-9.4, 9.7: session/control | not started | Required state machine and engine receipt are specified. | Generation/admission/drain model and code binding, bounded failure cleanup, capture configuration and runner receipt handling. |
-| R-HARN-TRACE-9.5–9.6: engine/PE events | partial | Existing CPU supply/wait hooks provide candidate event sites. | Native track/flow adapters, event coverage and no-duplication checks; qualified optional PE transport and clock/thread mapping. |
-| R-HARN-TRACE-9.8–9.9: integration acceptance | not started | Native-output and build/runtime acceptance matrix are specified. | Trace Processor fixtures, SDK loss checks, session race counterexamples, SDK coexistence and native/Wine x86/x64 observer controls. |
-| R-HARN-TRACE-10.1–10.2: GPU sources | partial | `WMT::CommandBuffer::gpuStartTime` / `gpuEndTime` and counter-sample-buffer support exist in `src/winemetal/Metal.hpp`; `src/dxmt9/dxmt9_queue.cpp` consumes timing results. | Shared normalized collector, actual capability/boundary schema and explicit level/budget selection. |
-| R-HARN-TRACE-10.3–10.4: GPU retirement | not started | The [GPU timing contract](gpu-timing.md) defines bounded asynchronous retirement. | Integrated slot-generation/lifetime model and code binding, nonblocking overflow, cancellation and finalization evidence. |
-| R-HARN-TRACE-10.5–10.7: GPU qualification | not started | Existing GPU counters are inputs, not proof of an integrated Perfetto GPU track. | Source-specific calibration/validity, overlap-safe tracks/flows, negative fixtures and device-qualified OFF/ON correctness/cost controls. |
+The [48-requirement evidence matrix](evidence.md) is the authoritative
+code/test mapping. Implementation and platform qualification remain distinct.
+Native SDK import, deterministic fixtures, and device smoke do not by themselves
+qualify an unavailable external collector or establish negligible overhead.
 
-## External Collection
-
-External collection gaps are owned by the
-[address/register probe contract](external-probes.md):
-
-| Contract | Status | Current evidence | Missing implementation or evidence |
-|---|---|---|---|
-| R-HARN-TRACE-11.1–11.3: platforms and sites | partial | REA provenance rules and the PE sampler provide discovery inputs; the Linux reference project is identified. | Admitted platform adapters, loaded-address/ABI validation, breakpoint capacity and thread-lifecycle coverage. |
-| R-HARN-TRACE-11.4–11.6: transport and meaning | not started | Inspected perftrace blobs are reference material, not a qualified collector. | Wrap-safe/loss-aware transport, register/sample normalization, identity/clock joins, invocation checks and observer controls. |
-| R-HARN-TRACE-11.7–11.8: lifecycle/admission | not started | [External probe verification](external-probes.md#verification-and-admission) defines acceptance. | Attach/detach model/code evidence, actual Linux/macOS capability fixtures, preserved target state and pinned Perfetto consumer checks. |
+| Contract | Implementation | Qualification and remaining limits |
+|---|---|---|
+| R-HARN-TRACE-1.1–1.3 | Catalogue profiles, unique attempts, frozen requests, build/source provenance, separate collector outcomes and atomic manifest sealing. | Python positive/negative fixtures pass; final catalogue Wine evidence is recorded in the matrix. |
+| R-HARN-TRACE-2.1–2.3 | Process/thread/session incarnations, distinct raw/queue/CB identities and explicit cold-side relation resolution. | Native and Wine x64 GPU captures qualify typed submit-to-CB flows. Broad many-source/shared-CB fan-out remains unqualified; completion membership does not establish exclusive physical GPU contribution. |
+| R-HARN-TRACE-3.1–3.4 | Declared clocks, bounded calibration validity, source metrics, unknown populations and legacy adapters. | Native and Wine x64 GPU calibration passes. Wine x86/x64 PE QPC mapping remains uncovered/high-error and fails strict complete attribution; unknown populations remain unknown. |
+| R-HARN-TRACE-4.1–4.3 | Cached gates, bounded POD buffers, generation-qualified admission and generated bounded PE transport. | Disabled ARM64 assembly, matched native emitter controls, and x86/x64 PE builds pass. Wine x86/x64 each emit 8 PE records with zero loss, but strict clock qualification remains pending because calibration is missing/uncovered and uncertainty exceeds 1000 ns. |
+| R-HARN-TRACE-5.1–5.3 | Immutable raw/derived artifact graph, native protobuf, pinned Trace Processor and fail-closed normalization. | Native and Wine x64 CPU/GPU captures pass pinned TP. Wine x86/x64 PE traces are retained but rejected by complete-attribution checks; zero loss alone is insufficient. |
+| R-HARN-TRACE-6.1–6.4 | REA/module/address/ABI/installation validation and owned portable probe lifecycle. | No live target patching adapter is admitted. Static validity never claims activation, hits or state preservation. |
+| R-HARN-TRACE-7.3 | Separate optional emulation profile with explicit capability rejection. | QEMU is not installed or qualified as a macOS/Wine performance equivalent. |
+| R-HARN-TRACE-8.1–8.3 | Deterministic counterexamples, CPU/GPU lifecycle models, matched OFF/ON controls and frozen budgets. | No speedup or negligible-overhead claim. See exact run scope and limitations in the evidence matrix. |
+| R-HARN-TRACE-9.1–9.3 | Private pinned opt-in unix SDK, SDK-free observer facade and deferred original-time native serialization. | Native SDK-off/on and x86_64 unix builds exercised; PE builds reject SDK linkage; public SDK symbols audited. |
+| R-HARN-TRACE-9.4, 9.7 | Session generation/admission/drain/seal, atomic receipts, frozen limits and bounded failure cleanup. | Production lifecycle fixtures plus safety/progress and deliberate TLA counterexamples. |
+| R-HARN-TRACE-9.5–9.6 | Import/replay/publication/encode/wait/query/submit/completion sites, opt-in detail and batched guest observations. | Final Wine x64 GPU captures resolve engine categories and one detail event; query applicability remains unobserved. Wine x86/x64 each have 8 retained PE events, but uncovered/high-error QPC clocks fail complete attribution. |
+| R-HARN-TRACE-9.8–9.9 | Native tracks/relations, loss checks and build/runtime test matrix. | SDK-off tests pass 17/17; SDK-on tests pass 20/20; x86/x64 PE and unix builds pass. Wine x64 CPU, CB+detail and encoder-stage captures pass exact consumer qualification; x86/x64 PE captures remain clock-unqualified. |
+| R-HARN-TRACE-10.1–10.2 | Built-in Metal CB timestamps and optional render-stage counter samples with explicit capability/level outcomes. | Wine x64 CB+detail and encoder-stage traces qualify with requested levels attached; unsupported levels still fail explicitly. Completion callbacks remain retirement hints, not GPU timestamps. |
+| R-HARN-TRACE-10.3–10.4 | Bounded generation-qualified slots, nonblocking admission, asynchronous polling, quarantine and safe retirement. | GPU model/code tests and intended mutant failures pass; native/Wine GPU captures retire with zero loss. Dedicated live timeout injection remains pending; no unbounded wait or production lifetime authority. |
+| R-HARN-TRACE-10.5–10.7 | Source-specific API/tick metadata, actual device clock anchors and GPU track/CB bindings. | Apple M1 matched controls and Wine x64 stage/CB traces pass; GPU source metadata and calibration reach pinned TP. The x86 PE capture does not qualify its QPC mapping. |
+| R-HARN-TRACE-11.1–11.3 | Platform-qualified manifests, loaded-site/ABI validation and thread/installation coverage accounting. | Live Linux perf/ptrace and macOS/Wine breakpoint adapters are unavailable and unqualified. |
+| R-HARN-TRACE-11.4–11.6 | Portable wrap-safe perf parsing, loss/throttle records, sample/register semantics and attribution exclusions. | Fixtures do not establish live Linux scheduling or macOS target coverage. |
+| R-HARN-TRACE-11.7–11.8 | Owned bounded attach/detach state model and fail-closed capability admission. | No live target mutation occurs without an admitted adapter. No perftrace code or mandatory dependency is included. |
 
 ## Existing Component Entry Points
 

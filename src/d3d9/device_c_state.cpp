@@ -1,3 +1,4 @@
+#include "dxmt9/dxmt9_trace_bindings.hpp"
 #include "device_c_provider.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/mutation_composition_observer.hpp"
@@ -36,6 +37,8 @@ D9CDevice::~D9CDevice() {
   if (iface) {
     iface->Release();
   }
+  dxmt9::tracing::unregister_owner(&replayDrainLedger);
+  dxmt9::tracing::unregister_owner(this);
 }
 
 namespace {
