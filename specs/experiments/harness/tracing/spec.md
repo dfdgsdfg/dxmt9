@@ -16,8 +16,9 @@ bridge/import, replay, queue publication, encode, submission, GPU execution,
 completion and waits. Perfetto is the selected engine tracing integration and
 primary view/query surface. A private unix module owns the SDK and produces
 native captures from bounded engine events. Existing native traces remain
-authoritative inputs for compatibility and cross-checking; Xcode/Metal tools
-retain ownership of GPU capture and counter acquisition. PE code remains
+authoritative inputs for compatibility and cross-checking. Built-in Metal timing
+owns live GPU intervals; Xcode/Metal tools retain frame capture and detailed
+hardware-counter acquisition. PE code remains
 SDK-free. Build and runtime activation are opt-in, while integration itself is
 a required deliverable under R-HARN-TRACE-9.1–9.9.
 
@@ -81,7 +82,7 @@ settings must fail preflight.
 | `timeline` | Engine-integrated native Perfetto capture of bounded CPU supply/wait events; explicitly selected PE and Metal observations. | Qualified scopes and explicit cross-layer relations within coverage. |
 | `scheduler` | External scheduler trace, thread inventory and calibrated clock anchors. | Scheduler residency/enclosure for the qualified process/window. |
 | `target-probe` | Frozen REA probe manifest and bounded application markers. | Executed target boundaries and their qualified relations/durations. |
-| `gpu-detail` | xctrace and/or Xcode capture/counter exports with capture identity. | GPU intervals or replay counters according to the actual source. |
+| `gpu-detail` | Selected built-in GPU timing levels and/or xctrace/Xcode exports with source/capture identity. | GPU intervals or replay counters according to the actual source and supported sampling boundaries. |
 | `emulated-structure` | Separately configured QEMU workload and instruction observations. | Structure of that emulated execution only. |
 
 Sources may be combined only when collector coexistence and overhead are
@@ -328,9 +329,12 @@ native-only capture declares missing PE/application scopes. Later PE batches
 use the generated, ABI-matched bridge and retain original clocks/order; they
 never serialize SDK objects or add a bridge call per D3D9 event.
 
-Metal and scheduler observations remain external or explicitly supported
-sources. A successful native engine capture does not manufacture GPU tracks,
-scheduler states or whole-game CPU attribution. Joins still follow sections 4–5.
+Built-in Metal timing follows the [GPU timing contract](gpu-timing.md), with
+command-buffer intervals and separately qualified encoder/pass-stage samples.
+Scheduler observations remain external. SDK integration alone does not establish
+GPU coverage, scheduler states or whole-game CPU attribution; joins still follow
+sections 4–5. GPU-enabled sessions must also satisfy the timing collector's
+asynchronous retirement conditions before finalization.
 
 ### 6.5 Native Consumer and Compatibility Export
 
@@ -430,6 +434,7 @@ implementation plan.
 | 9.4, 9.7 | Session model/code checks for start/stop races, late writers, generation reuse, concurrent requests, overflow, cancellation, missing receipts and finalization deadlines. |
 | 9.5–9.6 | Coarse-event coverage, legacy/native parity fixture, split/shared submissions, absent PE coverage and malformed/reordered PE batch counterexamples. |
 | 9.8–9.9 | Pinned native Trace Processor queries and loss rejection; native host plus Rosetta unix provider with x86/x64 PE runs; SDK-off/runtime-off/active cost controls and independent-SDK coexistence. |
+| 10.1–10.7 | [GPU timing verification](gpu-timing.md#verification-and-admission): capability, sample lifetime, clock/identity, native consumer, Metal correctness and observer-cost evidence. |
 
 These fixtures are required evidence categories, not claims that named test
 targets already exist. Offline normalization is a pure transform and does not

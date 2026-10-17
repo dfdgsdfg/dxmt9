@@ -28,6 +28,9 @@ integrated contract; source presence is not a fresh runtime qualification.
 | R-HARN-TRACE-9.4, 9.7: session/control | not started | Required state machine and engine receipt are specified. | Generation/admission/drain model and code binding, bounded failure cleanup, capture configuration and runner receipt handling. |
 | R-HARN-TRACE-9.5–9.6: engine/PE events | partial | Existing CPU supply/wait hooks provide candidate event sites. | Native track/flow adapters, event coverage and no-duplication checks; qualified optional PE transport and clock/thread mapping. |
 | R-HARN-TRACE-9.8–9.9: integration acceptance | not started | Native-output and build/runtime acceptance matrix are specified. | Trace Processor fixtures, SDK loss checks, session race counterexamples, SDK coexistence and native/Wine x86/x64 observer controls. |
+| R-HARN-TRACE-10.1–10.2: GPU sources | partial | `WMT::CommandBuffer::gpuStartTime` / `gpuEndTime` and counter-sample-buffer support exist in `src/winemetal/Metal.hpp`; `src/dxmt9/dxmt9_queue.cpp` consumes timing results. | Shared normalized collector, actual capability/boundary schema and explicit level/budget selection. |
+| R-HARN-TRACE-10.3–10.4: GPU retirement | not started | The [GPU timing contract](gpu-timing.md) defines bounded asynchronous retirement. | Integrated slot-generation/lifetime model and code binding, nonblocking overflow, cancellation and finalization evidence. |
+| R-HARN-TRACE-10.5–10.7: GPU qualification | not started | Existing GPU counters are inputs, not proof of an integrated Perfetto GPU track. | Source-specific calibration/validity, overlap-safe tracks/flows, negative fixtures and device-qualified OFF/ON correctness/cost controls. |
 
 ## Existing Component Entry Points
 

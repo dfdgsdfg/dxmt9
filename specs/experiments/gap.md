@@ -9,7 +9,7 @@ tags: [specs, gap, experiments]
 
 ## Detailed performance tracing — partial
 
-[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–9.9.
+[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–10.7.
 CPU supply/wait traces, PE sampling and Metal joins provide existing inputs;
 the required unix-owned Perfetto SDK integration, native trace bundle and
 calibrated cross-source timeline remain unevidenced as an integrated system.

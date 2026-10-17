@@ -235,3 +235,48 @@ with both x86 and x64 PE runtime lanes. It must include bounded concurrent
 session model/code tests, finalization failure tests, native Perfetto consumer
 checks and matched observer-cost controls. Internal SDK state must not escape
 through the public bridge ABI or collide with another module's SDK instance.
+
+## 10. Built-In GPU Timing
+
+**R-HARN-TRACE-10.1** A unix-side GPU timing collector must normalize Metal
+observations independently of the Perfetto SDK. It must own diagnostic sample
+storage and result validation while production queue/encoder owners retain
+submission, completion and resource-lifetime authority. PE code must not own
+Metal sampling objects or invoke GPU measurement APIs.
+
+**R-HARN-TRACE-10.2** Collection must distinguish command-buffer timing from
+optional encoder/pass-stage sampling. Capability checks must record supported
+counter sets, sampling points and selected boundaries for the actual device.
+Per-draw sampling requires separate enablement and a bounded budget. Unsupported
+detail must not silently become command-buffer timing or zero duration.
+
+**R-HARN-TRACE-10.3** Every sample allocation must bind session generation,
+device/queue, command buffer, scope and slot generation. Storage must not be
+reused until all GPU writes/resolves and asynchronous CPU readers are complete
+and the result has been consumed or explicitly discarded. Cancellation, timeout,
+queue reset and delayed completion must not attach old results to new work.
+
+**R-HARN-TRACE-10.4** Collection must not wait for GPU progress on render,
+submission or completion-critical paths, or force a queue/device idle solely
+for profiling. Results must be retired asynchronously after normal completion.
+Exhausted storage, unavailable results and deadline expiry must produce explicit
+loss/incomplete outcomes. SDK serialization, allocating resolve operations and
+file I/O must remain outside measured critical paths.
+
+**R-HARN-TRACE-10.5** Normalized GPU observations must retain source API,
+scope/boundary semantics, reported endpoint values and units, clock domain,
+calibration reference/uncertainty, work identity and validity. Device ticks and
+command-buffer API time must not be assumed interchangeable. Unsupported,
+unavailable, invalid, lost and measured-zero outcomes must be distinguishable.
+
+**R-HARN-TRACE-10.6** Perfetto GPU tracks and CPU submission flows must use actual
+command-buffer/encoder bindings and qualified clock mappings. GPU execution,
+CPU completion observation and display presentation must remain distinct.
+Overlapping GPU intervals must not be summed as exclusive busy time, and
+timestamp intervals must not imply shader occupancy, bandwidth or cache cost.
+
+**R-HARN-TRACE-10.7** Acceptance must include deterministic sample-lifetime and
+clock/identity counterexamples, applicable model/code evidence, native consumer
+checks, and device-qualified Metal runs. Matched sampling-OFF/ON controls must
+measure CPU/GPU perturbation and verify rendering correctness. No timing claim
+may subtract observer overhead as a reconstruction of an unobserved execution.
