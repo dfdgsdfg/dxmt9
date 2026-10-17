@@ -11,6 +11,16 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## D3D9 Layer
 
+### Unpatched WineHQ WSI target
+
+**Not started:** R-CORE-WSI-1.1/4.1 now admit the separately qualified
+`winehq-owned-layer:<runtime-id>` protocol. Its cold provider handles and
+create/reset/destroy integration do not exist as a qualified frontend lane yet.
+Adapter implementation, native lifetime evidence, and the x64/WoW64
+window/input/DPI matrix remain owned by [winemetal gap](../winemetal/gap.md)
+under R-WMB-19. Existing unsupported-runtime behavior remains until those gates
+pass; no current WineHQ support is claimed by this spec change.
+
 ### Query replay drain follow-up
 
 `R-CORE-11.5(f)` is the unconditional production polling policy; the

@@ -7,6 +7,10 @@ Sibling research notes: `shader-translation-asahi-agx.md` (Apple AGX native
 model), `shader-translation-vkd3d-moltenvk.md` (SPIR-V detour for Metal),
 `wine-d3d9.md` (Wine present / buffering path).
 
+For a Metal implementation beneath this OpenGL path, see
+[WineMetalGL](winemetalgl.md): Wine module boundaries, GLSL-to-MSL translation,
+published conformance evidence, and the comparison limits for dxmt9.
+
 ---
 
 ## Scope

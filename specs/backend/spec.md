@@ -1259,25 +1259,27 @@ payload or read a clock.
 
 ### 5.1 Cache Prewarm From `MTLBinaryArchive`
 
-Prewarming populates PSO and shader-function caches at device init by
-deserializing entries already present in the on-disk `MTLBinaryArchive`,
-before the first encoded draw. This eliminates first-run stutter when an app
-revisits previously seen pipeline states.
+Prewarming schedules preparation at device init using compatible retained
+pipeline descriptors and an on-disk `MTLBinaryArchive` as compiler input.
+The archive is not an enumerable descriptor database. Full mode runs off the
+device-init critical path; draws can arrive before it completes and join or
+start demand work for their own keys. Only already completed entries avoid
+first-use compilation waits (R-BACK-3.7–3.9).
 
 ```mermaid
 flowchart LR
     INIT["Device::init"] --> MODE{"prewarm mode"}
-    MODE -->|"shipping"| FULL["full archive load:\nenumerate archive entries\n→ instantiate PSO + DSS\n→ populate caches"]
+    MODE -->|"shipping"| FULL["async archive load + retained descriptors\n→ bounded preparation jobs"]
     MODE -->|"dev"| LAZY["lazy: do not load;\ncompile-on-first-miss with\non-disk archive serving as input"]
     MODE -->|"debug-disabled"| OFF["never read archive"]
-    FULL --> READY["caches ready before first draw"]
+    FULL --> READY["device ready; preparation may remain in flight"]
     LAZY --> READY
     OFF --> READY
 
     READY --> ENC["encode-thread draw"]
     ENC --> MISS{"PSO cache miss?"}
     MISS -->|"hit"| USE["setRenderPipelineState"]
-    MISS -->|"miss"| CMP["compile + write back to archive"]
+    MISS -->|"miss"| CMP["join/start canonical compile job\n+ eligible archive writeback"]
     CMP --> USE
 ```
 
@@ -1287,6 +1289,56 @@ Mode selection (`R-BACK-3.8`) is a runtime config. Counters expose
 included in present diagnostics so support reports can confirm prewarm hit
 the expected file. Failure to load the archive is non-fatal: the cache stays
 empty and the path falls through to compile-and-write.
+
+### 5.2 Preparation Jobs and State Reuse
+
+R-BACK-3.18–3.22 and R-BACK-4.11 extend the existing async/archive and object
+caches. [WineMetalGL research](../../docs/research/winemetalgl.md) motivates the
+contracts; its GL object model and performance numbers are not dxmt9 acceptance
+criteria. The unix shader/cache owner prepares only fully specified keys:
+
+| Stage | Available inputs | Deferred inputs |
+|---|---|---|
+| Shader registration | validated bytecode, translator/compiler profile | draw-dependent specialization and layouts |
+| Function preparation | complete generated source and function constants | attachment formats and other PSO state |
+| Pipeline preparation | canonical complete PSO descriptor | unknown future variants are not enumerated |
+
+A generation-scoped job table publishes `pending -> ready | failed | cancelled`.
+Prewarm and first use share this table; waiters observe the same terminal result.
+The owner retains immutable inputs while jobs run, bounds admission by jobs and
+bytes, and settles waiters before destruction. Generation invalidation prevents
+late completion from installing an old entry. Metal calls and joins execute
+outside cache and command-queue locks. Optional preparation failure leaves
+normal demand error handling available; demand failure propagates through the
+existing backend/device error path rather than producing a missing draw.
+
+Object identity and encoder bindings have different lifetimes:
+
+| Owner | Identity/lifetime | Invalidation |
+|---|---|---|
+| Unix pipeline/state caches | canonical PSO, depth/stencil, or sampler descriptor plus device/cache generation | incompatible compiler/schema/device generation; eviction retains in-use objects |
+| Optional per-thread recent entry | full key, generation, retained object or validated stable handle | generation change or invalid handle; thread-local pointer alone is insufficient |
+| Encoder-local binding shadow | actual bound object/resource, slot, offset/range, dynamic state | new encoder, external state writes, changed backing/view generation |
+
+The encoder compares effective state and emits only justified changes. A cached
+PSO still needs binding on a new encoder; a texture view still needs rebinding
+after backing replacement. No PE getter/state semantics change and no draw-time
+bridge probe is added. Warm-hit optimization choices (recent-entry lookup,
+stable handles, locking strategy) require measurements rather than prescribing
+WineMetalGL's thread-local layout.
+
+Verification is required before enabling any new lane:
+
+| Layer | Required evidence |
+|---|---|
+| Native value transforms | descriptor equality/collisions, specialization/profile partition, generation and `A -> B -> A` binding transitions |
+| Bounded refinement + implementation binding | duplicate demand/prewarm admission, failure/retry, release/reset/shutdown, stale publication, encoder restart and external-state invalidation |
+| GPU oracle | retained-input pixels with reuse enabled/disabled across render/blit/compute breaks and backing changes |
+| Wild/performance | cold/warm first-use waits, job fanout, hit paths, binding counts, retained bytes, bridge/chunk counts, frame time; observer-off controls |
+
+The stateful lanes follow R-VERIF-1.5–1.8; a pure key transform can use native
+value evidence, but cannot stand in for the lifecycle or pixel layers. Missing
+evidence remains in [gap.md](gap.md).
 
 ---
 
@@ -1549,6 +1601,58 @@ Heap families (`R-BACK-14.1`):
 Render targets, depth buffers, and dynamic-rename buffers stay on direct
 allocation. Heap residency tracking elides per-texture residency calls
 because the heap is the residency unit.
+
+### 7.4 Texture Usage, Compression, and Feedback
+
+R-BACK-5.13–5.16 are owned by the unix format-policy/resource-pool and draw
+encoder paths. PE records D3D9 resource and draw semantics; the importer and
+queue retain resource generations. The provider decides Metal usage flags,
+view creation, hazards, copies, and retirement. Existing
+`convert::toFormatMetalPolicy` and `Pool::createTexture` already select usage
+and suppress some render-target format views; these contracts extend that
+policy rather than assume every texture currently uses blanket flags.
+
+The classifier consumes root allocation/generation, view format, mip/slice/
+aspect ranges, sample count, and read/write roles. It returns one explicit
+action: ordinary legal binding, ordered pass transition, content-preserving
+replacement/copy, or unsupported use. Unknown sampled LODs widen the range.
+Different wrapper handles do not establish disjointness, and disjoint ranges
+still require Metal-valid usage and synchronization. Sequential render-to-
+texture is not automatically simultaneous feedback. Undefined D3D9 feedback
+does not acquire a new pixel guarantee; validation and safe backend behavior
+must follow the separately established D3D9 compatibility policy.
+
+Usage bits are capabilities, not compression toggles. Avoiding unnecessary
+`PixelFormatView`/`ShaderWrite` may preserve driver compression opportunities;
+adding `PixelFormatView` neither establishes a barrier nor legalizes overlapping
+sampling and rendering. DXT/BC block formats are a separate format contract.
+Any selected workaround must preserve defined D3D9 behavior and be qualified
+for the actual Metal device/OS.
+
+When replacement is required, the ordered transaction is:
+
+1. Capture the old generation and order all writes that define its contents.
+2. Allocate a compatible candidate and encode preservation of required live
+   subresources, with supported depth/stencil and MSAA/resolve rules.
+3. Publish the new generation only when preservation is ordered before its
+   consumers; invalidate dependent view and binding caches atomically.
+4. Retain old backing/views for captured queued draws and GPU users until their
+   last-used sequence passes the completion waterline.
+
+Failure before publication discards the candidate and leaves old contents and
+identity intact; a failed required operation reports the established backend
+error. GPU completion failure follows the device-error path. Unsupported
+preservation formats require sufficient initial usage or an explicit failure,
+never a lossy implicit resolve/reinterpretation.
+
+Verification maps R-BACK-5.13 to native descriptor tables; R-BACK-5.14 to
+production-called alias/range transforms and render-to-sample GPU cases; and
+R-BACK-5.15 to bounded generation/publication/retirement refinement, fault
+injection, and content readbacks. R-BACK-5.16 adds overlapping/disjoint mips and
+slices, sRGB/linear views, depth/stencil aspects, MSAA, and invalid combinations.
+All stateful changes follow R-VERIF-1.5–1.8 before wild/performance promotion.
+Report actual GPU bandwidth/compression evidence separately from descriptor
+choices, transition/copy/pass counts, memory, and observer-off frame timing.
 
 ---
 
