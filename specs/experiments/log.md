@@ -9,6 +9,16 @@ tags: [specs, log, experiments]
 
 Domain-level maintenance history for `experiments/` specs. Keep current implementation and evidence status in [gap](gap.md), and use this log for structural edits, migrations, and older detail that should not stay in the current overview.
 
+## 2026-10-17
+
+- Added the cross-domain [detailed performance tracing contract](harness/tracing/spec.md)
+  with stable `R-HARN-TRACE-*` requirements and a dedicated gap inventory.
+  It preserves the seven harness domains and defines shared run provenance,
+  clock/identity joins, Perfetto export, REA-guided target probes, and a
+  separate QEMU structural lane. Existing collectors and private investigations
+  are inputs, not claims of integrated
+  implementation or new performance results.
+
 ## 2026-07-29
 
 - Retired the exploratory commercial catalogue entry that was the only app

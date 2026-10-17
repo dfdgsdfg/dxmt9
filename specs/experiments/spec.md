@@ -7,6 +7,12 @@ tags: [specs, experiments, spec]
 
 # Experiments Spec
 
+Detailed performance collection is specified by the cross-domain
+[tracing architecture](harness/tracing/spec.md) and
+[requirements](harness/tracing/requirements.md). That contract adds correlated
+trace evidence to the existing catalogue/runtime harness; implementation and
+qualification status live in [tracing gaps](harness/tracing/gap.md).
+
 ---
 
 ## 1. Structure

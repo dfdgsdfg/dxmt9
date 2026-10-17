@@ -16,6 +16,13 @@ domain documents under `specs/experiments/harness/<domain>/`
 instantiate what this file defines; they cite stage names, boundary
 names, and envelope fields from here rather than redefining them.
 
+The cross-domain [detailed performance tracing contract](tracing/spec.md)
+uses these same stages, domains and envelopes for correlated application,
+PE, replay, wait and GPU evidence. Its [requirements](tracing/requirements.md)
+add clock, identity, observer-cost and measurement-interpretation contracts;
+its [gap inventory](tracing/gap.md) distinguishes existing collectors from the
+integrated design. It does not introduce an eighth harness domain.
+
 Evidence for §2's boundary claim and §3's second `inputs` use is
 `traces/app-d3d9-3dmark05-vertexremap-dump-r1/analysis/geometry/*.meta`
 (156 files, captured 2026-07-25/27 during the vertex-remap

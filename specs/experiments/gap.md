@@ -7,6 +7,15 @@ tags: [specs, gap, experiments]
 
 # Experiments Gap
 
+## Detailed performance tracing — partial
+
+[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–8.3.
+CPU supply/wait traces, PE sampling and Metal joins provide existing inputs;
+the shared trace bundle, calibrated cross-source timeline and Perfetto exporter
+remain unevidenced as an integrated system. REA-guided target probes and a
+separate QEMU structural lane have explicit acceptance contracts in the
+[tracing spec](harness/tracing/spec.md).
+
 ## Fixed-input replay experiment
 
 ### Normal provider diagnostic — partial qualification
