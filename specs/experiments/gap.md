@@ -9,13 +9,17 @@ tags: [specs, gap, experiments]
 
 ## Detailed performance tracing — partial
 
-[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–10.7.
+[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–11.8.
 CPU supply/wait traces, PE sampling and Metal joins provide existing inputs;
 the required unix-owned Perfetto SDK integration, native trace bundle and
 calibrated cross-source timeline remain unevidenced as an integrated system.
 REA-guided target probes and a separate QEMU structural lane have explicit
 acceptance contracts in the
 [tracing spec](harness/tracing/spec.md).
+
+The [external probe contract](harness/tracing/external-probes.md) adds
+platform-qualified address/register and CPU-sampling evidence. Linux perf
+sources remain optional reference lanes, not macOS collector dependencies.
 
 ## Fixed-input replay experiment
 

@@ -11,6 +11,12 @@ Domain-level maintenance history for `experiments/` specs. Keep current implemen
 
 ## 2026-10-17
 
+- Added R-HARN-TRACE-11.1–11.8 and the
+  [external address/register probe contract](harness/tracing/external-probes.md).
+  Linux ptrace/perf sources and the identified trishume/perftrace reference
+  remain distinct from macOS/Wine collection. Added address/ABI, thread coverage,
+  transport loss, debugger lifecycle, observer-cost and Perfetto join gates;
+  no external collector or dependency is admitted by this documentation change.
 - Selected engine-integrated Perfetto as a required tracing deliverable under
   R-HARN-TRACE-9.1–9.9: an opt-in private unix SDK module, bounded SDK-free
   hot-path records, deferred native serialization, session quiescence and a

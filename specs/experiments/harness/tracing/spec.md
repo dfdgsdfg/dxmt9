@@ -362,6 +362,12 @@ path equivalent to dxmt9's existing Metal path.
 
 ## 7. REA and Target Instrumentation
 
+The [external address/register probe contract](external-probes.md) specifies
+platform-qualified debugger, hardware-breakpoint and CPU-sampling adapters.
+Linux perf sources are optional reference lanes; macOS/Wine adapters require
+independent qualification. They produce external evidence consumed by `join`,
+without adding debugger or Linux dependencies to the engine Perfetto module.
+
 Follow the [REA evidence workflow](../../../../agents/rules/rea.rules.md).
 Probe discovery proceeds from existing samples/caller addresses to bounded
 static investigation, then to selected runtime markers only where those sources
@@ -435,6 +441,7 @@ implementation plan.
 | 9.5–9.6 | Coarse-event coverage, legacy/native parity fixture, split/shared submissions, absent PE coverage and malformed/reordered PE batch counterexamples. |
 | 9.8–9.9 | Pinned native Trace Processor queries and loss rejection; native host plus Rosetta unix provider with x86/x64 PE runs; SDK-off/runtime-off/active cost controls and independent-SDK coexistence. |
 | 10.1–10.7 | [GPU timing verification](gpu-timing.md#verification-and-admission): capability, sample lifetime, clock/identity, native consumer, Metal correctness and observer-cost evidence. |
+| 11.1–11.8 | [External probe verification](external-probes.md#verification-and-admission): platform, address/ABI, thread coverage, ring loss, debugger lifecycle, overhead and qualified Perfetto joins. |
 
 These fixtures are required evidence categories, not claims that named test
 targets already exist. Offline normalization is a pure transform and does not

@@ -13,6 +13,8 @@ It adds measurement interpretation contracts to the parent's artifact
 contracts. Scope is dxmt9 under the qualified Wine runtime on macOS, including
 guest x86/x64 and host CPU/GPU observations. Requirement IDs use
 `R-HARN-TRACE-*`; [spec](spec.md) owns design and [gap](gap.md) owns status.
+Optional external reference lanes under section 11 retain their own platform
+identity and cannot qualify the macOS runtime's performance.
 
 ## 1. Run and Collection Contract
 
@@ -85,8 +87,10 @@ fields and aggregate return types must not enter production hot-path contracts.
 **R-HARN-TRACE-4.2** Enabled event emission must use bounded diagnostic-owned
 storage. Measured paths must not allocate per event, format text, perform file
 I/O, acquire a sink-wide mutex or block for exporter progress. Capacity loss
-must be observable. Export and expensive parsing must run outside the selected
-measurement corridor.
+must be observable. Engine export and expensive parsing must run outside the
+selected measurement corridor. An external collector may drain kernel buffers
+and persist raw records concurrently under a bounded, costed collection policy;
+that exception must not move I/O or blocking work into the target's hot path.
 
 **R-HARN-TRACE-4.3** PE collection must preserve the three-binary boundary.
 It must not call Metal/macOS APIs or cross the bridge once per traced D3D9
@@ -280,3 +284,56 @@ clock/identity counterexamples, applicable model/code evidence, native consumer
 checks, and device-qualified Metal runs. Matched sampling-OFF/ON controls must
 measure CPU/GPU perturbation and verify rendering correctness. No timing claim
 may subtract observer overhead as a reconstruction of an unobserved execution.
+
+## 11. External Address, Register and CPU Observations
+
+**R-HARN-TRACE-11.1** External collectors must declare OS/kernel, architecture,
+native/translated/emulated execution, collection API, tool version and required
+capabilities. Linux `ptrace`, `perf_event_open`, `perf record` and the identified
+`trishume/perftrace` implementation must not be presented as macOS collectors.
+A Linux guest/reference run must not qualify host Wine/Rosetta/Metal timing.
+
+**R-HARN-TRACE-11.2** Address probes must extend the REA manifest with module
+hash/load generation, address space, RVA/resolved address, probe type, exact
+instruction semantics, selected registers and ABI. Host and translated guest
+PCs/registers must remain separate unless a qualified mapping exists. Raw
+register values must not become named arguments without instruction/ABI proof.
+
+**R-HARN-TRACE-11.3** Collection must declare thread selection, attachment and
+new-thread/fork/exec policy, hardware breakpoint capacity and scope. Per-thread
+coverage intervals and failed installations must be retained. Missing slots or
+unobserved threads must fail dependent completeness claims, not silently reduce
+the requested address set or manufacture zero hits.
+
+**R-HARN-TRACE-11.4** External event transport must validate record sizes,
+ring wrap-around, publication ordering, schema/ABI and loss/throttle indicators.
+Bounded concurrent draining may preserve raw records, but loss without a known
+affected interval must disqualify all potentially affected claims. Sampling
+period, frequency, PMU multiplexing and unwind quality must remain explicit.
+
+**R-HARN-TRACE-11.5** Normalized observations must distinguish address hits,
+sampled instruction pointers/stacks, debugger stops and exact scoped events.
+Each must retain target/process/thread identity, source timestamp/clock,
+requested/valid register masks, probe identity and source record. A register
+address alone must not identify a reused D3D9 object or establish a causal flow.
+
+**R-HARN-TRACE-11.6** Breakpoint exception cost, debugger suspension/resume,
+kernel collection and external drain overhead must be reported under matched
+OFF/armed/active controls where supported. Stop latency is not original workload
+CPU time; hit pairs require complete same-invocation evidence before becoming
+durations. Missing returns, recursion, tail calls and nonlocal exits must not
+produce synthetic complete intervals.
+
+**R-HARN-TRACE-11.7** The external probe owner must preserve target state and
+owns bounded attach, arm, collect, disable, drain and detach operations. Failure
+must restore only state it changed under a qualified protocol, preserve signal/
+exception behavior, and report incomplete teardown. It must not silently kill,
+leave stopped or resume a target from an unknown debugger state.
+
+**R-HARN-TRACE-11.8** Platform adapters require pinned capability/permission
+preflight, deterministic transport/address/lifecycle counterexamples, bounded
+actual-platform evidence and Perfetto consumer checks before admission.
+`trishume/perftrace` is a Linux reference candidate, not a bundled dependency or
+qualified general tracer. macOS debugger/Mach or Wine marker adapters require
+independent guest-state and overhead qualification. Retired IDs 7.1/7.2 remain
+reserved; these contracts do not reinstate the removed generic tool adapters.
