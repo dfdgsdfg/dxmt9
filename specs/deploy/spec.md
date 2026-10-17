@@ -401,7 +401,7 @@ axes:
 | Axis | Initial values | Proves |
 |---|---|---|
 | `unixlib_loader_capabilities` | `builtin-pair-v1`, `by-name-v1` | The qualified unix provider can be found and called |
-| `metal_surface_protocol` | `extescape-v1`, `legacy-macdrv-symbols:<runtime-id>`, `unsupported` | A Wine-owned window surface and Metal layer can be acquired and released |
+| `metal_surface_protocol` | `extescape-v1`, `legacy-macdrv-symbols:<runtime-id>`, `winehq-owned-layer:<runtime-id>`, `unsupported`, `unknown` | A protocol-qualified layer can be acquired and released with its declared ownership |
 
 A supported deployment is the intersection of one deployment-mode loader
 requirement and one qualified Metal-surface protocol:
@@ -426,8 +426,9 @@ diagnostic provenance, not the compatibility decision key.
 
 | Runtime class | Loader result | Surface result | Support result |
 |---|---|---|---|
-| Stock Wine with by-name unixlib loading but no accepted Metal-surface protocol | pass | unsupported | fail closed at WSI creation |
+| Stock Wine with by-name unixlib loading but no qualified Metal-surface path | pass | unsupported | fail closed at WSI creation |
 | Wine carrying the accepted ExtEscape protocol | mode-dependent pass | `extescape-v1` after runtime query | supported after integration gates |
+| Unpatched WineHQ with exact-qualified dxmt9 owned-layer adapter | independently proven per deployment mode | `winehq-owned-layer:<runtime-id>` after unsupported escape query | target; supported only after R-WMB-19 qualification, without Wine patching/resigning |
 | Exact audited legacy runtime | usually `builtin-pair-v1`; app-local only if separately proven | `legacy-macdrv-symbols:<runtime-id>` | supported only for the evidenced deployment modes |
 | Unknown downstream Wine | probe | probe | unsupported until both axes are qualified |
 
@@ -503,7 +504,10 @@ runtime destination paths.
 
 For an exact legacy package, `metal_surface_protocol` contains the qualified
 value `legacy-macdrv-symbols:<runtime-id>`. An unqualified
-`legacy-macdrv-symbols` value is invalid. The package manifest records required
+`legacy-macdrv-symbols` value is invalid. The owned-layer adapter likewise uses
+`winehq-owned-layer:<runtime-id>`; an unqualified name or mismatched identity is
+invalid. It is a dxmt9 adapter capability, not an exported upstream Wine ABI.
+The package manifest records required
 capabilities; a run result separately records observed loader capabilities,
 the observed WSI acquisition path, and exact Wine provenance.
 

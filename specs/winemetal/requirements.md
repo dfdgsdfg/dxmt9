@@ -1,13 +1,13 @@
 ---
 type: "Spec Requirements"
 title: "winemetal Requirements — Wine Metal Surface Bridge"
-description: "ExtEscape and legacy macdrv compatibility contracts for Wine Metal surfaces."
+description: "ExtEscape, qualified legacy macdrv, and unpatched WineHQ owned-layer compatibility contracts."
 tags: [specs, winemetal, requirements]
 ---
 
 # winemetal Requirements — Wine Metal Surface Bridge
 
-This spec governs how dxmt9 obtains a Wine-owned `CAMetalLayer` for a Win32
+This spec governs how dxmt9 obtains a qualified `CAMetalLayer` binding for a Win32
 `HWND`. D3D9-visible swap-chain behavior remains owned by `specs/d3d9/wsi/`;
 artifact discovery remains owned by `specs/deploy/`.
 
@@ -21,6 +21,9 @@ and consumed by [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166)
 Numeric values and wire layout remain revision-pinned until Wine accepts and
 merges a stable interface. Where a legacy requirement conflicts with
 `R-WMB-11`-`R-WMB-17`, the newer requirement controls all non-legacy runtimes.
+Section 19 adds an exact-qualified, provider-owned-layer target for unpatched
+WineHQ; its ownership rules apply only to that protocol. Current support and
+missing evidence are tracked in [gap.md](gap.md).
 
 ---
 
@@ -342,9 +345,9 @@ That guide is normative for the source-build workflow on macOS.
 
 ## 11. ExtEscape Scope
 
-**R-WMB-11.1** This spec covers the control-plane path from a PE-side `HWND` to a
-Wine-owned client-surface token and `CAMetalLayer` token, their transfer to the
-unix presenter, and their ordered release.
+**R-WMB-11.1** The ExtEscape contract covers the control-plane path from a
+PE-side `HWND` to a Wine-owned client-surface token and `CAMetalLayer` token,
+their transfer to the unix presenter, and their ordered release.
 
 **R-WMB-11.2** This spec does not authorize PE code to call Metal or Objective-C,
 does not put host pointers in recorded command chunks, and does not make dxmt9
@@ -409,7 +412,7 @@ code.
 surface protocol value:
 
 ```toml
-metal_surface_protocol = "extescape-v1" # extescape-v1 | legacy-macdrv-symbols:<runtime-id> | unsupported | unknown
+metal_surface_protocol = "extescape-v1" # extescape-v1 | legacy-macdrv-symbols:<runtime-id> | winehq-owned-layer:<runtime-id> | unsupported | unknown
 ```
 
 `extescape-v1` requires a successful runtime `QUERYESCSUPPORT`; a manifest
@@ -417,8 +420,10 @@ claim alone must never bypass the probe.
 
 Legacy qualification must include the exact runtime identity in the value, for
 example `legacy-macdrv-symbols:sikarugir-cx-24.0.7-<hash>`. An unqualified
-`legacy-macdrv-symbols` declaration is not sufficient for selection. The
-runtime's unixlib-loader capabilities are recorded separately under
+`legacy-macdrv-symbols` declaration is not sufficient for selection.
+The owned-layer value likewise requires an exact matching runtime identity and
+R-WMB-19 qualification; its name describes a dxmt9 adapter, not a WineHQ ABI.
+The runtime's unixlib-loader capabilities are recorded separately under
 `R-DEPLOY-3.11` and must not be inferred from this field.
 
 ## 14. Legacy macdrv Symbol Fallback
@@ -444,16 +449,20 @@ and reproducibility material for already-qualified legacy runtimes.
 **R-WMB-15.1** WSI acquisition order is fixed:
 
 1. probe and use `extescape-v1`;
-2. use the legacy symbol path only for an explicitly qualified runtime;
+2. select the exact manifest-qualified fallback: legacy symbols under
+   R-WMB-14 or the owned-layer adapter under R-WMB-19;
 3. fail with `D3DERR_NOTAVAILABLE` and one diagnostic.
 
 There is no silent offscreen-present fallback for a windowed device that
 requires presentation.
+Fallback is permitted only for an unsupported escape query. A malformed
+response, failed acquisition, or failed adoption after supported-query success
+must fail that attempt rather than try another protocol.
 
 **R-WMB-15.2** The compatibility manifest and run result must record the exact
 declared protocol, the observed acquisition path, and the independently
 observed unixlib-loader capability set. The observed acquisition value is one
-of `extescape-v1`, `legacy-macdrv-symbols`, or `unavailable`.
+of `extescape-v1`, `legacy-macdrv-symbols`, `winehq-owned-layer`, or `unavailable`.
 
 **R-WMB-15.3** As of the contract baseline, these runtime classes are interpreted
 as follows:
@@ -461,13 +470,15 @@ as follows:
 | Wine runtime | Protocol status | Qualification |
 |---|---|---|
 | Wine revision containing the accepted `MACDRV_ESCAPE_*_SURFACE` interface | target | Runtime query, x64/WoW64 smoke, resize, teardown, and present evidence required |
-| Stock upstream Wine or Gcenx/Heroic Wine without that Wine change | unsupported | A working unixlib loader does not provide a Metal surface; the probe must fail cleanly, and a distribution suffix alone is not qualification |
+| Unpatched WineHQ with an exact-qualified owned-layer adapter | target | R-WMB-19 evidence plus independent loader qualification; no support claim before both gates pass |
+| Stock upstream Wine or Gcenx/Heroic Wine without any qualified surface path | unsupported | A working unixlib loader does not provide a Metal surface; the probe must fail cleanly, and a distribution suffix alone is not qualification |
 | Exact audited Wine build with a validated `macdrv_functions` ABI | required legacy fallback | Must use the legacy path only for a manifest entry qualified as `legacy-macdrv-symbols:<runtime-id>` |
 | Self-built Wine carrying only the old visibility patch | unknown | Must not be accepted until loader visibility, layout, and client-view lifetime are all proven |
 
 **R-WMB-15.4** A new Wine minor version is unsupported until its protocol probe,
-payload layout, surface lifetime, and both PE architectures are revalidated. A
-matching filename or successful `nm` symbol audit is not sufficient evidence.
+selected adapter/payload contract, surface lifetime, and both PE architectures
+are revalidated. A matching filename or successful `nm` symbol audit is not
+sufficient evidence.
 
 **R-WMB-15.5** The existing `macdrv_functions` acquisition path is a required
 legacy fallback for every exact Wine manifest entry qualified as
@@ -480,7 +491,8 @@ distributions are evidence fixtures, not part of the protocol name or contract.
 **R-WMB-15.6** WSI protocol qualification and unixlib-loader qualification are
 orthogonal. A windowed deployment is supported only when the selected deploy
 mode satisfies `R-DEPLOY-3.11` and this section selects either a runtime-probed
-`extescape-v1` path or an exact `legacy-macdrv-symbols:<runtime-id>` path. A
+`extescape-v1` path, an exact `legacy-macdrv-symbols:<runtime-id>` path, or an
+exact `winehq-owned-layer:<runtime-id>` path qualified under R-WMB-19. A
 successful provider ABI handshake alone must not enable presentation.
 
 ## 16. Failure and Diagnostics
@@ -502,7 +514,7 @@ must already be quiescent.
 **R-WMB-16.4** dxmt9 must emit one machine-readable line per acquired binding:
 
 ```text
-[dxmt9-wsi] layer_acquisition=<extescape-v1|legacy-macdrv-symbols|unavailable> hwnd=0x<hex>
+[dxmt9-wsi] layer_acquisition=<extescape-v1|legacy-macdrv-symbols|winehq-owned-layer|unavailable> hwnd=0x<hex>
 ```
 
 The experiment harness must preserve this value in `result.json`.
@@ -551,3 +563,60 @@ fail according to `R-WMB-16.2` without a black-window success.
 - No bundling of a patched Wine runtime under the MIT-only dxmt9 artifact set;
   any separately distributed Wine derivative remains LGPL-compliant and
   version-pinned.
+
+## 19. Unpatched WineHQ Owned-Layer Integration
+
+**R-WMB-19.1** dxmt9 must provide a separately qualified windowed presentation
+adapter for unpatched upstream WineHQ on the supported macOS host lane. Initial
+qualification covers x86_64 Wine unixlibs with x64 PE and i386 PE under WoW64;
+other host architectures and exclusive fullscreen require separate evidence.
+Selection requires `winehq-owned-layer:<runtime-id>` matching the resolved
+runtime's exact provenance and an unsupported ExtEscape query. It must not
+require patching/resigning Wine bundles or exporting private macdrv symbols.
+Wine version/distribution names alone must not enable it.
+
+**R-WMB-19.2** The unix adapter must establish an unambiguous association between
+the requested HWND generation and its host window/client region before creating
+an owned view/layer. Window title, enumeration order, or rectangle coincidence
+alone must not establish identity. Missing, ambiguous, destroyed, or reused
+window identity must fail closed with `D3DERR_NOTAVAILABLE` on creation/rebind.
+Unsupported child/parent configurations must be rejected explicitly rather than
+attached to an unrelated top-level window.
+
+**R-WMB-19.3** The unix provider owns the adapter's Cocoa view and `CAMetalLayer`;
+Wine retains ownership of its host window and event delivery. PE owns Win32
+validation and sends only bounded scalar geometry/identity data and opaque
+generation-qualified handles through versioned cold bridge operations. No Cocoa
+pointer or owning Wine surface token may be fabricated for this protocol.
+Attachment, geometry changes, and detachment must execute on the Cocoa main
+thread without holding queue, registry, or swap-chain lifecycle locks across a
+synchronous main-thread dispatch.
+
+**R-WMB-19.4** Owned-layer placement must track the D3D9 client region, parent
+and child clipping, stacking, DPI/backing scale, resize, minimize/restore, and
+window movement between monitors. The view must preserve Wine mouse hit-testing,
+keyboard focus, and event delivery. Any unsupported geometry/window class must
+remain outside the qualified runtime capability matrix; a visible but wrongly
+placed or input-stealing view is a qualification failure.
+
+**R-WMB-19.5** Owned-layer reset, HWND destruction/reuse, and teardown must share
+the presenter admission gate, generation checks, and GPU-quiescence obligations
+of R-CORE-WSI-1.2. A candidate binding must be validated before publication;
+failure preserves the old binding when D3D9 semantics permit. Queued main-thread
+callbacks must validate generation and retain safe lifetime. Detach/release
+occurs exactly once after all GPU/presenter users retire. Bindings sharing a
+physical owned view must retain separate logical claims; one swap chain must
+not detach a view still owned by another. If quiescence cannot
+be proved, retain the binding and report failure rather than release early.
+Owned-layer release must not issue Wine surface-release escapes.
+
+**R-WMB-19.6** Qualification must include native selector/identity/rollback and
+callback-generation tests, bounded lifecycle/deadlock evidence, and real x64
+and WoW64 create/present/reset/destroy runs. Runtime coverage must include
+multiple HWNDs, supported child clipping, input/focus, DPI/monitor changes,
+minimize/restore, in-flight destruction and HWND reuse. Exact Wine build/root,
+macOS/GPU, adapter version, loader capability, bridge hash, and observed
+`winehq-owned-layer` acquisition must accompany results. Unknown-runtime and
+ambiguous-window negatives, qualified legacy regressions, and DXMT coexistence
+remain required. A passing upstream WineMetalGL run is research evidence only,
+not dxmt9 qualification.

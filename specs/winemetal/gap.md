@@ -23,8 +23,15 @@ visibility, so provider loading does not make dxmt9's legacy `dlsym` path a
 stock-Wine ABI. Current upstream Wine is therefore a loader-pass / WSI-fail
 compatibility class, not a generally supported runtime.
 
+The unpatched WineHQ owned-layer target in R-WMB-19 is newly specified, not
+implemented or qualified. The current unsupported classification above remains
+until an exact runtime passes both loader and adapter gates.
+
 | Area | Status | Gap |
 |---|---|---|
+| WineHQ owned-layer adapter | not started | R-WMB-19.1–19.5 require an audited HWND-generation/host association without Wine patches/private-symbol exports, owned Cocoa attachment, geometry/input preservation, cold POD handles, and main-thread-safe teardown. Earlier removal of generic Cocoa fallback does not implement this separately qualified path. |
+| WineHQ protocol selection and diagnostics | not started | Extend runtime/package schema and observed acquisition enums for exact `winehq-owned-layer:<runtime-id>`, preserve ExtEscape-first and legacy behavior, and reject fallback after malformed supported escape/adoption failure. R-WMB-13.3, R-WMB-15.1–15.6, R-WMB-16.4, R-WMB-19.1. |
+| WineHQ qualification evidence | not started | R-WMB-19.6: native selector/generation/fault cases, lifecycle refinement, x64/WoW64 window/input/DPI/child/monitor/reset/destroy matrix, exact provenance, loader composition, and DXMT coexistence. WineMetalGL evidence cannot close these gaps. |
 | Shared escape compatibility declaration | ✅ | `winemac_surface_escape.h` pins 6790/6791 and the two-`uint64_t` payload to the cited Wine revision with LGPL attribution |
 | PE `QUERYESCSUPPORT` / get-surface path | ✅ | PE retains the acquisition HDC until 6791 is attempted, balances `ReleaseDC` afterward, validates both zero-initialized output fields, defensively releases malformed partial results, and keeps HDC out of every wire record |
 | Cold PE/unix layer adoption call | ✅ | Dedicated fixed-width `D9CWsiSurfaceBinding` adopt/teardown operations leave `CommandChunk` unchanged |

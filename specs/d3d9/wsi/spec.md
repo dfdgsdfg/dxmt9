@@ -7,7 +7,7 @@ tags: [specs, d3d9, wsi, spec]
 
 # Window System Integration Spec
 
-WSI maps a Win32 window handle (`HWND`) to a Wine-owned Metal presentation
+WSI maps a Win32 window handle (`HWND`) to a protocol-qualified Metal presentation
 surface and keeps the D3D9 swap chain synchronized with resize, reset, and
 destruction. The Wine surface protocol is owned by
 [`specs/winemetal/requirements.md`](../../winemetal/requirements.md); this
@@ -60,10 +60,12 @@ tokens. The cold adoption call is separate from recorded command chunks. Only
 the unix provider converts the nonzero `layer` value to a borrowed
 `CAMetalLayer` reference.
 
-If `QUERYESCSUPPORT` fails, dxmt9 may use only the old aggregate
-`macdrv_functions` path for an exact Wine build declared and proven as
-`legacy-macdrv-symbols:<runtime-id>`. There is no generic direct-symbol or
-Cocoa fallback for current Wine 11.x builds.
+If `QUERYESCSUPPORT` reports unsupported, dxmt9 selects the exact-qualified
+manifest fallback: `legacy-macdrv-symbols:<runtime-id>` or
+`winehq-owned-layer:<runtime-id>`. There is no generic direct-symbol or Cocoa
+window-search fallback. A malformed supported response or adoption failure is
+terminal for that attempt. The owned-layer design and qualification gates are
+defined by [winemetal spec §8](../../winemetal/spec.md#8-unpatched-winehq-owned-layer-adapter).
 
 ## 2. Swap-Chain Lifecycle
 
@@ -72,11 +74,12 @@ Cocoa fallback for current Wine 11.x builds.
 At `CreateDevice()` or `CreateAdditionalSwapChain()`:
 
 1. Validate and normalize `D3DPRESENT_PARAMETERS`.
-2. Acquire the Wine client surface and layer for the selected `HWND`.
-3. Pass the opaque layer token through the cold PE/unix adoption call.
-4. Configure the borrowed layer and create the dxmt9-owned back buffer.
-5. Store the Wine surface token in PE and an opaque presenter handle in the
-   swap chain.
+2. Select a qualified protocol and acquire its binding for the selected `HWND`.
+3. Use the cold PE/unix adoption call for Wine tokens, or the versioned cold
+   owned-layer request for generation-qualified provider handles.
+4. Configure the bound layer and create the dxmt9-owned back buffer.
+5. Store an opaque presenter handle in the swap chain; PE retains Wine
+   surface/HDC capabilities only for the ExtEscape protocol.
 
 Failure to acquire or adopt the layer fails a windowed presenting swap chain
 with `D3DERR_NOTAVAILABLE`. It must not return a device that silently presents
@@ -91,7 +94,7 @@ explicit compatibility gap until an owned offscreen target is specified.
 
 ### 2.2 Reset and Rebind
 
-Reset acquires and validates the replacement Wine surface token first. The unix
+For ExtEscape, reset acquires and validates the replacement Wine surface token first. The unix
 provider serializes the swap-chain WSI lifecycle, arms the admission gate, and
 drains or fences old layer users before it asks legacy macdrv for a candidate
 host-view claim. Wine may return the current `WineMetalView` without retaining
@@ -104,6 +107,9 @@ duration of cold Presenter mirror operations; there is no public raw-Presenter
 accessor. A snapshot may become stale after the lock is released, but registry
 generation validation makes that stale value resolve to no Presenter rather
 than extending an unowned pointer lifetime.
+The owned-layer path uses the reservation/main-thread/generation transaction
+in R-WMB-19.5 and winemetal spec §8 with the same admission and retirement gates.
+It preserves Wine host-window ownership and never creates a Wine token.
 
 ### 2.3 Destruction
 
@@ -114,14 +120,17 @@ On swap-chain or device destruction:
    a replay-accepted Present waits behind the gate rather than being dropped.
 3. Fence a live queue, or join stopped queue workers, then invalidate the
    presenter registry before destroying the unix presenter binding.
-4. Issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
+4. For ExtEscape, issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
    token, then clear the PE token even if Wine reports a release failure. A
    persistent unix teardown/bridge failure is retried only to the bounded
    finalizer limit; the PE capability is then intentionally leaked because
    neither early release nor an unbounded destruction hang is safe.
 
-Wine owns the client surface and `CAMetalLayer`. dxmt9 borrows the layer and
-must never independently release it.
+For ExtEscape, Wine owns the client surface and `CAMetalLayer`; dxmt9 borrows
+the layer and never independently releases it. Qualified legacy views use their
+logical-claim release. For `winehq-owned-layer`, the provider detaches/releases
+its owned view/layer on the Cocoa main thread after quiescence and callback
+retirement, without a Wine release escape or destruction of the Wine window.
 
 ## 3. Presentation and Resize
 
@@ -146,11 +155,13 @@ display-mode and surface-rebind contract.
 |---|---|---|
 | `d3d9.dll` | PE DLL | D3D9 COM surface, `HWND`/HDC and `ExtEscape`, Wine surface-token lifetime |
 | `winemetal_dxmt9.dll` | PE bridge | Validate and dispatch cold WSI adoption plus the generated dxmt9 ABI |
-| `winemetal_dxmt9.so` | Wine unixlib | Borrow `CAMetalLayer`, own presenter state, drawable acquisition, Metal execution |
+| `winemetal_dxmt9.so` | Wine unixlib | Borrow the protocol layer or own the WineHQ adapter layer; own presenter state, drawable acquisition, Metal execution |
 
 Recorded draw/state/resource packets remain pointer-free. The two Wine-issued
 64-bit values cross only through the dedicated cold WSI bootstrap/rebind call
 defined by `R-CORE-WSI-4.1` and never enter `CommandChunk`.
+The owned-layer cold payload instead carries bounded scalar identity/geometry
+and provider handles; Objective-C objects remain entirely unix-owned.
 
 The suffix-qualified bridge names are required for upstream DXMT coexistence.
 Upstream DXMT may continue to own `winemetal.dll` / `winemetal.so`; dxmt9 must
@@ -168,19 +179,24 @@ The runtime layout is:
 
 The filename split does not make an unmodified Wine runtime compatible. The
 primary WSI path additionally requires a Wine revision that implements the
-accepted surface escape protocol. Until then, current Gcenx/Heroic Wine 11.x
-without the Wine change is unsupported, while an exact Wine build qualified as
-`legacy-macdrv-symbols:<runtime-id>` must retain the existing
-`macdrv_functions` fallback.
+accepted surface escape protocol. An unpatched WineHQ build requires the
+separate R-WMB-19 adapter qualification; current implementation/evidence gaps
+are in [winemetal/gap.md](../../winemetal/gap.md). A runtime with neither
+qualified path remains unsupported. Exact builds qualified as
+`legacy-macdrv-symbols:<runtime-id>` retain the `macdrv_functions` fallback.
 
 ## 6. Evidence
 
 Qualification must record:
 
 - the exact Wine root and surface-protocol declaration;
-- observed acquisition path (`extescape-v1`, `legacy-macdrv-symbols`, or
+- observed acquisition path (`extescape-v1`, `legacy-macdrv-symbols`, `winehq-owned-layer`, or
   `unavailable`);
 - x64 and WoW64 creation, present, reset, and balanced destruction;
 - loaded paths and ABI handshake for both suffix-qualified dxmt9 modules;
 - a negative unsupported-Wine run that fails without a crash or black window;
 - an upstream DXMT coexistence run proving independent D3D9 and D3D11 WSI.
+
+Owned-layer qualification additionally requires R-WMB-19.6's identity,
+main-thread lifetime, input, clipping, DPI, and monitor matrix. ExtEscape or
+legacy evidence alone does not qualify that adapter.

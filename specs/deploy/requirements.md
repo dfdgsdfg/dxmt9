@@ -270,8 +270,8 @@ they overwrite in a Wine runtime or prefix.
 - bridge ABI hash shared by `d3d9.dll`, `winemetal_dxmt9.dll`, and
   `winemetal_dxmt9.so`;
 - provider schema/version identifier;
-- required Wine Metal-surface protocol and, for a legacy protocol, the exact
-  qualified runtime identity;
+- required Wine Metal-surface protocol and, for a legacy or WineHQ owned-layer
+  protocol, the exact qualified runtime identity;
 - whether `__wine_unix_call_wow64_funcs` is present;
 - required unixlib-loader capability for each deployment mode;
 - required Wine unix architecture;
@@ -284,6 +284,10 @@ capabilities independently and accept the deployment only when both match the
 package requirements. A successful `by-name-v1` probe must not turn stock Wine
 without a qualified Metal-surface protocol into a supported runtime. A visible
 legacy macdrv symbol must not compensate for a missing loader capability.
+The `winehq-owned-layer:<runtime-id>` capability additionally requires the
+exact-runtime and adapter evidence in R-WMB-19. A package must not advertise
+generic unpatched WineHQ support or require Wine bundle patching/resigning to
+satisfy that capability.
 
 **R-DEPLOY-5.6** Packages and installers must contain no unqualified
 `winemetal.dll` or `winemetal.so` artifact owned by dxmt9. Upgrade from a legacy

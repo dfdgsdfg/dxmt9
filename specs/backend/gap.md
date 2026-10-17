@@ -9,6 +9,19 @@ tags: [specs, gap, backend]
 
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup. The modern renderer path has its own [d3d9-renderer gap](../d3d9-renderer/gap.md).
 
+## Preparation, State Caches, and Texture Feedback
+
+The [WineMetalGL research](../../docs/research/winemetalgl.md) informs these
+requirements; upstream results do not qualify dxmt9. Existing implementations
+are starting points, not evidence that the expanded contracts are complete.
+
+| Area | Status | Current evidence and remaining work | Requirements |
+|---|---|---|---|
+| Shader-known preparation and shared compilation | partial | Async PSO/archive infrastructure exists (`dxmt9_pipeline_cache.cpp`, `dxmt9_archive_prewarm.hpp`). Full-key early function scheduling, shared demand/prewarm job ownership, bounded admission/retry, invalidation/shutdown refinement, and cold/warm timing remain to be qualified. | R-BACK-3.18/3.19/3.22, R-BACK-4.11 |
+| Metal object and encoder binding caches | partial | Existing PSO identity/publication and separate state-cache contracts remain. Complete sampler/depth/PSO equality/generation audit, recent-entry lifetime, encoder-break/external-write invalidation, refinement and paired GPU evidence are open for the expanded contract. | R-BACK-3.20–3.22 |
+| Texture usage/compression policy | partial | `Pool::createTexture` consumes `convert::toFormatMetalPolicy` and counts suppressed RT format views. Complete usage/view capability tables and actual hardware compression/bandwidth evidence remain open; omitted flags alone prove no compression benefit. | R-BACK-5.13/5.16 |
+| Feedback and storage transition | partial | Existing resource retention and draw/resource paths are available, but a complete root-alias/subresource classifier and content-preserving usage-expansion transaction are not qualified. Add generation/publication/retirement refinement, failure injection, depth/stencil/MSAA/format-view GPU oracles and observer-off wild evidence before promotion. | R-BACK-5.14–5.16 |
+
 ## Backend Layer
 
 R-VERIF-1.5–1.8 / R-BACK-15 attachment actions: **publication-cut repair**.

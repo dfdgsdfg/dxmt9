@@ -27,9 +27,10 @@ Each swap chain stores the caller-visible `HWND` used for presentation and an
 opaque backend presentation handle when a host view/layer can be resolved.
 Backend handles must remain opaque across the PE/unix bridge.
 
-**R-CORE-WSI-1.1** A windowed, presenting swap chain must acquire its Wine
-client surface and borrowed `CAMetalLayer` through the protocol defined by
-`R-WMB-12.1`-`R-WMB-12.6`. If no supported protocol can resolve a presentation
+**R-CORE-WSI-1.1** A windowed, presenting swap chain must acquire its layer through
+the qualified selection in R-WMB-15.1: the borrowed ExtEscape contract in
+R-WMB-12.1–12.6, exact-qualified legacy path, or provider-owned WineHQ adapter
+in R-WMB-19. If no supported protocol can resolve a presentation
 layer for the `HWND`, device or swap-chain creation must fail cleanly with
 `D3DERR_NOTAVAILABLE`. It must not create a device whose `Present` silently
 becomes a no-window no-op. `GetDesktopWindow()` is not a capability exception:
@@ -118,6 +119,9 @@ exception for Wine-issued presentation tokens. It may transport the fixed-width
 opaque client-surface and borrowed-layer values defined by `R-WMB-12.2`, but PE
 code must never dereference or retain Objective-C ownership of them. Adoption,
 quiescence, replacement, and release must follow `R-WMB-12.3`-`R-WMB-12.6`.
+The owned-layer protocol instead uses generation-qualified provider handles
+under R-WMB-19.3/19.5; it must not transport Cocoa pointers or fabricate Wine
+surface-release obligations.
 
 ---
 

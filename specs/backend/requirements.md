@@ -545,13 +545,15 @@ on a background thread; the encode thread blocks on first use if compilation is 
 yet complete.
 
 **R-BACK-3.7** The PSO cache must be load-warmable from the on-disk
-`MTLBinaryArchive` at device creation. Cache load must populate
-`MTLRenderPipelineState` lookups for every (shader hash, variant) pair present
-in the archive before the first draw is encoded. Load failures (missing file,
+`MTLBinaryArchive` using compatible, retained pipeline descriptors. Device
+creation must schedule preparation without waiting for all entries; individual
+draws may use completed entries or demand compilation under R-BACK-3.9 and
+R-BACK-3.18. An archive alone is not an enumerable PSO descriptor database.
+Load failures (missing file,
 schema mismatch, unsupported GPU family) must fall back to fresh-compile
 behavior without blocking device creation.
 
-**R-BACK-3.8** Prewarm scope must be configurable: full archive load on device
+**R-BACK-3.8** Prewarm scope must be configurable: asynchronous full archive load on device
 init (default for shipping builds), lazy on first draw (default for dev), or
 disabled (debug). The selected mode must be observable via a counter and the
 chosen archive path/identity must be visible in present diagnostics.
@@ -631,6 +633,49 @@ they can affect generated vertex-fetch MSL. The offset normalization must be a
 production-called pure transform with native key and generated-source
 equivalence coverage; promotion still requires the observer-off GPU oracle.
 
+**R-BACK-3.18** *(Shared compilation jobs.)* Background preparation and demand
+compilation of the same canonical function or PSO key must share one in-flight
+job per device/cache generation. Publication must be atomic, with one terminal
+ready, failed, or cancelled result visible to all waiters. Failure must not
+publish an invalid object or silently skip the requiring draw. Retries must be
+explicit and bounded; a failed key must not create a compile storm.
+
+**R-BACK-3.19** *(Preparation lifetime and budget.)* Compilation jobs must retain
+their immutable inputs and device generation until completion. Shader release,
+reset, cache invalidation, and shutdown must not permit stale publication or
+use-after-free. Pending work must have bounded concurrency and queued bytes;
+budget exhaustion may defer optional prewarm to demand compilation. Shutdown
+must stop admission and settle every waiter without holding a cache/queue lock
+across Metal compilation or worker join. An uncancellable Metal call may finish,
+but its invalidated result must be discarded safely.
+
+**R-BACK-3.20** *(Object-cache identity.)* Render PSO, depth/stencil, and sampler
+objects must have separate canonical, equality-checked descriptor keys scoped
+to their Metal device and cache generation. Hash equality alone is insufficient.
+Shader/compiler profile, specialization, and persistent-cache schema changes
+must invalidate incompatible entries. Warm hits must not compile or allocate
+new Metal state objects; cache budgets and eviction must preserve objects held
+by queued or in-flight work.
+
+**R-BACK-3.21** *(Encoder binding-state reuse.)* Reusing a cached Metal object
+does not prove it is bound on the current encoder. Binding-elision state must
+be encoder-local and include the effective object/resource generation, slot,
+offset, range, and dynamic values consumed by the command. Every new/restarted
+encoder begins with unknown bindings. Any alternate encoding path that writes
+tracked state must update or invalidate the shadow before the next draw.
+Thread-local recent-entry caches must validate device/cache generation and
+retain safe ownership across eviction and handle reuse.
+
+**R-BACK-3.22** *(Cache/preparation acceptance.)* R-BACK-3.18–3.21 require native
+identity, collision, failure, generation, and restart coverage plus bounded
+concurrency/refinement evidence under R-VERIF-1.5–1.8. GPU readbacks must compare
+reuse enabled/disabled across encoder breaks and `A -> B -> A` state changes.
+Cold and warm measurements must separate compile jobs, joined requests,
+first-use wait, cache hits/misses, encoded/elided bindings, memory, and frame
+time. Logical D3D9 operations, bridge calls by class, chunk commits, and fallback
+counts must show that preparation/reuse adds no per-draw or per-state bridge
+calls. Optional observers must have a separate observer-off performance run.
+
 ---
 
 ## 4. Shader Translation
@@ -701,6 +746,15 @@ evidence of equivalent compilation. Native real-Metal tests must pin the
 compiler-reported language and concrete vertex-position arithmetic;
 strict retained-input GPU comparisons remain the
 integration gate.
+
+**R-BACK-4.11** *(Shader-known preparation.)* The unix shader/cache owner must
+permit asynchronous preparation of immutable shader translation, libraries,
+and functions once their complete input keys are known. Draw-dependent vertex
+layouts, attachment formats, specialization, and PSO variants remain deferred
+until their keys are known; preparation must not enumerate their Cartesian
+product. PE retains D3D9 validation/error semantics and sends only the existing
+bounded shader payload/handles. Metal compilation remains unix-side and obeys
+R-BACK-3.18/3.19 and the explicit profile in R-BACK-4.10.
 
 ---
 
@@ -793,6 +847,46 @@ full-shadow upload contracts. The production path is implemented by the
 `core::Buffer` lock metadata → `Device::uploadBufferDataRange` →
 `Pool::uploadBufferDataRange` seam; the bounded `NoOverwriteByteRange.tla`
 model and native range/sentinel specs are required evidence.
+
+**R-BACK-5.13** *(Texture usage policy.)* Texture descriptors must derive
+`ShaderRead`, `RenderTarget`, `ShaderWrite`, and `PixelFormatView` usage from
+supported operations and required view formats, not blanket flags. Omitting a
+flag must never make a supported D3D9 operation unavailable. Where a later use
+requires broader usage, the backend must either choose a sufficient descriptor
+initially or perform the content-preserving transition in R-BACK-5.15. This
+policy preserves opportunities for driver-managed lossless GPU compression;
+it does not alter D3D9 DXT/BC format semantics or guarantee hardware compression.
+
+**R-BACK-5.14** *(Feedback classification.)* Before encoding a draw, the unix
+backend must compare sampled textures against color, depth, and stencil
+attachments by backing allocation/generation and overlapping mip, slice, and
+aspect ranges, including views and aliases. Unknown dynamic sampling ranges
+must be conservatively widened. Identity comparison of wrapper handles alone
+is insufficient. Sequential render-then-sample and disjoint-subresource uses
+must remain distinguishable from overlapping read/write feedback. Accepted
+D3D9 behavior must have an explicit Metal-legal ordering/copy strategy;
+`PixelFormatView` alone is not synchronization or proof that feedback is legal.
+This contract does not promise defined pixels for undefined D3D9 feedback.
+
+**R-BACK-5.15** *(Storage transition transaction.)* A required texture usage/view
+transition must preserve every defined live subresource, including supported
+depth/stencil, MSAA/resolve, and format-reinterpretation semantics. The backend
+must order prior writes, prepare the replacement and required copies, then
+publish one new backing generation and invalidate dependent views/bindings.
+Queued draws retain their captured generation; old storage retires only after
+its last-use completion watermark. Allocation/copy failure must not publish a
+partial replacement or silently drop the draw. Replacement preserves the
+pool/storage-mode contract of R-BACK-5.7.
+
+**R-BACK-5.16** *(Texture policy acceptance.)* R-BACK-5.13–5.15 require native
+descriptor and alias/range truth tables, bounded transition/lifetime refinement
+with production model binding, and GPU content oracles under R-VERIF-1.5–1.8.
+The matrix must cover sRGB/linear views, mip/slice overlap, depth/stencil,
+MSAA/resolve, render-to-texture ordering, replacement failure, and in-flight
+retirement. Unsupported combinations must have explicit negative expectations.
+Performance evidence must report usage/view choices, transitions, copy bytes,
+pass breaks, memory, and frame time on exact hardware/macOS builds; compression
+or bandwidth claims require GPU evidence, not inference from usage flags.
 
 ---
 
