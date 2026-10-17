@@ -1,7 +1,7 @@
 ---
 type: "Spec"
 title: "Detailed Performance Tracing Architecture"
-description: "Shared trace evidence, clock and identity joins, Perfetto export, and optional target instrumentation."
+description: "Engine-integrated Perfetto collection, shared trace evidence, clock and identity joins, and target instrumentation."
 tags: [specs, experiments, harness, tracing, perfetto]
 ---
 
@@ -13,10 +13,13 @@ implementation and evidence are tracked in [gap](gap.md).
 
 The integrated view connects application activity, D3D9 entry/recording,
 bridge/import, replay, queue publication, encode, submission, GPU execution,
-completion and waits. Perfetto is the primary view/query surface. Existing
-native traces remain authoritative inputs; Xcode/Metal tools retain ownership
-of GPU capture and counter acquisition. Tool adapters share evidence contracts
-without requiring one instrumentation SDK throughout PE and unix code.
+completion and waits. Perfetto is the selected engine tracing integration and
+primary view/query surface. A private unix module owns the SDK and produces
+native captures from bounded engine events. Existing native traces remain
+authoritative inputs for compatibility and cross-checking; Xcode/Metal tools
+retain ownership of GPU capture and counter acquisition. PE code remains
+SDK-free. Build and runtime activation are opt-in, while integration itself is
+a required deliverable under R-HARN-TRACE-9.1–9.9.
 
 ## 1. Ownership and Data Boundaries
 
@@ -34,6 +37,7 @@ it does not introduce another launcher or redefine `domain` in the envelope.
 | `replay` | Retains fixed-input replay ownership; tracing can observe replay but cannot grant replay equivalence. |
 | PE frontend | Windows-visible semantics and optional bounded guest/caller events. |
 | Unix importer/queue/encoder | Their existing work identities and optional host observations; no trace-driven scheduling. |
+| Unix tracing module | SDK dependency, session controller, diagnostic storage, native protobuf serialization and collection receipt; linked only into the unix provider and native test fixtures. |
 
 A dxmt9-only timeline exporter belongs to `reduce`; an exporter consuming
 external observations belongs to `join`, following the parent's origin rule.
@@ -74,7 +78,7 @@ settings must fail preflight.
 | Profile | Purpose and sources | Permitted claim |
 |---|---|---|
 | `baseline` | Existing workload timing; detailed tracing, sampling and hooks off. | Repeated workload-qualified timing with its stated timing source. |
-| `timeline` | Bounded CPU supply/wait events; optional existing PE and Metal observations. | Qualified scopes and explicit cross-layer relations within coverage. |
+| `timeline` | Engine-integrated native Perfetto capture of bounded CPU supply/wait events; explicitly selected PE and Metal observations. | Qualified scopes and explicit cross-layer relations within coverage. |
 | `scheduler` | External scheduler trace, thread inventory and calibrated clock anchors. | Scheduler residency/enclosure for the qualified process/window. |
 | `target-probe` | Frozen REA probe manifest and bounded application markers. | Executed target boundaries and their qualified relations/durations. |
 | `gpu-detail` | xctrace and/or Xcode capture/counter exports with capture identity. | GPU intervals or replay counters according to the actual source. |
@@ -187,22 +191,165 @@ or Interrupted cannot be discarded to manufacture exact running CPU; any
 enclosure must state the state-set and uncertainty. A sampled guest context
 may remain at a bridge PC while the native thread executes or waits elsewhere.
 
-## 6. Perfetto Export and Emulated Observation
+## 6. Engine-Integrated Perfetto
 
-The first export surface is offline conversion of validated existing events to
-Chrome Trace Event JSON readable by Perfetto. Scope/instant/counter/flow records
-use explicitly documented units; metadata and the bundle retain original
-nanoseconds and identities. Epoch rebasing and rounding must be bounded and
-tested. Do not encode CPU counter deltas as elapsed slices or counter snapshots
-as reconstructed per-draw histories.
+### 6.1 Build and SDK Ownership
 
-Native Perfetto protobuf is a separate adapter for stronger clock/track support
-and larger captures. SDK-based collection is optional and requires the same
-observer-cost gate. Viewer rendering or successful import is not a validity
-test: automated consumer checks must compare event counts, durations, IDs,
-hierarchy and relations against the normalized fixture using a pinned consumer
-version. The report must expose losses and unsupported metrics even if the
-viewer cannot render their full semantics.
+The integration uses the upstream [Perfetto tracing SDK](https://perfetto.dev/docs/instrumentation/tracing-sdk)
+with its in-process backend. The SDK is a pinned private Meson dependency of
+the unix tracing module, not a dependency of either PE DLL or the public C ABI.
+The implementation must record revision, source digest, license and notices
+before admission. SDK symbol visibility and one-time registration belong to
+this module; other Wine modules may carry independent SDK copies without
+sharing our session or shutdown authority.
+
+Meson must offer explicit opt-in selection, default disabled. An explicit
+enabled request with missing dependencies or an unsupported target fails
+configuration. SDK-disabled builds use an SDK-free no-op facade and have no
+SDK initializer, worker thread or allocation. SDK-enabled/runtime-off builds
+retain only the permitted disabled-path check and do not initialize a session.
+No SDK initialization, synchronous stop or file I/O runs from a loader callback
+or production queue lock. This spec defines configuration semantics, not
+already-implemented CLI flags or runtime environment variables.
+
+### 6.2 Capture Path
+
+```mermaid
+flowchart LR
+    PE[PE optional POD events] --> B[Validated batched diagnostic transport]
+    E[Unix import replay encode wait events] --> F[SDK-free trace facade]
+    B --> S[Bounded diagnostic storage]
+    F --> S
+    S -->|window closed and writers quiescent| A[Private Perfetto SDK adapter]
+    A --> P[Native pftrace plus engine receipt]
+    P --> V[Trace Processor and harness qualification]
+```
+
+The initial implementation uses per-thread bounded event storage, allocated
+before collection, and a bounded identity/track registry. A new thread must
+register through a cold path or claim a preallocated slot under a qualified
+bounded protocol; inability to register is observable coverage loss. Event
+emission preserves integer timestamp, source order, session generation and
+work bindings. No event owns a borrowed pointer or changes a production Slot,
+command packet or lifetime certificate. Scope state must be diagnostic-owned
+or register-sized, with no disabled-path payload construction.
+
+The engine itself serializes the captured records through a private SDK data
+source after collection closes. This is an in-process native capture product;
+no external JSON converter is needed to obtain `.pftrace`. A custom packet
+adapter emits explicit original timestamps, clock IDs and track descriptors
+rather than ordinary emission-time macros on the serializer thread. SDK work
+is intentionally deferred so allocation, interning and flush cannot perturb
+individual critical sections. SDK service startup/idle overhead still belongs
+in observer controls. Direct SDK calls from hot paths and continuous streaming
+are outside this initial contract and require a separate cost/lifecycle proof.
+
+Thread buffers stop accepting records at capacity; they do not overwrite old
+events or stall the workload. Per-thread loss counts and an out-of-band session
+failure latch survive event-buffer exhaustion. Record count, thread count,
+metadata, SDK buffers and export memory all have declared limits. Serialization
+must check that loss did not occur inside SDK buffers as well as engine buffers.
+Resource exhaustion yields unqualified evidence, not a larger implicit budget.
+
+### 6.3 Session Ordering
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Preparing: explicit request
+    Preparing --> Armed: storage SDK and metadata ready
+    Armed --> Collecting: declared trigger
+    Collecting --> Closing: window boundary or stop
+    Closing --> Draining: admissions closed
+    Draining --> Finalizing: admitted writers quiescent
+    Finalizing --> Sealed: packets flushed stopped and verified
+    Preparing --> Failed: capability or allocation failure
+    Armed --> Closing: cancellation
+    Draining --> Failed: deadline or incomplete writer
+    Finalizing --> Failed: loss flush or output failure
+    Sealed --> Idle: receipt published
+    Failed --> Idle: owned resources safely quiescent
+```
+
+The control path fixes run/session generation, categories, window/trigger,
+storage limits, destination and deadlines before `Armed`. Startup readiness is
+acknowledged before the workload corridor begins. A concurrent second request
+is rejected; a later request gets a fresh generation only after safe teardown.
+Admission and writer quiescence need model/code evidence: a writer admitted
+before closure may finish, but cannot append after its storage is sealed or
+reused. A scope crossing the window boundary is labelled clipped; closure
+must not synthesize a completion for it.
+
+After quiescence, preserve raw engine records and metadata, serialize native
+packets, request/acknowledge SDK flush, stop the SDK session, read the completed
+trace and atomically publish artifacts plus the receipt. SDK-specific flush
+ordering must be qualified against the pinned release. Trace packets carry
+original observation times, never finalization times. Interrupted finalization
+cannot produce a successful receipt. A cleanup deadline does not authorize
+freeing storage or unloading callback code with live writers; retain it safely
+until quiescence or process exit and disqualify the attempt. Process exit/crash
+without a receipt is an incomplete capture even if partial bytes survive.
+
+The receipt binds session generation, process identity, requested/resolved
+categories, actual window, source counts/loss, clock/identity tables, SDK build
+identity, output digest and stop/flush outcome. The runner consumes it separately
+from workload exit status. Runtime failures disable or close diagnostic
+admission and report trace failure without changing render results, waking
+production waits or forcing a GPU/queue drain for tracing.
+
+### 6.4 Initial Event Surface
+
+Category labels below name the schema contract, not implemented SDK constants.
+Selection is fixed before arming. The default timeline is coarse-grained;
+per-draw events require `detail` and a separately budgeted window.
+
+| Category | Events and track/flow ownership |
+|---|---|
+| `import` | Import begin/end on the actual native thread, validated raw identity. |
+| `replay` | Raw-ready, replay begin/end and receipt-ledger binding, preserving incarnation. |
+| `queue` | Publication and queue-space waits, actual queue owner/sequence and raw membership. |
+| `encode` | Encode begin/end on the actual worker; sub-work joins only where identities are available. |
+| `wait` | Query/resource wait and mutex acquire/reacquire, predicate/target identity; no lock-holder inference. |
+| `submit` | Actual commit and explicit sequence-to-command-buffer membership, including split/shared buffers. |
+| `completion` | Completion-worker dequeue, CPU observation and retirement, separate from GPU execution. |
+| `detail` | Selected command/draw scopes; disabled in the initial coarse profile. |
+
+Producer threads own their tracks even though one adapter later serializes the
+packets. Track IDs derive from run/session plus process/thread incarnation;
+work flow IDs include owner/generation and relation identity, not only sequence.
+PE thread IDs and native TIDs require an explicit mapping rather than numerical
+equality. No synthetic flow is emitted for an unresolved relation.
+
+Existing CPU supply/wait hooks are the preferred observation sites. Reuse their
+qualified schema/predicates through adapters without requiring simultaneous
+legacy CSV/log emission. A dual-output fixture is an explicit diagnostic
+control with its own cost; duplicate event streams are not the default. Initial
+native-only capture declares missing PE/application scopes. Later PE batches
+use the generated, ABI-matched bridge and retain original clocks/order; they
+never serialize SDK objects or add a bridge call per D3D9 event.
+
+Metal and scheduler observations remain external or explicitly supported
+sources. A successful native engine capture does not manufacture GPU tracks,
+scheduler states or whole-game CPU attribution. Joins still follow sections 4–5.
+
+### 6.5 Native Consumer and Compatibility Export
+
+Native protobuf is the engine output contract. The bundle retains raw engine
+events as source evidence and treats `.pftrace` as their engine-produced
+serialization. Offline conversion of legacy inputs to Chrome Trace Event JSON
+remains available as a compatibility design and independent cross-check; it is
+not a prerequisite or substitute for engine integration.
+
+Both adapters preserve scope/instant/counter/flow meaning and declared units.
+Epoch rebasing and rounding must be bounded and tested. CPU counter deltas are
+not elapsed slices, and snapshots cannot reconstruct per-draw histories.
+Pinned Trace Processor queries compare fixture counts, durations, process/thread
+tracks, nested scopes, flow endpoints and 64-bit identities with the raw input.
+Consumer parse/loss diagnostics are retained; a successful UI import alone
+cannot qualify the capture. Batch order, delayed serialization and descriptor
+or incremental-state loss need explicit negative cases.
+
+### 6.6 Emulated Observation
 
 QEMU is a separate execution environment for structural questions. Its mode
 must identify whether instruction callbacks are available; TCG and hardware
@@ -279,6 +426,10 @@ implementation plan.
 | 6.1–6.4 | Static-to-loaded address fixture; wrong hash/bytes/ABI rejection; machine-state preservation mutants; install/rollback and actual-hit controls. |
 | 7.3 | Pinned emulator/capability matrix, unsupported-mode rejection and explicit emulation provenance. |
 | 8.1–8.3 | Matched observer controls, repeated workload-qualified timing, correctness checks and bounded Wine/Metal integration evidence. |
+| 9.1–9.3 | SDK-disabled/enabled build and symbol/dependency checks; no PE SDK linkage; disabled-callsite disassembly; allocation/lock/bridge budgets and original-time deferred-serialization fixture. |
+| 9.4, 9.7 | Session model/code checks for start/stop races, late writers, generation reuse, concurrent requests, overflow, cancellation, missing receipts and finalization deadlines. |
+| 9.5–9.6 | Coarse-event coverage, legacy/native parity fixture, split/shared submissions, absent PE coverage and malformed/reordered PE batch counterexamples. |
+| 9.8–9.9 | Pinned native Trace Processor queries and loss rejection; native host plus Rosetta unix provider with x86/x64 PE runs; SDK-off/runtime-off/active cost controls and independent-SDK coexistence. |
 
 These fixtures are required evidence categories, not claims that named test
 targets already exist. Offline normalization is a pure transform and does not

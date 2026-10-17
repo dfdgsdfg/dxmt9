@@ -62,7 +62,7 @@ status, and [log](log.md) for spec-tree maintenance history.
 - d3d9-renderer: [requirements](d3d9-renderer/requirements.md), [spec](d3d9-renderer/spec.md) - modern renderer and default passcoalesce-only L1 path.
 - deploy: [requirements](deploy/requirements.md), [spec](deploy/spec.md) - Wine runtime and packaging contracts.
 - experiments: [requirements](experiments/requirements.md), [spec](experiments/spec.md) - wild integration experiment policy.
-- experiments/harness/tracing: [requirements](experiments/harness/tracing/requirements.md), [spec](experiments/harness/tracing/spec.md), [gap](experiments/harness/tracing/gap.md) - correlated performance traces, Perfetto export, REA probes, and observer qualification.
+- experiments/harness/tracing: [requirements](experiments/harness/tracing/requirements.md), [spec](experiments/harness/tracing/spec.md), [gap](experiments/harness/tracing/gap.md) - engine-integrated Perfetto, correlated performance traces, REA probes, and observer qualification.
 - tests: [requirements](tests/requirements.md), [spec](tests/spec.md) - test corpus and conformance design.
 - verification: [requirements](verification/requirements.md), [spec](verification/spec.md) - formal model and evidence contracts.
 - winemetal: [requirements](winemetal/requirements.md), [spec](winemetal/spec.md) - Wine/Metal bridge contracts.

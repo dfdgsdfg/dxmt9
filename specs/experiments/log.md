@@ -11,6 +11,12 @@ Domain-level maintenance history for `experiments/` specs. Keep current implemen
 
 ## 2026-10-17
 
+- Selected engine-integrated Perfetto as a required tracing deliverable under
+  R-HARN-TRACE-9.1–9.9: an opt-in private unix SDK module, bounded SDK-free
+  hot-path records, deferred native serialization, session quiescence and a
+  runner-verified receipt. Offline JSON conversion remains a compatibility
+  surface. Added build/runtime, lifecycle, native consumer and observer-cost
+  acceptance gates; SDK implementation and runtime qualification remain open.
 - Added the cross-domain [detailed performance tracing contract](harness/tracing/spec.md)
   with stable `R-HARN-TRACE-*` requirements and a dedicated gap inventory.
   It preserves the seven harness domains and defines shared run provenance,

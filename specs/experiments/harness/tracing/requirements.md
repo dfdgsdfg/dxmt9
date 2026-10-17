@@ -103,7 +103,9 @@ inputs by digest and its converter version. A viewer file alone is insufficient
 evidence; existing counters and `result.json` meanings must remain compatible.
 
 **R-HARN-TRACE-5.2** Perfetto is the primary integrated timeline consumer.
-Export must preserve declared units, exact identities, scope hierarchy,
+The engine-integrated collector must produce native Perfetto protobuf under
+section 9; offline conversion remains a compatibility and validation surface.
+Both paths must preserve declared units, exact identities, scope hierarchy,
 relation semantics, uncertainty and missing-coverage annotations. Conversion
 must reject malformed or unsupported required input instead of emitting a
 plausible empty timeline. Native Perfetto protobuf and Chrome Trace Event JSON
@@ -173,3 +175,63 @@ bounded qualified-runtime integration run. Read-only conversion is a pure
 transform; new concurrent collector/hook lifecycles require model/code evidence
 under R-VERIF-1.1–1.4. Rendering/scheduling changes require the applicable
 R-VERIF-1.5–1.8 layers independently of successful tracing.
+
+## 9. Engine-Integrated Perfetto
+
+**R-HARN-TRACE-9.1** The unix provider must own an opt-in Perfetto SDK integration
+that captures engine events and produces a native `.pftrace` plus the bundle
+manifest in the target process. An offline JSON exporter alone does not satisfy
+this contract. The initial backend is in-process; collection must not require
+a system tracing daemon, privileged service, browser connection or network.
+
+**R-HARN-TRACE-9.2** SDK headers, initialization, data-source registration and
+serialization must remain inside a private unix tracing module. Neither PE DLL
+may link the SDK. The build must expose explicit enabled/disabled selection,
+default disabled, with pinned SDK revision/digest/license and notices. Disabled
+builds must contain no SDK dependency, startup thread or tracing allocation;
+enabled builds must remain runtime-disabled unless explicitly requested.
+
+**R-HARN-TRACE-9.3** Measured engine paths must emit bounded POD records through
+an SDK-free internal facade. The initial implementation must serialize those
+records through the SDK after closing the capture window, using the original
+timestamps and producer tracks. SDK callbacks, allocation, interning, flush,
+file writes and locks must not enter replay/encode/wait critical sections.
+
+**R-HARN-TRACE-9.4** A process-wide session controller must enforce explicit
+preparation, collection, closure, writer quiescence, SDK finalization and seal.
+Only one session may collect per provider process at a time. Each session must
+have a fresh generation, bounded storage/deadlines and an explicit completion
+receipt; stale writers must not enter a later session or write freed storage.
+
+**R-HARN-TRACE-9.5** The initial engine coverage must include import, replay,
+queue publication, encode, queue/query waits, submission and CPU completion
+observation, with applicability and unsupported paths recorded. Flow bindings
+must use actual work ownership. Per-draw/command-detail events must require a
+separately selected bounded category; no mandatory duplicate legacy trace stream
+may be introduced to supply the same events.
+
+**R-HARN-TRACE-9.6** PE events, when requested, must reach the unix tracing owner
+in validated batches preserving guest timestamps, process/thread mapping and
+source ordering. Native-only capture must label PE/application coverage absent.
+PE/native and CPU/GPU clock qualification remains mandatory; engine SDK
+integration alone must not imply kernel scheduling or Metal GPU visibility.
+
+**R-HARN-TRACE-9.7** Engine trace configuration must freeze run/session identity,
+categories, capture trigger/window, memory/event limits, output destination and
+finalization deadline before arming. The catalogue runner must request and
+verify the engine receipt and artifact digest. Unsupported builds, failed
+startup, lost records or failed flush must invalidate the requested trace
+without changing production rendering semantics or silently switching exporters.
+
+**R-HARN-TRACE-9.8** Native output must preserve original clock IDs, timestamps,
+track identities, descriptors and explicit work relations, including deferred
+serialization across multiple producer threads. SDK/consumer loss diagnostics
+and engine loss counts must be retained. Pinned Trace Processor queries must
+verify counts, durations, relations and precision; UI import alone is insufficient.
+
+**R-HARN-TRACE-9.9** Acceptance must cover SDK-disabled, SDK-enabled/runtime-off
+and active configurations on the native host and x86_64 Wine unix provider,
+with both x86 and x64 PE runtime lanes. It must include bounded concurrent
+session model/code tests, finalization failure tests, native Perfetto consumer
+checks and matched observer-cost controls. Internal SDK state must not escape
+through the public bridge ABI or collide with another module's SDK instance.

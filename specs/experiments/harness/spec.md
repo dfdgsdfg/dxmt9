@@ -17,8 +17,9 @@ instantiate what this file defines; they cite stage names, boundary
 names, and envelope fields from here rather than redefining them.
 
 The cross-domain [detailed performance tracing contract](tracing/spec.md)
-uses these same stages, domains and envelopes for correlated application,
-PE, replay, wait and GPU evidence. Its [requirements](tracing/requirements.md)
+uses these same stages, domains and envelopes for engine-integrated Perfetto
+collection and correlated application, PE, replay, wait and GPU evidence.
+Its [requirements](tracing/requirements.md)
 add clock, identity, observer-cost and measurement-interpretation contracts;
 its [gap inventory](tracing/gap.md) distinguishes existing collectors from the
 integrated design. It does not introduce an eighth harness domain.
