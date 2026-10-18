@@ -405,3 +405,17 @@ files into the companion SQLite store, retaining detailed state and native CPU
 values. Workload log statistics remain queryable by source line when no clock
 is available. Legacy frame-window, decimation and observer switches retain their
 meaning; a shared output does not reduce their measurement overhead.
+
+## Shared trace consumers
+
+When an integrated trace is collecting, existing CPU supply and wait collectors
+project their acquired values to native counter tracks without repeating CPU
+queries or waits. Their existing environment gates, detail selection, Present
+windows and compatibility files remain authoritative. The default overview does
+not turn either detailed collector on. Wait counters are elapsed acquisition/body
+values observed at completion, not pure sleep or thread CPU.
+
+DXMT9_PERF_ENCODER_GPU_TIME and encoder-stage tracing share the supplied Metal
+attachment and cached timestamp pair when both select the same render pass.
+Legacy-only retains bulk resolve; shared capture resolves per pair. SDK-off does
+not require Perfetto. See [shared acquisition](../../specs/experiments/harness/tracing/shared-acquisition.md).

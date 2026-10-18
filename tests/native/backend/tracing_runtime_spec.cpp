@@ -1,4 +1,6 @@
 #include "../../../src/dxmt9/dxmt9_trace.hpp"
+#include "../../../src/dxmt9/dxmt9_cpu_supply_trace.hpp"
+#include "../../../src/dxmt9/dxmt9_wait_trace.hpp"
 #include "../../../src/dxmt9/tracing/config.hpp"
 
 #include <CommonCrypto/CommonDigest.h>
@@ -65,6 +67,14 @@ int main(int argc, char** argv) {
   const auto base = parent /
       ("dxmt9-tracing-runtime-" + std::to_string(getpid()));
   std::filesystem::create_directories(base);
+  const auto supply_path = base / "cpu-supply.csv";
+  const auto wait_path = base / "wait.csv";
+  setenv("DXMT9_CPU_SUPPLY_TRACE", supply_path.c_str(), 1);
+  setenv("DXMT9_CPU_SUPPLY_TRACE_FIRST_PRESENT", "1", 1);
+  setenv("DXMT9_CPU_SUPPLY_TRACE_LAST_PRESENT", "2", 1);
+  setenv("DXMT9_WAIT_TRACE", wait_path.c_str(), 1);
+  setenv("DXMT9_WAIT_TRACE_FIRST_PRESENT", "1", 1);
+  setenv("DXMT9_WAIT_TRACE_LAST_PRESENT", "2", 1);
   const auto config_path = base / "request.json";
   const auto trace_path = base / "trace.pftrace";
   const auto receipt_path = base / "receipt.json";
@@ -73,8 +83,8 @@ int main(int argc, char** argv) {
       "[\"import\",\"replay\",\"queue\",\"encode\",\"wait\",\"submit\",\"completion\",\"pe\"]";
   const std::string canonical =
       "{\"attempt_id\":\"attempt\",\"categories\":" + categories +
-      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,"
-      "\"max_events\":4096},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
+      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":4194304,"
+      "\"max_events\":16384},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"profile_id\":\"profile\",\"question\":\"runtime-smoke\","
       "\"required_categories\":" + categories +
@@ -90,7 +100,7 @@ int main(int argc, char** argv) {
       ",\"required_collectors\":[\"engine-perfetto\"],"
       "\"optional_collectors\":[],\"window\":{\"mode\":\"duration\","
       "\"delay_ms\":0,\"duration_ms\":30000},"
-      "\"limits\":{\"max_events\":4096,\"max_bytes\":1048576,"
+      "\"limits\":{\"max_events\":16384,\"max_bytes\":4194304,"
       "\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"config_sha256\":\"" + digest + "\"}";
@@ -112,11 +122,26 @@ int main(int argc, char** argv) {
   for (unsigned attempt = 0; attempt < 500 && !enabled(); ++attempt)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   assert(enabled());
+  TraceEvent filtered{};
+  filtered.category = static_cast<uint8_t>(Category::Detail);
+  assert(!emit_observation(filtered, capture_generation()));
+  filtered.category = static_cast<uint8_t>(Category::Replay);
+  assert(!emit_observation(filtered, capture_generation() + 1));
 
   counter(Category::Queue, Metric::QueueReady, 0, 88);
   counter(Category::Queue, Metric::QueueReady, 17, 88);
   counter(Category::Queue, Metric::QueueReady, 9, 99);
-  counter(Category::Replay, Metric::NativeThreadCpuNs, 123456789, 0);
+  counter(Category::Replay, Metric::NativeThreadCpuNs, 123456789, 123);
+  dxmt9::supply::present(1);
+  dxmt9::supply::record(dxmt9::supply::Event::RawReady, nullptr, 1);
+  dxmt9::waittrace::present(1);
+  auto waitRow = dxmt9::waittrace::begin(dxmt9::waittrace::Site::QueryQueue, nullptr, nullptr);
+  waitRow.queue = 99;
+  waitRow.acquired = waitRow.begin + 100000;
+  waitRow.end = waitRow.acquired;
+  dxmt9::waittrace::finish(waitRow);
+  dxmt9::supply::present(4);
+  dxmt9::waittrace::present(4);
   const uint64_t base_time = now_ns();
   const uint64_t main_tid = native_thread_id();
   uint64_t peHostBase = 0u;
@@ -300,6 +325,9 @@ int main(int argc, char** argv) {
   assert(raw_text.find("\"binding_kind\":\"raw_publication\"") !=
          std::string::npos);
   assert(raw_text.find("\"phase\":\"counter\"") != std::string::npos);
+  assert(raw_text.find("\"observation_source\":\"cpu-supply\"") != std::string::npos);
+  assert(raw_text.find("\"observation_source\":\"wait\"") != std::string::npos);
+  assert(raw_text.find("wait_mutex_acquire_elapsed_ns") != std::string::npos);
   assert(raw_text.find("\"counter_value\":\"17\"") != std::string::npos);
   assert(raw_text.find("queue_ready/owner/99/thread/") != std::string::npos);
   assert(raw_text.find("observations.sqlite") != std::string::npos);

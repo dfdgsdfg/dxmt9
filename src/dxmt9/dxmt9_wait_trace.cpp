@@ -1,4 +1,6 @@
 #include "dxmt9_wait_trace.hpp"
+#include "observations/bounded_records.hpp"
+#include "observations/trace_sink.hpp"
 
 #include <array>
 #include <atomic>
@@ -16,7 +18,6 @@
 namespace dxmt9::waittrace {
 namespace {
 constexpr std::size_t capacity = 32768, ownerCapacity = 256;
-struct Entry { std::atomic<bool> ready{false}; Row row; };
 thread_local Context context;
 
 std::uint64_t setting(const char* key, std::uint64_t fallback) noexcept {
@@ -28,11 +29,12 @@ std::uint64_t setting(const char* key, std::uint64_t fallback) noexcept {
 }
 struct Sink {
   std::array<std::atomic<const void*>, ownerCapacity> owners{};
-  std::atomic<std::uint64_t> ownerCount{0}, next{0}, frame{0}, active{0};
+  std::atomic<std::uint64_t> ownerCount{0}, frame{0}, active{0};
   std::atomic<std::uint64_t> unknown{0};
   std::atomic<std::uint64_t> waits{0};
+  std::atomic<std::uint64_t> traceAttempted{0}, traceAccepted{0};
   std::atomic<bool> closed{false};
-  std::unique_ptr<Entry[]> entries;
+  observations::BoundedRecords<Row, capacity> entries;
   const std::uint64_t first = setting("DXMT9_WAIT_TRACE_FIRST_PRESENT", 1750);
   const std::uint64_t last = setting("DXMT9_WAIT_TRACE_LAST_PRESENT", 2100);
   const std::uint64_t mutexMinNs =
@@ -42,7 +44,7 @@ struct Sink {
     const auto* path = std::getenv("DXMT9_WAIT_TRACE");
     if (!path || last < first) return;
     file = std::fopen(path, "wx");
-    if (file) entries.reset(new (std::nothrow) Entry[capacity]);
+    if (file) entries.allocate();
     if (!file || !entries)
       std::fprintf(stderr, "[dxmt9-wait-trace] output unavailable\n");
   }
@@ -52,18 +54,18 @@ struct Sink {
     // Read active before next: a writer that passed the close gate either
     // remains counted, or completed its reservation before this count load.
     // The opposite order can silently omit a finishing mutex-only row.
-    const auto count = next.load();
+    const auto count = entries.size();
     for (std::size_t i = 0; entries && i < count && i < capacity; ++i)
-      incomplete += !entries[i].ready.load(std::memory_order_acquire);
+      incomplete += !entries.read(i);
     std::fprintf(file,
-        "# wait-trace-v1 pid=%d first=%llu last=%llu closed=1 overflow=%llu incomplete=%llu unknown=%llu owners=%llu capacity=%zu mutex_min_ns=%llu storage=%u cv_entries=%llu\n",
+        "# wait-trace-v1 pid=%d first=%llu last=%llu closed=1 overflow=%llu incomplete=%llu unknown=%llu owners=%llu capacity=%zu mutex_min_ns=%llu storage=%u cv_entries=%llu acquisition_version=1 trace_attempted=%llu trace_accepted=%llu\n",
         getpid(), first, last, count > capacity ? count - capacity : 0ull,
         incomplete, unknown.load(), ownerCount.load(), capacity, mutexMinNs,
-        entries ? 1u : 0u, waits.load());
+        entries ? 1u : 0u, waits.load(), traceAttempted.load(), traceAccepted.load());
     std::fprintf(file, "site,owner,target,query,queue,sequence,initializer,tid,first_frame,last_frame,begin_ns,acquired_ns,end_ns,waits,raw_before,queued_before,completed_before,state_before,raw_after,queued_after,completed_after,state_after,requested_queue\n");
     for (std::size_t i = 0; entries && i < count && i < capacity; ++i) {
-      if (!entries[i].ready.load(std::memory_order_acquire)) continue;
-      const auto& r = entries[i].row;
+      if (!entries.read(i)) continue;
+      const auto& r = *entries.read(i);
       std::fprintf(file, "%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%u,%llu,%llu,%llu,%u,%llu\n",
           static_cast<unsigned>(r.site), r.owner, r.target, r.query,
           r.queue, r.sequence, r.initializer, r.tid, r.firstFrame, r.lastFrame, r.begin,
@@ -117,6 +119,7 @@ Row begin(Site site, const void* owner, const void* target) noexcept {
   auto& s = sink();
   s.active.fetch_add(1);
   Row r;
+  r.traceGeneration = tracing::enabled() ? tracing::capture_generation() : 0;
   r.site = site == Site::Resource ? context.site : site;
   r.owner = owner ? ownerIdentity(owner) : context.owner;
   r.target = target ? reinterpret_cast<std::uintptr_t>(target) : context.target;
@@ -137,10 +140,20 @@ void finish(Row& row) noexcept {
   if (!s.closed.load() && s.entries &&
       (row.waits || row.acquired - row.begin >= s.mutexMinNs)) {
     if ((!row.owner && !row.queue) || !row.tid) s.unknown.fetch_add(1);
-    const auto i = s.next.fetch_add(1);
+    const auto i = s.entries.reserve();
     if (i < capacity) {
-      s.entries[i].row = row;
-      s.entries[i].ready.store(true, std::memory_order_release);
+      s.entries.writable(i) = row;
+      s.entries.publish(i);
+      if (row.traceGeneration && row.begin <= row.acquired && row.acquired <= row.end) {
+        const auto observed = tracing::now_ns();
+        s.traceAttempted.fetch_add(2, std::memory_order_relaxed);
+        if (observations::counter(row.traceGeneration, observations::Source::Wait, i,
+              observed, tracing::Metric::WaitMutexAcquireElapsedNs, row.acquired - row.begin))
+          s.traceAccepted.fetch_add(1, std::memory_order_relaxed);
+        if (observations::counter(row.traceGeneration, observations::Source::Wait, i,
+              observed, tracing::Metric::WaitBodyElapsedNs, row.end - row.acquired))
+          s.traceAccepted.fetch_add(1, std::memory_order_relaxed);
+      }
     }
   }
   s.active.fetch_sub(1);

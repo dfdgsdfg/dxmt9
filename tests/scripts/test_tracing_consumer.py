@@ -172,6 +172,22 @@ def normalized_bundle():
 
 
 class TracingConsumerTests(unittest.TestCase):
+    def test_simultaneous_counter_projection_order_and_source_annotations(self):
+        bundle = normalized_bundle()
+        base = bundle["events"][0]
+        for i, value in enumerate((100, 0)):
+            row = dict(base, event_id=f"counter-{i}", source_record=f"counter-{i}",
+                       source_order=str(100 + i), kind="counter",
+                       attrs={"counter_value": str(value), "track_name": f"wait-{i}",
+                              "observation_source": "wait", "observation_record": "1",
+                              "acquisition_version": "1"})
+            bundle["events"].append(row)
+        result = consumer.derive_expected(bundle)
+        self.assertEqual([r["value"] for r in result["counter_rows"]], [0, 100])
+        rows = result["observation_counter_rows"]
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({r["value"] for r in rows if r["key"] == "debug.observation_source"}, {"wait"})
+
     def test_counter_csv_decimal_is_exact_and_fractional_is_rejected(self):
         self.assertEqual(consumer._counter_integer('123456789.000000'),123456789)
         for invalid in ('1.25','NaN','Infinity'):

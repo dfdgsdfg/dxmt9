@@ -39,6 +39,7 @@ struct Row {
   std::uint64_t begin = 0, acquired = 0, end = 0, tid = 0;
   std::uint64_t firstFrame = 0, lastFrame = 0, waits = 0;
   Snapshot before{}, after{};
+  std::uint64_t traceGeneration = 0;
   Site site = Site::Resource;
 };
 

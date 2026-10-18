@@ -1,4 +1,5 @@
 #include "dxmt9_trace_gpu.hpp"
+#include "observations/gpu_source.hpp"
 
 #include "../winemetal/Metal.hpp"
 
@@ -25,6 +26,8 @@ struct StageSlot {
   std::uint64_t generation = 1;
   WorkIdentity work{};
   StagePairResult result{};
+  WMT::Reference<WMT::CounterSampleBuffer> sourceBuffer{};
+  std::uint32_t firstSample = 0;
 };
 
 struct StageImpl {
@@ -193,10 +196,9 @@ bool resolveStagePair(StageImpl& impl, StagePairTicket ticket,
   if (evidence.status != CommandBufferStatus::Completed) {
     slot.result.validity = ResultValidity::CommandBufferFailed;
   } else {
-    std::uint64_t timestamps[2] = {};
-    const std::uint32_t firstSample = ticket.pairIndex * 2u;
-    impl.buffer.resolveCounterRange(firstSample, 2, timestamps,
-                                     sizeof(timestamps));
+    const auto endpoints = observations::counterPairEndpoints(
+        slot.sourceBuffer.handle, slot.firstSample);
+    const std::uint64_t timestamps[2] = {endpoints.begin, endpoints.end};
     slot.result.startTimestamp = timestamps[0];
     slot.result.endTimestamp = timestamps[1];
     if (timestamps[0] == 0 || timestamps[1] == 0) {
@@ -207,6 +209,7 @@ bool resolveStagePair(StageImpl& impl, StagePairTicket ticket,
       slot.result.validity = ResultValidity::Valid;
     }
   }
+  slot.sourceBuffer = nullptr;
   result = slot.result;
   impl.resolved.fetch_add(1, std::memory_order_relaxed);
   if (slot.result.validity != ResultValidity::Valid) {
@@ -297,7 +300,7 @@ bool StageSampleBuffer::start(WMT::Device& device,
     return false;
   }
   next->buffer = device.newCounterSampleBuffer(pairCapacity * 2u, true);
-  if (!next->buffer) {
+  if (!next->buffer || !observations::prepareCounterSource(next->buffer.handle)) {
     gStageImplCount.fetch_sub(1, std::memory_order_release);
     reopen();
     return false;
@@ -312,7 +315,12 @@ bool StageSampleBuffer::start(WMT::Device& device,
 }
 
 StagePairReservation StageSampleBuffer::reserve(
-    const WorkIdentity& work) noexcept {
+    const WorkIdentity& work,
+    const WMTSampleBufferAttachmentInfo* sharedAttachment) noexcept {
+  if (sharedAttachment && (!sharedAttachment->sample_buffer ||
+      (sharedAttachment->start_of_encoder_sample_index & 1u) ||
+      sharedAttachment->end_of_encoder_sample_index !=
+          sharedAttachment->start_of_encoder_sample_index + 1u)) return {};
   StageCallLease lease(callGate_, impl_);
   auto* impl = lease.get();
   if (!impl || !acquireAdmission(*impl)) {
@@ -340,19 +348,32 @@ StagePairReservation StageSampleBuffer::reserve(
     releaseAdmission(*impl);
     return {};
   }
-  slot.work = work;
-  slot.state.store(StageSlot::Reserved, std::memory_order_release);
-  if (!impl->open.load(std::memory_order_acquire)) {
+  if (sharedAttachment &&
+      !observations::prepareCounterSource(sharedAttachment->sample_buffer,
+                                          sharedAttachment->start_of_encoder_sample_index)) {
     slot.state.store(StageSlot::Free, std::memory_order_release);
     impl->lostCapacity.fetch_add(1, std::memory_order_relaxed);
     releaseAdmission(*impl);
     return {};
   }
-  const std::uint32_t firstSample = index * 2u;
+  slot.work = work;
+  slot.sourceBuffer = WMT::CounterSampleBuffer{
+      sharedAttachment ? sharedAttachment->sample_buffer : impl->buffer.handle};
+  slot.firstSample = sharedAttachment
+      ? sharedAttachment->start_of_encoder_sample_index : index * 2u;
+  slot.state.store(StageSlot::Reserved, std::memory_order_release);
+  if (!impl->open.load(std::memory_order_acquire)) {
+    slot.sourceBuffer = nullptr;
+    slot.state.store(StageSlot::Free, std::memory_order_release);
+    impl->lostCapacity.fetch_add(1, std::memory_order_relaxed);
+    releaseAdmission(*impl);
+    return {};
+  }
+  const std::uint32_t firstSample = slot.firstSample;
   StagePairReservation reservation{
       .ticket = StagePairTicket{impl->sessionGeneration, index, slot.generation},
       .attachment = WMTSampleBufferAttachmentInfo{
-          .sample_buffer = impl->buffer.handle,
+          .sample_buffer = slot.sourceBuffer.handle,
           .start_of_encoder_sample_index = firstSample,
           .end_of_encoder_sample_index = firstSample + 1u,
       },

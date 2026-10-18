@@ -15,6 +15,8 @@ inline const char* metric_name(uint16_t metric) noexcept {
     case Metric::FrameEncodeChunkElapsedNs: return "frame_encode_chunk_elapsed_ns_delta";
     case Metric::FrameEncodeDrawElapsedNs: return "frame_encode_draw_elapsed_ns_delta";
     case Metric::NativeThreadCpuNs: return "native_thread_cpu_ns";
+    case Metric::WaitMutexAcquireElapsedNs: return "wait_mutex_acquire_elapsed_ns";
+    case Metric::WaitBodyElapsedNs: return "wait_body_elapsed_ns";
   }
   return "unknown";
 }

@@ -450,6 +450,7 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       << escape_json(s.attempt_id) << "\",\"profile_id\":\""
       << escape_json(s.profile_id) << "\",\"question\":\""
       << escape_json(s.question) << "\",\"collector\":\"engine-perfetto\","
+      << "\"acquisition_contract\":\"dxmt9.observation.v1\","
       << "\"config_sha256\":\"" << s.config_sha256
       << "\",\"processes\":[{\"process_id\":\"" << pid
       << "\",\"pid\":" << pid << ",\"incarnation\":\""
@@ -733,6 +734,13 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
           << ",\"observation_store\":\"observations.sqlite\""
           << ",\"arg0\":\"" << e.arg0
           << "\",\"arg1\":\"" << e.arg1 << "\"";
+      if (e.observation_kind)
+        out << ",\"acquisition_version\":\"1\",\"observation_source\":\""
+            << (e.observation_kind == 1 ? "cpu-supply" : "wait")
+            << "\",\"observation_record\":\"" << e.observation_record
+            << "\",\"observation_timestamp_kind\":\""
+            << (e.observation_kind == 1 ? "cpu-query-start" : "wait-result-observed")
+            << "\"";
       if (e.phase == static_cast<uint8_t>(Phase::Counter))
         out << ",\"counter_value\":\"" << e.metric_value
             << "\",\"metric_id\":\"" << e.metric_id
@@ -935,7 +943,8 @@ bool publish_receipt(Session& s, const char* status, const char* flush_status,
         << escape_json(s.profile_id) << "\",\"config_sha256\":\""
         << s.config_sha256 << "\",\"status\":\"" << status
         << "\",\"started\":\"" << s.started_ns << "\",\"stopped\":\""
-        << s.stopped_ns << "\",\"window\":{\"closed\":true,\"mode\":\"duration\"}"
+        << s.stopped_ns << "\",\"acquisition_contract\":\"dxmt9.observation.v1\""
+        << ",\"window\":{\"closed\":true,\"mode\":\"duration\"}"
         << ",\"counts\":{\"engine_events\":";
     if (include_buffer_counts) out << '"' << event_count << '"';
     else out << "null";
@@ -1287,7 +1296,8 @@ void append_gpu_stage_sample(void* context,
 
 bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
                                uint64_t requestedGeneration,
-                               uint64_t lossCount = 0) noexcept {
+                               uint64_t lossCount = 0,
+                               bool requireMatchingCategory = false) noexcept {
   if (inputs.empty()) return true;
   Session& s = session();
   const TraceState state = s.state.load(std::memory_order_acquire);
@@ -1306,7 +1316,7 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
         (s.category_mask & (uint32_t{1} << input.category)))
       ++accepted;
   }
-  if (accepted == 0) return true;
+  if (accepted == 0) return !requireMatchingCategory;
   const uint32_t index = thread_slot(s);
   if (index == UINT32_MAX) return false;
   ThreadBuffer& thread = s.threads[index];
@@ -1600,6 +1610,10 @@ bool emit_batch(std::span<const TraceEvent> inputs, uint64_t lossCount) noexcept
       captureAdmissionGeneration(s.admission_gate);
   return requestedGeneration != 0 &&
       emit_batch_for_generation(inputs, requestedGeneration, lossCount);
+}
+
+bool emit_observation(const TraceEvent& event, uint64_t generation) noexcept {
+  return generation != 0 && emit_batch_for_generation({&event, 1}, generation, 0, true);
 }
 
 uint64_t capture_generation() noexcept {

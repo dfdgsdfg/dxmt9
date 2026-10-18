@@ -183,6 +183,16 @@ FROM counter c JOIN track tr ON tr.id = c.track_id
 ORDER BY c.ts, c.value, tr.name
 """
 
+OBSERVATION_COUNTER_QUERY = """
+SELECT c.ts, tr.name AS track_name, a.key, a.display_value AS value
+FROM counter c JOIN track tr ON tr.id = c.track_id
+JOIN args a ON a.arg_set_id = c.arg_set_id
+WHERE a.key IN ('debug.observation_source', 'debug.observation_record',
+                'debug.acquisition_version', 'debug.observation_timestamp_kind')
+ORDER BY c.ts, tr.name, a.key, a.display_value
+"""
+
+
 PROCESS_TRACK_IDS_QUERY = """
 SELECT a.int_value AS track_uuid
 FROM track t JOIN args a ON a.arg_set_id = t.source_arg_set_id
@@ -278,6 +288,7 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
     slice_rows: list[dict[str, Any]] = []
     event_slice: dict[str, dict[str, Any]] = {}
     counters: list[dict[str, Any]] = []
+    observation_counters: list[dict[str, Any]] = []
     annotation_rows: list[dict[str, Any]] = []
     annotation_fields = {
         "observation_store": "debug.observation_store",
@@ -367,6 +378,12 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
                 raise ConsumerError("counter event lacks an exact counter value")
             counters.append({"ts": mapped_ts(event), "value": int(str(value)),
                              "track_name": str(attrs.get("track_name", name))})
+            for key in ("observation_source", "observation_record", "acquisition_version",
+                        "observation_timestamp_kind"):
+                if key in attrs:
+                    observation_counters.append({"ts": mapped_ts(event),
+                        "track_name": str(attrs.get("track_name", name)),
+                        "key": "debug." + key, "value": str(attrs[key])})
         else:
             raise ConsumerError(f"unsupported event kind in native comparison: {event['kind']!r}")
     intervals = []
@@ -515,6 +532,10 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
         process_track_uuids.append(int(event["track_id"]))
     process_track_uuids = sorted(set(process_track_uuids))
     process_tracks = set(process_track_uuids)
+    # Match the native SQL ordering even when a single observation emits
+    # several counter tracks with the exact same acquisition timestamp.
+    counters.sort(key=lambda r: (r["ts"], r["value"], r["track_name"]))
+    observation_counters.sort(key=lambda r: (r["ts"], r["track_name"], r["key"], r["value"]))
     if not slice_rows and not counters:
         raise ConsumerError("normalized source has no timeline events")
     expected = {"slice_count": len(slice_rows), "complete_slice_count": len(slice_rows),
@@ -528,6 +549,7 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
             "total_duration_ns": sum(r["dur"] for r in slice_rows if r["dur"] > 0),
             "slice_rows": slice_rows, "flow_rows": flows, "counter_rows": counters}
     expected["annotation_rows"] = annotation_rows
+    expected["observation_counter_rows"] = observation_counters
     canonical = json.dumps(bundle, separators=(",", ":"), sort_keys=True).encode()
     expected["_normalized_bundle_sha256"] = hashlib.sha256(canonical).hexdigest()
     expected["_source_input_sha256"] = sorted(
@@ -555,6 +577,7 @@ def qualify_trace(trace: Path, *, tp: Path | None = None,
     slice_rows = _csv_rows(_run_query(tp, trace, SLICE_ROWS_QUERY))
     flow_rows = _csv_rows(_run_query(tp, trace, FLOW_ROWS_QUERY))
     counter_rows = _csv_rows(_run_query(tp, trace, COUNTER_ROWS_QUERY))
+    observation_counter_rows = _csv_rows(_run_query(tp, trace, OBSERVATION_COUNTER_QUERY))
     annotation_rows = _csv_rows(_run_query(tp, trace, ANNOTATION_ROWS_QUERY))
     process_track_ids = _csv_rows(_run_query(tp, trace, PROCESS_TRACK_IDS_QUERY))
     details = {
@@ -572,6 +595,9 @@ def qualify_trace(trace: Path, *, tp: Path | None = None,
                       for r in flow_rows],
         "counter_rows": [{"ts": int(r["ts"]), "value": _counter_integer(r["value"]),
                           "track_name": r["track_name"]} for r in counter_rows],
+        "observation_counter_rows": [{"ts": int(r["ts"]), "track_name": r["track_name"],
+                                      "key": r["key"], "value": r["value"]}
+                                     for r in observation_counter_rows],
         "process_track_uuids": sorted(int(r["track_uuid"]) & ((1 << 64) - 1)
                                       for r in process_track_ids),
         "annotation_rows": [{"ts": int(r["ts"]), "dur": int(r["dur"]), "name": r["name"],
@@ -623,7 +649,8 @@ def qualify_trace(trace: Path, *, tp: Path | None = None,
                     "nested_slice_count"):
             if key in expected and stats[key] != int(expected[key]):
                 mismatches.append(f"{key}:expected={expected[key]}:actual={stats[key]}")
-        for key in ("slice_rows", "flow_rows", "counter_rows", "annotation_rows"):
+        for key in ("slice_rows", "flow_rows", "counter_rows", "annotation_rows",
+                    "observation_counter_rows"):
             if key not in expected:
                 continue
             matches = (_annotation_rows_match(expected[key], details[key])
