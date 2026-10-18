@@ -404,6 +404,19 @@ bool parse_request(const std::string& request_path, ParsedConfig& output,
       return false;
     }
     std::vector<std::string> required_collectors;
+    if (const Json* transport_value = field(*object, "transport")) {
+      const auto* transport = std::get_if<Json::Object>(&transport_value->value);
+      if (!transport || !string_field(*transport, "mode", output.drain_mode) ||
+          (output.drain_mode != "deferred" && output.drain_mode != "async") ||
+          !uint_field(*transport, "batch_events", 4096, output.batch_events) ||
+          !uint_field(*transport, "service_interval_ms", 1000, output.service_interval_ms) ||
+          !uint_field(*transport, "transport_events", 65536, output.transport_events) ||
+          output.batch_events == 0 || output.service_interval_ms == 0 ||
+          output.transport_events < output.batch_events * 4) {
+        error = "transport mode, batch, service or storage limits are invalid";
+        return false;
+      }
+    }
     if (!string_array(*object, "required_collectors", required_collectors) ||
         std::find(required_collectors.begin(), required_collectors.end(),
                   "engine-perfetto") == required_collectors.end()) {
@@ -445,7 +458,9 @@ bool parse_request(const std::string& request_path, ParsedConfig& output,
     }
     if (std::filesystem::exists(output.pftrace_path) ||
         std::filesystem::exists(output.receipt_path) ||
-        std::filesystem::exists(output.raw_path)) {
+        std::filesystem::exists(output.raw_path) ||
+        std::filesystem::exists(output.receipt_path + ".completion.json") ||
+        (output.drain_mode == "async" && std::filesystem::exists(output.raw_path + ".spool"))) {
       error = "trace output already exists";
       return false;
     }

@@ -1,5 +1,6 @@
 #include "dxmt9_wait_trace.hpp"
 #include "observations/bounded_records.hpp"
+#include "observations/detail_rows.hpp"
 #include "observations/trace_sink.hpp"
 
 #include <array>
@@ -33,6 +34,7 @@ struct Sink {
   std::atomic<std::uint64_t> unknown{0};
   std::atomic<std::uint64_t> waits{0};
   std::atomic<std::uint64_t> traceAttempted{0}, traceAccepted{0};
+  std::atomic<bool> missingTraceReported{false};
   std::atomic<bool> closed{false};
   observations::BoundedRecords<Row, capacity> entries;
   const std::uint64_t first = setting("DXMT9_WAIT_TRACE_FIRST_PRESENT", 1750);
@@ -43,10 +45,12 @@ struct Sink {
   Sink() noexcept {
     const auto* path = std::getenv("DXMT9_WAIT_TRACE");
     if (!path || last < first) return;
-    file = std::fopen(path, "wx");
-    if (file) entries.allocate();
-    if (!file || !entries)
-      std::fprintf(stderr, "[dxmt9-wait-trace] output unavailable\n");
+    // The row store feeds both consumers and must survive a failed legacy
+    // open. `perfetto` is an explicit consumer selection, never a filename.
+    if (!traceOnly()) file = std::fopen(path, "wx");
+    entries.allocate();
+    if ((!traceOnly() && !file) || !entries)
+      std::fprintf(stderr, "[dxmt9-wait-trace] output or row storage unavailable\n");
   }
   void close() noexcept {
     if (closed.exchange(true) || !file) return;
@@ -147,7 +151,10 @@ void finish(Row& row) noexcept {
       s.entries.publish(i);
       if (row.traceGeneration) {
         observations::DiagnosticContext c;
-        c.generation = row.traceGeneration; c.record = i + 1; c.work = row.sequence;
+        c.generation = row.traceGeneration;
+        c.timestamp = tracing::now_ns();
+        c.record = i + 1;
+        c.work = row.sequence;
         const bool qualified = row.beginPoint.qualified() && row.acquiredPoint.qualified() &&
             row.endPoint.qualified() && row.begin == row.beginPoint.source &&
             row.acquired == row.acquiredPoint.source && row.end == row.endPoint.source &&
@@ -155,18 +162,18 @@ void finish(Row& row) noexcept {
             row.beginPoint.after <= row.acquiredPoint.before &&
             (row.acquiredPoint.after <= row.endPoint.before ||
              row.acquiredPoint.source == row.endPoint.source);
-        char details[2048]{};
-        const auto written = std::snprintf(details, sizeof(details),
-            "owner=%llu target=%llu query=%llu queue=%llu sequence=%llu initializer=%llu requested_queue=%llu begin=%llu acquired=%llu end=%llu tid=%llu first_frame=%llu last_frame=%llu waits=%llu site=%u before_raw=%llu before_queued=%llu before_completed=%llu before_state=%u after_raw=%llu after_queued=%llu after_completed=%llu after_state=%u qualified=%u begin_native_before=%llu begin_native_after=%llu acquired_native_before=%llu acquired_native_after=%llu end_native_before=%llu end_native_after=%llu resolution_ns=%llu source_clock=steady_clock",
-            row.owner, row.target, row.query, row.queue, row.sequence, row.initializer,
-            row.requestedQueue, row.begin, row.acquired, row.end, row.tid,
-            row.firstFrame, row.lastFrame, row.waits, static_cast<unsigned>(row.site),
-            row.before.raw, row.before.queued, row.before.completed, row.before.state,
-            row.after.raw, row.after.queued, row.after.completed, row.after.state, qualified ? 1u : 0u,
-            row.beginPoint.before, row.beginPoint.after, row.acquiredPoint.before, row.acquiredPoint.after,
-            row.endPoint.before, row.endPoint.after, row.beginPoint.resolution);
-        observations::report(observations::Source::WaitDetail, "wait-row-v1", details, c,
-            written < 0 || static_cast<size_t>(written) >= sizeof(details));
+        const std::array<std::uint64_t, observations::wait_row_fields.size()> fields = {
+            row.owner, row.target, row.query, row.queue, row.sequence,
+            row.initializer, row.requestedQueue, row.begin, row.acquired, row.end,
+            row.tid, row.firstFrame, row.lastFrame, row.waits,
+            static_cast<std::uint64_t>(row.site), row.before.raw, row.before.queued,
+            row.before.completed, row.before.state, row.after.raw, row.after.queued,
+            row.after.completed, row.after.state, qualified ? 1u : 0u,
+            row.beginPoint.before, row.beginPoint.after, row.acquiredPoint.before,
+            row.acquiredPoint.after, row.endPoint.before, row.endPoint.after,
+            row.beginPoint.resolution};
+        (void)observations::emit_detail_row(observations::Source::WaitDetail,
+            "wait-row-v2", c, fields);
         if (qualified) {
           using tracing::Phase;
           const auto mutexScope = (i + 1) * 2 + (1ull << 62);
@@ -200,6 +207,9 @@ void finish(Row& row) noexcept {
 void present(std::uint64_t ordinal) noexcept {
   auto& s = sink();
   s.frame.store(ordinal);
+  if (traceOnly() && !tracing::enabled() &&
+      !s.missingTraceReported.exchange(true, std::memory_order_relaxed))
+    std::fprintf(stderr, "[dxmt9-wait-trace] perfetto consumer selected without an active trace session\n");
   if (ordinal > s.last + 1) s.close();
 }
 

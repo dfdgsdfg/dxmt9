@@ -1,5 +1,6 @@
 #include "dxmt9_perf_counters.hpp"
 #include "observations/diagnostic_sink.hpp"
+#include "observations/value_batch.hpp"
 
 #include "dxmt9_perf_counters_internal.hpp"
 
@@ -2478,6 +2479,9 @@ void report() {
   line.reserve(65536);
   line += "[dxmt9-perf]";
   const observations::DiagnosticContext reportContext;
+  // Reserve the complete projection destination before loading counters. This
+  // keeps the trace report all-or-nothing without changing legacy acquisition.
+  observations::ValueBatch valueBatch(reportContext);
   for (const auto& e : kCounterTable) {
     // One load/evaluation feeds both exact native output and legacy formatting.
     const auto percentile = e.ringField ? (c.*e.ringField).observePercentile(e.percentile)
@@ -2486,8 +2490,8 @@ void report() {
     if (e.ringField) {
       char key[128]{};
       std::snprintf(key, sizeof(key), "%s.samples", e.key);
-      observations::value(observations::Source::PerfReport, key, percentile.samples,
-                           "count:percentile-population", reportContext);
+      valueBatch.value(observations::Source::PerfReport, key, percentile.samples,
+                       "count:percentile-population");
     }
     const auto second = e.field2 ? load(c.*e.field2) : 0;
     const char* semantics = e.kind == CounterEntry::Kind::Milliseconds ? "ns:source-defined"
@@ -2495,11 +2499,11 @@ void report() {
             ? "ns:percentile-ring" : e.kind == CounterEntry::Kind::Hex64 ? "id:latest"
             : e.kind == CounterEntry::Kind::WidthByHeight ? "pixels:latest"
             : "integer:source-defined";
-    observations::value(observations::Source::PerfReport, e.key, acquired, semantics, reportContext);
+    valueBatch.value(observations::Source::PerfReport, e.key, acquired, semantics);
     if (e.field2) {
       char key[128]{};
       std::snprintf(key, sizeof(key), "%s.height", e.key);
-      observations::value(observations::Source::PerfReport, key, second, "pixels:latest", reportContext);
+      valueBatch.value(observations::Source::PerfReport, key, second, "pixels:latest");
     }
     char field[128]{};
     switch (e.kind) {
@@ -2549,17 +2553,27 @@ void report() {
                     DirectChunkSlotReplayDisposition::Count));
   static_assert(std::size(kOutcomeNames) ==
                 static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count));
+  constexpr std::size_t kValueBatchRows = [&] {
+    std::size_t count = 0;
+    for (const auto& entry : kCounterTable) {
+      count += 1u + (entry.ringField ? 1u : 0u) +
+          (entry.field2 ? 1u : 0u);
+    }
+    return count + 3u * std::size(kDispositionNames) +
+        std::size(kOutcomeNames);
+  }();
+  static_assert(kValueBatchRows <= observations::ValueBatch::capacity);
   for (std::size_t i = 0; i < std::size(kDispositionNames); ++i) {
     const auto raws = load(c.directChunkSlotReplayRaws[i]);
     const auto records = load(c.directChunkSlotReplayRecords[i]);
     const auto bytes = load(c.directChunkSlotReplayWireBytes[i]);
     char key[128]{};
     std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_raws", kDispositionNames[i]);
-    observations::value(observations::Source::PerfReport, key, raws, "count:cumulative", reportContext);
+    valueBatch.value(observations::Source::PerfReport, key, raws, "count:cumulative");
     std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_records", kDispositionNames[i]);
-    observations::value(observations::Source::PerfReport, key, records, "count:cumulative", reportContext);
+    valueBatch.value(observations::Source::PerfReport, key, records, "count:cumulative");
     std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_wire_bytes", kDispositionNames[i]);
-    observations::value(observations::Source::PerfReport, key, bytes, "bytes:cumulative", reportContext);
+    valueBatch.value(observations::Source::PerfReport, key, bytes, "bytes:cumulative");
     char field[160]{};
     std::snprintf(field, sizeof(field),
                   " direct_chunkslot_replay_%s_raws=%llu"
@@ -2580,13 +2594,14 @@ void report() {
     const auto outcome = load(c.directChunkSlotReplayOutcomes[i]);
     char key[128]{};
     std::snprintf(key, sizeof(key), "direct_chunkslot_replay_outcome_%s", kOutcomeNames[i]);
-    observations::value(observations::Source::PerfReport, key, outcome, "count:cumulative", reportContext);
+    valueBatch.value(observations::Source::PerfReport, key, outcome, "count:cumulative");
     char field[128]{};
     std::snprintf(field, sizeof(field), " direct_chunkslot_replay_outcome_%s=%llu",
                   kOutcomeNames[i],
                   static_cast<unsigned long long>(outcome));
     line += field;
   }
+  valueBatch.commit();
   line += '\n';
   std::fwrite(line.data(), 1, line.size(), stderr);
   std::fflush(stderr);

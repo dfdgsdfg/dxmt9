@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 namespace dxmt9::supply {
 
@@ -10,6 +11,16 @@ inline bool enabled() noexcept {
   static const bool value = [] {
     const char* path = std::getenv("DXMT9_CPU_SUPPLY_TRACE");
     return path && path[0] && path[0] != '0';
+  }();
+  return value;
+}
+
+// `perfetto` selects the native trace consumer alone. Any other nonzero value
+// remains a legacy output path and keeps the historical dual-consumer behavior.
+inline bool traceOnly() noexcept {
+  static const bool value = [] {
+    const char* selection = std::getenv("DXMT9_CPU_SUPPLY_TRACE");
+    return selection && std::strcmp(selection, "perfetto") == 0;
   }();
   return value;
 }

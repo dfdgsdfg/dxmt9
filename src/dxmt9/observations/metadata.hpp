@@ -4,8 +4,44 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <span>
 
 namespace dxmt9::observations {
+// Cold-side schema expansion. Numeric fields are copied at acquisition; names
+// and decimal display are resolved only by raw/native exporters.
+inline std::span<const char* const> typed_fields(std::string_view schema, uint16_t encoding) {
+  static constexpr const char* endpoint[] = {"source", "before", "after", "resolution"};
+  static constexpr const char* cpu[] = {"wall_ns", "cpu_ns", "tid", "owner", "id", "value",
+      "frame", "event", "qualified", "native_before_ns", "native_after_ns", "resolution_ns"};
+  static constexpr const char* wait[] = {"owner", "target", "query", "queue", "sequence",
+      "initializer", "requested_queue", "begin", "acquired", "end", "tid", "first_frame",
+      "last_frame", "waits", "site", "before_raw", "before_queued", "before_completed",
+      "before_state", "after_raw", "after_queued", "after_completed", "after_state", "qualified",
+      "begin_native_before", "begin_native_after", "acquired_native_before", "acquired_native_after",
+      "end_native_before", "end_native_after", "resolution_ns"};
+  static constexpr const char* pe[] = {"record_version", "sample_ordinal", "target_process_id",
+      "target_thread_id", "target_process_create_100ns", "target_thread_create_100ns", "qpc_frequency",
+      "qpc_before_suspend", "qpc_after_resume", "pc", "outcome", "population_attempts",
+      "population_successes", "suspend_failures", "context_failures", "resume_failures", "omitted_samples"};
+  if (encoding == 5) return endpoint;
+  if (encoding != 4) return {};
+  if (schema == "cpu-supply-row-v2") return cpu;
+  if (schema == "wait-row-v2") return wait;
+  if (schema == "pe-pc-sample-v1" || schema == "pe-pc-population-v1") return pe;
+  return {};
+}
+template<class Event, class Output>
+inline void expand_typed_fields(const Event& event, Output output) {
+  const auto fields = typed_fields(event.diagnostic_schema, event.observation_mode);
+  if (event.diagnostic_size > sizeof(event.diagnostic_payload) || event.diagnostic_size % 8) return;
+  const size_t first = event.diagnostic_part * (sizeof(event.diagnostic_payload) / 8);
+  for (size_t offset = 0; offset < event.diagnostic_size / 8 && first + offset < fields.size(); ++offset) {
+    uint64_t value = 0;
+    for (size_t byte = 0; byte < 8; ++byte)
+      value |= uint64_t(static_cast<unsigned char>(event.diagnostic_payload[offset * 8 + byte])) << (byte * 8);
+    output(std::string("diagnostic_field.") + fields[first + offset], std::to_string(value));
+  }
+}
 inline std::string diagnostic_hex(std::string_view bytes) {
   constexpr char hex[] = "0123456789abcdef";
   std::string result;
@@ -51,7 +87,7 @@ inline const char* source_name(std::uint16_t source) noexcept {
   return "unknown";
 }
 inline const char* timestamp_kind(std::uint16_t source, std::uint16_t mode = 0) noexcept {
-  if (source == 10 || source == 11) return mode == 3 ? "bracketed-endpoint" : "detailed-record-observed";
+  if (source == 10 || source == 11) return (mode == 3 || mode == 5) ? "bracketed-endpoint" : "detailed-record-observed";
   if (source == 12) return "report-received";
   if (source >= 7) return "report-observed";
   return source == 1 ? "cpu-query-start" : source == 2

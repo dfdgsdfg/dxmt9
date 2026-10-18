@@ -24,6 +24,10 @@ struct ParsedConfig {
   uint32_t max_bytes = 0;
   uint32_t finalize_timeout_ms = 0;
   uint32_t max_clock_error_ns = 1000;
+  std::string drain_mode = "deferred";
+  uint32_t batch_events = 64;
+  uint32_t service_interval_ms = 10;
+  uint32_t transport_events = 16384;
   bool gpu_requested = false;
   bool gpu_required = false;
   uint32_t gpu_capacity = 0;

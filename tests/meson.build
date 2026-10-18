@@ -632,6 +632,8 @@ foreach tracing_test : ['harness', 'normalize', 'consumer', 'external', 'store']
        args: [join_paths(meson.project_source_root(),
               'tests/scripts/test_tracing_' + tracing_test + '.py')])
 endforeach
+test('dxmt9-tracing-observer-controls', python3,
+  args: [join_paths(meson.project_source_root(), 'tests/scripts/test_qualify_trace_observer.py')])
 test('dxmt9-tracing-lifecycle-binding', python3,
      args: [join_paths(meson.project_source_root(),
             'scripts/check/check_tracing_lifecycle.py')])

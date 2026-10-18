@@ -22,6 +22,8 @@
 // Everything here is diagnostic. A run with the sampler enabled is NOT a
 // valid performance sample: it stops the game thread `hz` times a second.
 
+#include "d3d9_pe_trace.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +43,11 @@ inline constexpr std::size_t kPeSamplerSelfPcMaxUsed = (kPeSamplerSelfPcSlots * 
 inline constexpr std::uint64_t kPeSamplerSelfPcGranularity = 64;
 inline constexpr std::size_t kPeSamplerTopModules = 20;
 inline constexpr std::size_t kPeSamplerTopSelfPcBuckets = 32;
+inline constexpr std::uint64_t kPeSamplerOutcomeSuspendFailed = 1u;
+inline constexpr std::uint64_t kPeSamplerOutcomeContextFailed = 2u;
+inline constexpr std::uint64_t kPeSamplerOutcomeSampled = 3u;
+inline constexpr std::uint64_t kPeSamplerOutcomeResumeFailed = 4u;
+inline constexpr std::uint64_t kPeSamplerOutcomePopulation = 5u;
 
 inline constexpr std::size_t kPeSamplerInvalidIndex = static_cast<std::size_t>(-1);
 
@@ -355,6 +362,9 @@ inline std::uint32_t clampPeSamplerHz(std::uint32_t hz) noexcept {
 // histogram is reduced to its top rows while the lock is held.
 struct PeSamplerSnapshot {
   std::uint64_t samples = 0;
+  std::uint64_t rawAttempts = 0;
+  std::uint64_t rawAccepted = 0;
+  std::uint64_t rawOmitted = 0;
   std::uint64_t suspendFailures = 0;
   std::uint64_t contextFailures = 0;
   std::uint64_t resumeFailures = 0;
@@ -387,6 +397,20 @@ struct PeSamplerSnapshot {
 #include <new>
 
 namespace dxmt9::d3d9::pe {
+
+inline std::uint64_t peSamplerFileTimeValue(const FILETIME& time) noexcept {
+  ULARGE_INTEGER value{};
+  value.LowPart = time.dwLowDateTime;
+  value.HighPart = time.dwHighDateTime;
+  return value.QuadPart;
+}
+
+inline std::uint64_t peSamplerQueryQpc() noexcept {
+  LARGE_INTEGER value{};
+  return QueryPerformanceCounter(&value) && value.QuadPart >= 0
+             ? static_cast<std::uint64_t>(value.QuadPart)
+             : 0u;
+}
 
 // Marker whose address must lie inside our own PE d3d9.dll: this is how the
 // sampler decides which enumerated module is "self" for the PC histogram,
@@ -453,6 +477,7 @@ class PeThreadSampler {
         return;  // leak; see the contract above.
       }
     }
+    sampler->publishRawPopulation();
     sampler->destroyResources();
     delete sampler;
     processSamplerLive().store(false);
@@ -474,6 +499,9 @@ class PeThreadSampler {
     out.hz = hz_;
     AcquireSRWLockShared(&lock_);
     out.samples = totalSamples_;
+    out.rawAttempts = sampleOrdinal_;
+    out.rawAccepted = rawSampleAccepted_;
+    out.rawOmitted = rawSampleOmissions_;
     out.suspendFailures = suspendFailures_;
     out.contextFailures = contextFailures_;
     out.resumeFailures = resumeFailures_;
@@ -532,10 +560,25 @@ class PeThreadSampler {
   }
 
   bool initialize() noexcept {
-    targetThread_ = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+    targetThread_ = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                   THREAD_QUERY_LIMITED_INFORMATION,
                                FALSE, targetThreadId_);
     if (targetThread_ == nullptr) {
       return false;
+    }
+    FILETIME processCreate{}, processExit{}, processKernel{}, processUser{};
+    FILETIME threadCreate{}, threadExit{}, threadKernel{}, threadUser{};
+    LARGE_INTEGER frequency{};
+    if (GetProcessTimes(GetCurrentProcess(), &processCreate, &processExit,
+                        &processKernel, &processUser) &&
+        GetThreadTimes(targetThread_, &threadCreate, &threadExit,
+                       &threadKernel, &threadUser) &&
+        QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0) {
+      targetProcessCreateTime100ns_ = peSamplerFileTimeValue(processCreate);
+      targetThreadCreateTime100ns_ = peSamplerFileTimeValue(threadCreate);
+      qpcFrequency_ = static_cast<std::uint64_t>(frequency.QuadPart);
+      targetIdentityValid_ = targetProcessCreateTime100ns_ != 0u &&
+                             targetThreadCreateTime100ns_ != 0u;
     }
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (stopEvent_ == nullptr) {
@@ -618,16 +661,30 @@ class PeThreadSampler {
     while (!stopRequested_.load(std::memory_order_relaxed) &&
            WaitForSingleObject(stopEvent_, intervalMs_) == WAIT_TIMEOUT) {
       context.ContextFlags = CONTEXT_CONTROL;
+      const std::uint64_t qpcBefore = peSamplerQueryQpc();
+      AcquireSRWLockShared(&lock_);
+      const bool ordinalExhausted = sampleOrdinal_ == UINT64_MAX;
+      ReleaseSRWLockShared(&lock_);
+      if (ordinalExhausted) {
+        stopRequested_.store(true, std::memory_order_relaxed);
+        break;
+      }
+      AcquireSRWLockExclusive(&lock_);
+      const std::uint64_t ordinal = ++sampleOrdinal_;
+      ReleaseSRWLockExclusive(&lock_);
 
       // ---- suspend window opens ----
       const DWORD previousSuspendCount = SuspendThread(targetThread_);
       if (previousSuspendCount == static_cast<DWORD>(-1)) {
         // Suspend failed: nothing to resume. Counted outside any window.
         noteFailure(&suspendFailures_);
+        publishRawSample(ordinal, qpcBefore, peSamplerQueryQpc(), 0u,
+                         kPeSamplerOutcomeSuspendFailed);
         continue;
       }
       const BOOL contextOk = GetThreadContext(targetThread_, &context);
       const DWORD resumeResult = ResumeThread(targetThread_);
+      const std::uint64_t qpcAfter = peSamplerQueryQpc();
       // ---- suspend window closes ----
 
       if (resumeResult == static_cast<DWORD>(-1)) {
@@ -636,11 +693,18 @@ class PeThreadSampler {
         // only report, because logging from here could block on a lock the
         // suspended thread holds.
         noteFailure(&resumeFailures_);
+        if (dxmt9PeTraceEnabled()) {
+          AcquireSRWLockExclusive(&lock_);
+          if (rawSampleOmissions_ != UINT64_MAX) ++rawSampleOmissions_;
+          ReleaseSRWLockExclusive(&lock_);
+        }
         stopRequested_.store(true, std::memory_order_relaxed);
         break;
       }
       if (!contextOk) {
         noteFailure(&contextFailures_);
+        publishRawSample(ordinal, qpcBefore, qpcAfter, 0u,
+                         kPeSamplerOutcomeContextFailed);
         continue;
       }
 #if defined(_WIN64)
@@ -649,7 +713,68 @@ class PeThreadSampler {
       const std::uint64_t pc = static_cast<std::uint64_t>(context.Eip);
 #endif
       aggregate(pc);
+      publishRawSample(ordinal, qpcBefore, qpcAfter, pc,
+                       kPeSamplerOutcomeSampled);
     }
+  }
+
+  void publishRawSample(std::uint64_t ordinal, std::uint64_t before,
+                        std::uint64_t after, std::uint64_t pc,
+                        std::uint64_t outcome) noexcept {
+    if (!dxmt9PeTraceEnabled()) return;
+    if (!targetIdentityValid_ || qpcFrequency_ == 0u) {
+      AcquireSRWLockExclusive(&lock_);
+      if (rawSampleOmissions_ != UINT64_MAX) ++rawSampleOmissions_;
+      ReleaseSRWLockExclusive(&lock_);
+      return;
+    }
+    Dxmt9PeRawSample sample{};
+    sample.ordinal = ordinal;
+    sample.targetProcessId = GetCurrentProcessId();
+    sample.targetThreadId = targetThreadId_;
+    sample.targetProcessCreateTime100ns = targetProcessCreateTime100ns_;
+    sample.targetThreadCreateTime100ns = targetThreadCreateTime100ns_;
+    sample.qpcFrequency = qpcFrequency_;
+    sample.qpcBeforeSuspend = before;
+    sample.qpcAfterResume = after;
+    sample.pc = pc;
+    sample.outcome = outcome;
+    AcquireSRWLockShared(&lock_);
+    sample.attempts = sampleOrdinal_;
+    sample.successfulSamples = totalSamples_;
+    sample.suspendFailures = suspendFailures_;
+    sample.contextFailures = contextFailures_;
+    sample.resumeFailures = resumeFailures_;
+    sample.omittedSamples = rawSampleOmissions_;
+    ReleaseSRWLockShared(&lock_);
+    const bool accepted = dxmt9PeTraceRawSample(sample);
+    AcquireSRWLockExclusive(&lock_);
+    if (accepted) {
+      ++rawSampleAccepted_;
+    } else {
+      if (rawSampleOmissions_ != UINT64_MAX) ++rawSampleOmissions_;
+    }
+    ReleaseSRWLockExclusive(&lock_);
+  }
+
+  void publishRawPopulation() noexcept {
+    if (!dxmt9PeTraceEnabled() || !targetIdentityValid_ ||
+        resumeFailures_ != 0u) return;
+    Dxmt9PeRawSample sample{};
+    sample.ordinal = sampleOrdinal_ ? sampleOrdinal_ : 1u;
+    sample.targetProcessId = GetCurrentProcessId();
+    sample.targetThreadId = targetThreadId_;
+    sample.targetProcessCreateTime100ns = targetProcessCreateTime100ns_;
+    sample.targetThreadCreateTime100ns = targetThreadCreateTime100ns_;
+    sample.qpcFrequency = qpcFrequency_;
+    sample.outcome = kPeSamplerOutcomePopulation;
+    sample.attempts = sampleOrdinal_;
+    sample.successfulSamples = totalSamples_;
+    sample.suspendFailures = suspendFailures_;
+    sample.contextFailures = contextFailures_;
+    sample.resumeFailures = resumeFailures_;
+    sample.omittedSamples = rawSampleOmissions_;
+    (void)dxmt9PeTraceRawPopulation(sample);
   }
 
   void noteFailure(std::uint64_t* counter) noexcept {
@@ -758,6 +883,13 @@ class PeThreadSampler {
   bool moduleTableReady_ = false;
   std::uint64_t samplesByModule_[kPeSamplerMaxModules]{};
   std::uint64_t totalSamples_ = 0;
+  std::uint64_t sampleOrdinal_ = 0;
+  std::uint64_t rawSampleOmissions_ = 0;
+  std::uint64_t rawSampleAccepted_ = 0;
+  std::uint64_t targetProcessCreateTime100ns_ = 0;
+  std::uint64_t targetThreadCreateTime100ns_ = 0;
+  std::uint64_t qpcFrequency_ = 0;
+  bool targetIdentityValid_ = false;
   std::uint64_t suspendFailures_ = 0;
   std::uint64_t contextFailures_ = 0;
   std::uint64_t resumeFailures_ = 0;

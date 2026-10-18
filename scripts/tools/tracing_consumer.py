@@ -202,6 +202,7 @@ WHERE a.key IN ('debug.observation_source', 'debug.observation_record',
                 'debug.observer_mode', 'debug.timing_stride', 'debug.diagnostic_schema',
                 'debug.diagnostic_payload', 'debug.diagnostic_part', 'debug.diagnostic_parts',
                 'debug.diagnostic_encoding', 'debug.diagnostic_value', 'debug.diagnostic_display')
+   OR a.key GLOB 'debug.diagnostic_field_*'
 ORDER BY c.ts, tr.name, a.key, a.display_value
 """
 
@@ -349,11 +350,13 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
     def collect_annotations(event: dict[str, Any], row: dict[str, Any],
                             endpoint: str = "") -> None:
         attrs = event.get("attrs", {})
-        for field, key in annotation_fields.items():
+        fields = dict(annotation_fields)
+        fields.update({key: "debug." + key for key in attrs if key.startswith("diagnostic_field.")})
+        for field, key in fields.items():
             value = event.get("source_record") if field == "source_record" else attrs.get(field)
             if value is None or str(value) == "":
                 continue
-            if str(value) == "0" and field not in include_zero_annotations:
+            if str(value) == "0" and field not in include_zero_annotations and not field.startswith("diagnostic_field."):
                 continue
             if field in ("calibration_scale", "calibration_offset"):
                 try:
@@ -364,7 +367,8 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
             annotation_rows.append({"ts": row["ts"], "dur": row["dur"],
                 "name": row["name"], "track_kind": row["track_kind"],
                 "tid": row["tid"], "pid": row["pid"],
-                "key": "debug." + endpoint + field, "value": str(value)})
+                # Trace Processor flattens dots inside debug annotation names.
+                "key": "debug." + endpoint + field.replace(".", "_"), "value": str(value)})
 
     for event in bundle["events"]:
         attrs = event.get("attrs", {})
@@ -394,11 +398,11 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
                 raise ConsumerError("counter event lacks an exact counter value")
             counters.append({"ts": mapped_ts(event), "value": int(str(value)),
                              "track_name": str(attrs.get("track_name", name))})
-            for key in OBSERVATION_FIELDS:
+            for key in (*OBSERVATION_FIELDS, *(key for key in attrs if key.startswith("diagnostic_field."))):
                 if key in attrs:
                     observation_counters.append({"ts": mapped_ts(event),
                         "track_name": str(attrs.get("track_name", name)),
-                        "key": "debug." + key, "value": str(attrs[key])})
+                        "key": "debug." + key.replace(".", "_"), "value": str(attrs[key])})
         else:
             raise ConsumerError(f"unsupported event kind in native comparison: {event['kind']!r}")
     intervals = []

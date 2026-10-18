@@ -39,6 +39,16 @@ clock and must not become native-time slices. Suspend/context/resume failures,
 overflow and omitted samples remain queryable. The sampler performs no second
 SuspendThread/GetThreadContext acquisition for an additional consumer.
 
+The binary payload is encoding 4 with explicit byte length and little-endian
+unsigned fields: `cpu-supply-row-v2`, `wait-row-v2`, `pe-pc-sample-v1` and
+`pe-pc-population-v1`. Encoding 5 contains individual endpoint brackets.
+Cold native export supplies named exact integer annotations; SQLite retains
+both original bytes and typed fields. PE population summaries are attempted
+after sampler join, without an extra sample. Resume failure prevents further
+bridge/output work; legacy snapshots retain its failure/omission counters.
+Population omissions and native transport losses are separate counts. A closed
+session rejects raw samples rather than counting them as accepted.
+
 Query and queue reports may reuse bytes already required by a legacy consumer;
 structured facts must have source/schema/record identity and original observation
 semantics independent of log-level filtering. Do not claim report timestamps are

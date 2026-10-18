@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import re
 from pathlib import Path
 import sqlite3
 import stat
+import struct
 import sys
 import tempfile
 from typing import Any
@@ -51,7 +53,10 @@ CREATE TABLE observation_field(report_id INTEGER REFERENCES observation_report,
  ordinal INTEGER NOT NULL, key TEXT NOT NULL, value_exact TEXT NOT NULL,
  PRIMARY KEY(report_id, ordinal));
 CREATE TABLE structural_value(artifact_id INTEGER REFERENCES artifact,
- path TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY(artifact_id, path));
+ report_id INTEGER REFERENCES observation_report,
+ path TEXT NOT NULL, value_json TEXT NOT NULL,
+ CHECK ((artifact_id IS NULL) != (report_id IS NULL)),
+ UNIQUE(artifact_id, path), UNIQUE(report_id, path));
 CREATE TABLE clock(id INTEGER PRIMARY KEY, bundle_id INTEGER REFERENCES bundle,
  source_id TEXT NOT NULL, unit TEXT NOT NULL, alignment TEXT NOT NULL, definition_json TEXT NOT NULL,
  UNIQUE(bundle_id, source_id));
@@ -214,6 +219,48 @@ def _structured_artifact(db: sqlite3.Connection, aid: int, path: Path) -> None:
         raise ValueError("structural input changed during import")
 
 
+TYPED_FIELDS = {
+    "cpu-supply-row-v2": (
+        "wall_ns", "cpu_ns", "tid", "owner", "id", "value", "frame", "event",
+        "qualified", "native_before_ns", "native_after_ns", "resolution_ns"),
+    "wait-row-v2": (
+        "owner", "target", "query", "queue", "sequence", "initializer", "requested_queue",
+        "begin", "acquired", "end", "tid", "first_frame", "last_frame", "waits", "site",
+        "before_raw", "before_queued", "before_completed", "before_state", "after_raw",
+        "after_queued", "after_completed", "after_state", "qualified", "begin_native_before",
+        "begin_native_after", "acquired_native_before", "acquired_native_after",
+        "end_native_before", "end_native_after", "resolution_ns"),
+    "pe-pc-sample-v1": (
+        "record_version", "sample_ordinal", "target_process_id", "target_thread_id",
+        "target_process_create_100ns", "target_thread_create_100ns", "qpc_frequency",
+        "qpc_before_suspend", "qpc_after_resume", "pc", "outcome", "population_attempts",
+        "population_successes", "suspend_failures", "context_failures", "resume_failures",
+        "omitted_samples"),
+}
+TYPED_FIELDS["pe-pc-population-v1"] = TYPED_FIELDS["pe-pc-sample-v1"]
+
+
+def _direct_structure(db, rid, schema, payload):
+    """The complete source report is the immutable parent; no file is required."""
+    if schema == "dxmt9-structural-json-v1":
+        pending = [("", json.loads(payload))]
+    else:
+        pending = [("/" + str(i), row) for i, row in enumerate(csv.reader(io.StringIO(payload)))]
+    count = 0
+    while pending:
+        key, value = pending.pop()
+        if isinstance(value, dict) and value:
+            pending.extend((key + "/" + str(k).replace("~", "~0").replace("/", "~1"), v)
+                           for k, v in value.items())
+        elif isinstance(value, list) and value and schema == "dxmt9-structural-json-v1":
+            pending.extend((key + "/" + str(i), v) for i, v in enumerate(value))
+        else:
+            count += 1
+            if count > MAX_EVENTS:
+                raise ValueError("direct structural record exceeds row budget")
+            _insert(db, "structural_value", report_id=rid, path=key, value_json=encoded(value))
+
+
 def _shared_reports(db, bid, artifact_id, observations):
     groups = {}
     for event, eid in observations:
@@ -221,9 +268,10 @@ def _shared_reports(db, bid, artifact_id, observations):
         if "diagnostic_parts" not in a:
             continue
         encoding = int(a["diagnostic_encoding"])
-        key = ((event["process_id"], a.get("guest_process_id"), a.get("process_create_time100ns")), a["observation_source"], a["observation_record"],
+        key = ((event["process_id"], a.get("guest_process_id"), a.get("process_create_time100ns"),
+                a.get("guest_thread_id"), a.get("thread_create_time100ns")), a["observation_source"], a["observation_record"],
                a["diagnostic_schema"], encoding,
-               eid if encoding == 3 else None)
+               eid if encoding in (3, 5) else None)
         groups.setdefault(key, []).append((event, eid))
     artifacts = {}
     for (_, source, record, schema, encoding, _), rows in groups.items():
@@ -243,13 +291,30 @@ def _shared_reports(db, bid, artifact_id, observations):
             _insert(db, "qualification", bundle_id=bid, scope="shared-report:" + str(rid),
                     status="unqualified", details_json=encoded({"reason": "fragment coverage"}))
             continue
-        values = [(schema, attrs[0]["diagnostic_value"])] if encoding == 2 else re.findall(
-            r"([A-Za-z_][A-Za-z_0-9.]*)=([^\s]+)", payload)
+        if encoding in (4, 5):
+            fields = ("source", "before", "after", "resolution") if encoding == 5 else TYPED_FIELDS.get(schema)
+            if fields is None or len(payload_bytes) != 8 * len(fields):
+                db.execute("UPDATE observation_report SET status='invalid' WHERE id=?", (rid,))
+                _insert(db, "qualification", bundle_id=bid, scope="shared-report:" + str(rid),
+                        status="unqualified", details_json=encoded({"reason": "typed schema or size"}))
+                continue
+            numbers = struct.unpack("<" + "Q" * len(fields), payload_bytes)
+            values = [(key, str(value)) for key, value in zip(fields, numbers)]
+        else:
+            values = [(schema, attrs[0]["diagnostic_value"])] if encoding == 2 else re.findall(
+                r"([A-Za-z_][A-Za-z_0-9.]*)=([^\s]+)", payload)
         for i, (key, value) in enumerate(values):
             _insert(db, "observation_field", report_id=rid, ordinal=i, key=key, value_exact=value)
         if source in ("cpu-detail", "wait-detail") and ("qualified", "0") in values:
             _insert(db, "qualification", bundle_id=bid, scope="endpoint-clock:" + str(rid),
                     status="unqualified", details_json=encoded({"reason": "endpoint bracket"}))
+        if schema == "pe-pc-sample-v1":
+            _insert(db, "qualification", bundle_id=bid, scope="pe-sample-clock:" + str(rid),
+                    status="unqualified", details_json=encoded({
+                        "reason": "QPC sample bracket has no native clock mapping",
+                        "native_timestamp": "report-received", "source_clock": "QPC"}))
+        if schema in ("dxmt9-structural-json-v1", "dxmt9-structural-csv-v1"):
+            _direct_structure(db, rid, schema, payload)
         if schema == "dxmt9-artifact-v1":
             path = safe_path(Path(payload))
             if path not in artifacts:

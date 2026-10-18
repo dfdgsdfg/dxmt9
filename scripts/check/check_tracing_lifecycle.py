@@ -128,7 +128,39 @@ def main() -> int:
     require(actual_files == expected_files,
             f"lifecycle counterexample inventory drifted: {sorted(actual_files)!r}")
 
+    transport = read(ROOT / "src/dxmt9/tracing/batch_transport.hpp")
+    transport_test = read(ROOT / "tests/native/backend/tracing_batch_transport_spec.cpp")
+    transport_model = read(TLA_DIR / "TracingBatchTransport.tla")
+    transport_cfg = read(TLA_DIR / "TracingBatchTransport.cfg")
+    for name in ("Free", "ProducerOwned", "Published", "ConsumerOwned"):
+        require(name in transport and f'"{name}"' in transport_model,
+                f"batch ownership state {name} lost its model/code binding")
+    for operation in ("configure", "append", "request_partials", "close_partials", "drain"):
+        require(f"transport.{operation}(" in transport_test,
+                f"native transport fixture no longer exercises {operation}")
+    for fragment in ("State::Published, std::memory_order_release",
+                     "State::ConsumerOwned", "std::memory_order_acquire",
+                     "State::Free, std::memory_order_release",
+                     "generation != generation_"):
+        require(fragment in transport, f"batch publication binding lost {fragment}")
+    for suffix, invariant in (
+            ("early-publication", "NoUninitializedRead"),
+            ("early-recycle", "NoRecycleBeforePersistence"),
+            ("live-reuse", "NoLiveGenerationReuse")):
+        require(f"INVARIANT {invariant}" in transport_cfg,
+                f"batch model omits {invariant}")
+        cfg = read(TLA_DIR / f"TracingBatchTransport.{suffix}.counterexample.cfg")
+        require(f"INVARIANT {invariant}" in cfg,
+                f"batch counterexample no longer targets {invariant}")
+    require("persistBatch" in transport_test and "mayRearmDiagnostic" in transport_test,
+            "slow/failed persistence and retained-owner fixture are missing")
+    controller = read(ROOT / "src/dxmt9/dxmt9_trace.cpp")
+    for fragment in ("persistBatch(events", "mayRearmDiagnostic", "controller_done", "drain_done", "decideDiagnosticCompletion", "outcome.compare_exchange_strong",
+                     "lockDiagnosticBefore(lock, deadline)", "stop_waiters", "finish_async_drain"):
+        require(fragment in controller, f"retained diagnostic deadline owner lost {fragment}")
+
     print("tracing lifecycle model/code binding structure: PASS")
+
     return 0
 
 

@@ -7,6 +7,7 @@
 // in host-compilable pure functions and is pinned here.
 
 #include "d3d9_pe_thread_sampler.hpp"
+#include "d3d9_pe_trace.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -334,6 +335,24 @@ bool testHzClamp() {
   return ok;
 }
 
+bool testRawSampleWireFields() {
+  Dxmt9PeRawSample sample{11u, 22u, 33u, 44u, 55u, 66u, 77u, 88u,
+                          99u, 3u, 12u, 8u, 1u, 2u, 0u, 4u};
+  const auto fields = dxmt9PeRawSampleFields(sample);
+  bool ok = check(fields.size() == 17u && fields[0] == 1u,
+                  "raw PE sample wire has fixed schema version and 17 fields");
+  ok &= check(fields[1] == 11u && fields[2] == 22u && fields[3] == 33u &&
+                  fields[4] == 44u && fields[5] == 55u,
+              "raw PE sample preserves ordinal and target incarnation");
+  ok &= check(fields[6] == 66u && fields[7] == 77u && fields[8] == 88u &&
+                  fields[9] == 99u && fields[10] == 3u,
+              "raw PE sample preserves source QPC bracket, PC, and outcome");
+  ok &= check(fields[11] == 12u && fields[12] == 8u && fields[13] == 1u &&
+                  fields[14] == 2u && fields[15] == 0u && fields[16] == 4u,
+              "raw PE sample preserves population and failure counters");
+  return ok;
+}
+
 }  // namespace
 
 int main() {
@@ -344,6 +363,7 @@ int main() {
   testSelfPcCaptureAtLoadCap();
   testDeterministicTieBreaks();
   testHzClamp();
+  testRawSampleWireFields();
   if (failures != 0) {
     std::cerr << failures << " check(s) failed\n";
     return 1;

@@ -69,3 +69,5 @@ framegraph_observe_spec = executable(
 
 test('dxmt9-render-framegraph-observe-spec', framegraph_observe_spec,
      env: dxmt9_native_test_env)
+test('dxmt9-render-framegraph-structural-report-spec', framegraph_observe_spec,
+  args: ['--trace-structural'], env: dxmt9_native_test_env)

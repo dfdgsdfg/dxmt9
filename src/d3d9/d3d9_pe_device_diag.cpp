@@ -3560,13 +3560,17 @@ void D3D9DeviceImpl::logPeThreadSampler() {
     }
     dxmt9PeThreadSamplerInfoLog(
         "presents=%llu samples=%llu suspend_failures=%llu "
-        "ctx_failures=%llu resume_failures=%llu hz=%u module_table=%u "
+        "ctx_failures=%llu resume_failures=%llu raw_attempts=%llu "
+        "raw_accepted=%llu raw_omitted=%llu hz=%u module_table=%u "
         "selfpc_coverage=1",
         static_cast<unsigned long long>(diagnostics_->peThreadSamplerPresents_),
         static_cast<unsigned long long>(snap.samples),
         static_cast<unsigned long long>(snap.suspendFailures),
         static_cast<unsigned long long>(snap.contextFailures),
         static_cast<unsigned long long>(snap.resumeFailures),
+        static_cast<unsigned long long>(snap.rawAttempts),
+        static_cast<unsigned long long>(snap.rawAccepted),
+        static_cast<unsigned long long>(snap.rawOmitted),
         snap.hz,
         snap.moduleTableReady ? 1u : 0u);
     for (std::size_t i = 0; i < snap.moduleRows; ++i) {

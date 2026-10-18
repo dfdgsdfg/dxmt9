@@ -19,6 +19,7 @@ from scripts.run_apps.tracing_harness import (  # noqa: E402
     atomic_write_json,
     artifact_graph,
     attempt_paths,
+    canonical_digest,
     make_trace_request,
     parent_result_binding,
     seal_trace_manifest,
@@ -60,6 +61,55 @@ class TraceHarnessTests(unittest.TestCase):
         self.assertFalse(request['gpu_timing']['required'])
         self.assertNotIn('pe', request['categories'])
         self.assertNotIn('detail', request['categories'])
+        self.assertEqual(request['transport'], {
+            'mode': 'deferred', 'batch_events': 64,
+            'service_interval_ms': 10, 'transport_events': 16_384,
+        })
+
+    def test_async_transport_is_frozen_in_request_and_validated(self):
+        paths = attempt_paths(Path('/tmp/async-fixture'), 'run')
+        request = make_trace_request(
+            TRACE_PROFILES['timeline'], run_id='run', attempt_id='attempt', paths=paths,
+            drain_mode='async', batch_events=32, service_interval_ms=7,
+            transport_events=2048,
+        )
+        frozen = {key: value for key, value in request.items() if key != 'config_sha256'}
+        self.assertEqual(request['config_sha256'], canonical_digest(frozen))
+        self.assertEqual(request['transport'], {
+            'mode': 'async', 'batch_events': 32,
+            'service_interval_ms': 7, 'transport_events': 2048,
+        })
+        with self.assertRaises(ValueError):
+            make_trace_request(
+                TRACE_PROFILES['timeline'], run_id='run', attempt_id='attempt', paths=paths,
+                drain_mode='streaming',
+            )
+        with self.assertRaises(ValueError):
+            make_trace_request(
+                TRACE_PROFILES['timeline'], run_id='run', attempt_id='attempt', paths=paths,
+                batch_events=4097,
+            )
+        with self.assertRaises(ValueError):
+            make_trace_request(
+                TRACE_PROFILES['timeline'], run_id='run', attempt_id='attempt', paths=paths,
+                batch_events=64, transport_events=255,
+            )
+
+    def test_trace_only_collectors_do_not_require_legacy_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = attempt_paths(Path(temporary), 'trace-only')
+            paths['root'].mkdir(parents=True)
+            environment = {'DXMT9_CPU_SUPPLY_TRACE': 'perfetto',
+                           'DXMT9_WAIT_TRACE': 'perfetto'}
+            manifest = {'run_id': 'trace-only', 'attempt_id': 'attempt',
+                        'runtime': {'env_snapshot': environment}}
+            sealed = seal_trace_manifest(paths, manifest)
+            self.assertEqual(sealed['observations']['status'], 'published')
+            self.assertEqual(sealed['observations']['normalization_errors'], [])
+            with sqlite3.connect(paths['observations']) as db:
+                runtime = json.loads(db.execute(
+                    "SELECT value_json FROM provenance WHERE key='runtime'").fetchone()[0])
+                self.assertEqual(runtime['env_snapshot'], environment)
 
     def test_malformed_supplement_keeps_failed_queryable_attempt(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -413,6 +463,65 @@ class TraceHarnessTests(unittest.TestCase):
             rejected = verify_engine_receipt(paths["receipt"], request, paths["pftrace"])
             self.assertFalse(rejected["qualified"])
             self.assertIn("receipt_mismatch:config_sha256", rejected["errors"])
+
+    def test_async_receipt_binds_transport_and_raw_spool(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = attempt_paths(Path(temporary), "async-run")
+            paths["root"].mkdir(parents=True)
+            paths["pftrace"].write_bytes(b"trace")
+            raw_path = Path(str(paths["pftrace"]) + ".raw.jsonl")
+            raw_path.write_text('{"schema":"dxmt9.trace.raw.v1"}\n')
+            spool_path = Path(str(raw_path) + ".spool")
+            spool_path.write_bytes(b"owned raw spool")
+            request = make_trace_request(
+                TRACE_PROFILES["timeline"], run_id="async-run", attempt_id="async-attempt",
+                paths=paths, drain_mode="async", transport_events=2048,
+            )
+            proof_path = Path(str(paths["receipt"]) + ".completion.json")
+            receipt = {
+                "schema": "dxmt9.trace.receipt.v1", "run_id": "async-run",
+                "attempt_id": "async-attempt", "profile_id": "timeline",
+                "config_sha256": request["config_sha256"], "status": "complete",
+                "generation": "7", "proof_required": True,
+                "completion_proof": {"path": str(proof_path), "required": True,
+                                     "publication": "after-decision-outside-budget"},
+                "transport": dict(request["transport"]), "window": {"closed": True},
+                "categories_resolved": request["categories"],
+                "applicability": {name: {"status": "observed", "count": 0}
+                                  for name in request["required_categories"]},
+                "counts": {"engine": 12}, "loss": {"engine": 0},
+                "flush": {"status": "complete"},
+                "artifact": {"path": str(paths["pftrace"]), "bytes": 5,
+                             "sha256": sha256_file(paths["pftrace"])},
+                "raw_artifact": {"path": str(raw_path), "bytes": raw_path.stat().st_size,
+                                 "sha256": sha256_file(raw_path)},
+                "raw_spool_artifact": {
+                    "path": str(spool_path), "bytes": spool_path.stat().st_size,
+                    "sha256": sha256_file(spool_path),
+                },
+            }
+            paths["receipt"].write_text(json.dumps(receipt))
+            proof_path.write_text(json.dumps({
+                "schema": "dxmt9.trace.completion.v1", "run_id": "async-run",
+                "attempt_id": "async-attempt", "config_sha256": request["config_sha256"],
+                "generation": "7", "status": "complete", "completed_ns": "10",
+                "deadline_ns": "10", "candidate_receipt_sha256": sha256_file(paths["receipt"]),
+            }))
+            self.assertTrue(verify_engine_receipt(
+                paths["receipt"], request, paths["pftrace"]
+            )["qualified"])
+            proof = json.loads(proof_path.read_text())
+            proof["completed_ns"] = "11"
+            proof_path.write_text(json.dumps(proof))
+            late = verify_engine_receipt(paths["receipt"], request, paths["pftrace"])
+            self.assertIn("completion_proof_deadline_exceeded", late["errors"])
+            proof["completed_ns"] = "10"
+            proof_path.write_text(json.dumps(proof))
+            receipt["transport"]["transport_events"] = 1024
+            paths["receipt"].write_text(json.dumps(receipt))
+            rejected = verify_engine_receipt(paths["receipt"], request, paths["pftrace"])
+            self.assertIn("receipt_mismatch:transport", rejected["errors"])
+            self.assertIn("completion_proof_candidate_digest_mismatch", rejected["errors"])
 
     def test_receipt_rejects_loss_even_when_workload_trace_exists(self):
         with tempfile.TemporaryDirectory() as temporary:

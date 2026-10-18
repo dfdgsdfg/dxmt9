@@ -31,6 +31,7 @@
 #include "../../../src/dxmt9/framegraph/fg_debug_export.hpp"
 #include "../../../src/dxmt9/render/dag_observer.hpp"
 #include "../../../src/dxmt9/render/traditional_backend.hpp"
+#include "../../../src/util/diagnostic_report.hpp"
 #include "../framegraph/arena_payload_fixture.hpp"
 
 #include <unistd.h>  // mkdtemp, rmdir
@@ -49,6 +50,16 @@
 #include <vector>
 
 namespace {
+
+std::vector<std::string> structuralReports;
+bool structuralTestMode = false;
+void captureDiagnostic(const char* schema, std::string_view data,
+                       bool truncated) noexcept {
+  if (schema && std::string_view(schema) == "dxmt9-structural-json-v1" &&
+      !truncated) {
+    structuralReports.emplace_back(data);
+  }
+}
 
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::ClearDesc;
@@ -311,6 +322,14 @@ void testDefaultPathIsNoOp(const std::string& probeDir) {
   // gated now). Must not throw.
   backend.observer().observeAndExport(slot);
 
+  if (structuralTestMode) {
+    check(structuralReports.size() == 2u,
+          "trace-only path publishes pre-opt and post-opt DAG reports");
+    check(contains(structuralReports.front(), "\"structural_kind\": \"framegraph_dag\"") &&
+              contains(structuralReports.front(), "\"chunk_seq_id\": 11"),
+          "trace-only DAG report carries kind and native source identity");
+  }
+
   // Nothing should have been written anywhere we control.
   check(!fileExists(dumpPath(probeDir, 11, 11, "pre-opt")),
         "early-out wrote no pre-opt file");
@@ -339,6 +358,12 @@ void testObserveExportsPreAndPostOptDags(const std::string& dir) {
   check(fileExists(post), "post-opt DAG dump was written");
 
   const std::string preJson = readFile(pre);
+  if (structuralTestMode) {
+    check(structuralReports.size() >= 4u &&
+              structuralReports[2] == preJson &&
+              structuralReports[3] == readFile(post),
+          "dual consumer receives exact canonical JSON written to each file");
+  }
   for (std::string_view key : {"\"frame_id\"", "\"chunk_seq_id\"", "\"stage\"",
                                "\"passes\"", "\"resources\"", "\"edges\""}) {
     check(contains(preJson, key),
@@ -955,7 +980,7 @@ void testDrawsDetailEmittedWithSlotAndFlag() {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   // DEBUG-ONLY per-draw detail opt-in. DXMT9_RENDERER_DUMP_DAG_DRAWS is
   // static-cached on first read (dumpDagDraws()), so set it before any
   // serialize/buildSnapshot runs.
@@ -964,6 +989,24 @@ int main() {
   // R-BACK-39.2 (Task B11): perf counters latch their enable flag once at
   // process start, so opt in before any perf::count* runs.
   setenv("DXMT_PERF_COUNTERS", "1", /*overwrite=*/1);
+  if (argc > 1 && std::string_view(argv[1]) == "--trace-structural") {
+    structuralTestMode = true;
+    setenv("DXMT9_RENDERER_DUMP_DAG", "perfetto", /*overwrite=*/1);
+    dxmt9::diagnostics::consumer.store(captureDiagnostic,
+                                       std::memory_order_release);
+    std::string dir;
+    try {
+      dir = makeTempDir();
+      testDefaultPathIsNoOp(dir);
+      testObserveExportsPreAndPostOptDags(dir);
+      rmdir(dir.c_str());
+    } catch (const TestFailure& failure) {
+      std::cerr << "framegraph_observe_spec structural mode failed: "
+                << failure.what() << '\n';
+      return 1;
+    }
+    return 0;
+  }
 
   std::string dir;
   try {

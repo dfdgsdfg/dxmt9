@@ -490,9 +490,10 @@ paths retain R-HARN-TRACE-4.1. Registration and schema setup occur before the
 measured corridor; exhausted capacity or contention must return observable loss.
 
 **R-HARN-TRACE-16.2** Deferred serialization remains the default. An explicitly
-selected asynchronous mode must hand off owned batches to a unix diagnostic
-worker, which owns Perfetto adaptation, serialization and output. Producers
-must not perform these operations. Trace Processor, SQLite construction and
+selected asynchronous mode must hand off owned batches to unix diagnostic
+owners. The spool worker persists batches during collection; the controller
+owns canonical Perfetto adaptation, serialization and output after close.
+Producers must not perform these operations. Trace Processor, SQLite construction and
 structural parsing remain offline. Existing SDK buffering must be assessed
 before introducing another transport stage; both stages count against budgets.
 

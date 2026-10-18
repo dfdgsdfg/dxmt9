@@ -3,6 +3,7 @@
 #include "observations/endpoint.hpp"
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 
 namespace dxmt9::waittrace {
@@ -11,6 +12,16 @@ inline bool enabled() noexcept {
   static const bool value = [] {
     const auto* v = std::getenv("DXMT9_WAIT_TRACE");
     return v && v[0] && v[0] != '0';
+  }();
+  return value;
+}
+
+// `perfetto` selects the native trace consumer alone. Other nonzero values
+// remain legacy output paths and preserve the historical dual-consumer mode.
+inline bool traceOnly() noexcept {
+  static const bool value = [] {
+    const auto* selection = std::getenv("DXMT9_WAIT_TRACE");
+    return selection && std::strcmp(selection, "perfetto") == 0;
   }();
   return value;
 }

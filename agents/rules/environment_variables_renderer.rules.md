@@ -69,7 +69,8 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 
 | Var | Purpose | Default |
 |---|---|---|
-| `DXMT9_RENDERER_DUMP_DAG` | Directory where DAG files are written as `dag-frame<N>-chunk<seq>-{pre-opt,post-opt}.<fmt>`. When unset, the observer returns early and does not build the Frame Graph. | unset |
+| `DXMT9_RENDERER_DUMP_DAG` | Directory where DAG files are written as `dag-frame<N>-chunk<seq>-{pre-opt,post-opt}.<fmt>`. Set to the exact value `perfetto` to select direct structural reports without creating a file. When unset, the observer returns early unless `_TRACE=1`. | unset |
+| `DXMT9_RENDERER_DUMP_DAG_TRACE` | Exact `1` selects direct canonical DAG JSON reports as `dxmt9-structural-json-v1`, independently of the legacy dump directory. Combine with a directory in `DUMP_DAG` for both consumers. Each JSON report is capped at 12,224 bytes by the diagnostic transport; oversized reports are marked lost and are not partially imported. | `0` |
 | `DXMT9_RENDERER_DUMP_DAG_FORMATS` | Comma list of dump formats: `json`, `dot`, `mermaid`. Unknown tokens are ignored and duplicates are de-duplicated in first-seen order. | `json` |
 | `DXMT9_RENDERER_DUMP_DAG_FRAME` | Optional 1-based inter-present frame filter. Positive `N` dumps only frame `N` unless a radius is also set. Unset, empty, `0`, or non-numeric values mean unfiltered. | unset |
 | `DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS` | Non-negative radius around `DXMT9_RENDERER_DUMP_DAG_FRAME`; `N=50,R=2` dumps frames `48..52` with the low end clamped to `1`. | `0` |

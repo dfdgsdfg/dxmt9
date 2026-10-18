@@ -70,6 +70,7 @@ void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
   // representation.
   const std::string contents =
       framegraph::serializeDagJson(fg, seqId, stage, payload);
+  framegraph::publishDagJsonReport(contents);
   dxmt9::diagnostics::OutputFile out(path, std::ios::out | std::ios::trunc | std::ios::binary);
   if (out.is_open()) {
     out << contents;  // best-effort: never fail a render on an unwritable dir.
@@ -223,7 +224,7 @@ void DagObserver::observeAndExport(
   // command stream stays byte-identical to a disabled run on BOTH backends. The
   // frame counter is NOT advanced here: with no dump dir there is nothing to
   // scope by frame.
-  if (!framegraph::dumpDagDir().has_value()) {
+  if (!framegraph::dumpDagSelected()) {
     return;
   }
 

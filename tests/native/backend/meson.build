@@ -1777,6 +1777,7 @@ test('dxmt9-wait-trace-spec', python3,
   args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wait_trace.py'),
          wait_trace_spec.full_path(),
          join_paths(meson.project_source_root(), 'scripts/tools/summarize_wait_trace.py')],
+  depends: wait_trace_spec,
   env: dxmt9_native_test_env)
 
 cpu_supply_trace_spec = executable(
@@ -1787,7 +1788,8 @@ cpu_supply_trace_spec = executable(
 )
 test('dxmt9-cpu-supply-trace-spec', python3,
   args: [join_paths(meson.project_source_root(), 'tests/scripts/test_cpu_supply_trace.py'),
-         cpu_supply_trace_spec.full_path()], env: dxmt9_native_test_env)
+         cpu_supply_trace_spec.full_path()], depends: cpu_supply_trace_spec,
+  env: dxmt9_native_test_env)
 
 cpu_ready_early_prefix_spec = executable(
   'dxmt9-cpu-ready-early-prefix-spec',
@@ -2266,6 +2268,19 @@ shared_diagnostic_spec = executable(
   include_directories: [dxmt9_inc, include_directories('../../../src')],
 )
 test('dxmt9-shared-diagnostic-spec', shared_diagnostic_spec)
+
+detail_rows_spec = executable('dxmt9-detail-rows-spec', 'detail_rows_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')])
+test('dxmt9-detail-rows-spec', detail_rows_spec)
+
+value_batch_spec = executable('dxmt9-value-batch-spec', 'value_batch_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')])
+test('dxmt9-value-batch-spec', value_batch_spec)
+
+tracing_batch_transport_spec = executable('dxmt9-tracing-batch-transport-spec',
+  'tracing_batch_transport_spec.cpp', include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: dependency('threads'))
+test('dxmt9-tracing-batch-transport-spec', tracing_batch_transport_spec)
 
 test('dxmt9-shared-diagnostic-store', python3,
   args: [files('../../scripts/test_shared_diagnostic_store.py')])

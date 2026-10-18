@@ -234,12 +234,18 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
         arg->set_name(annotation_name(event.phase, name)); arg->set_string_value(value);
       };
       annotation("diagnostic_schema", event.diagnostic_schema);
-      annotation("diagnostic_display", observations::diagnostic_display(event.diagnostic_payload));
-      annotation("diagnostic_payload", observations::diagnostic_hex(event.diagnostic_payload));
+      annotation("diagnostic_display", event.observation_mode >= 4 ? "typed-u64-le" :
+          observations::diagnostic_display(event.diagnostic_payload));
+      annotation("diagnostic_payload", observations::diagnostic_hex(event.observation_mode >= 4 ?
+          std::string_view(event.diagnostic_payload, std::min<size_t>(event.diagnostic_size, sizeof(event.diagnostic_payload))) :
+          std::string_view(event.diagnostic_payload)));
       annotation("diagnostic_part", std::to_string(event.diagnostic_part));
       annotation("diagnostic_parts", std::to_string(event.diagnostic_parts));
       annotation("diagnostic_encoding", std::to_string(event.observation_mode));
       annotation("diagnostic_value", std::to_string(event.metric_value));
+      observations::expand_typed_fields(event, [&](const std::string& key, const std::string& value) {
+        annotation(key.c_str(), value);
+      });
     }
     if (event.arg0) {
       auto* owner = track_event->add_debug_annotations();
@@ -419,11 +425,30 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
   });
 }
 
+constexpr size_t kExportFlushEvents = 64;
+
+// Canonical export runs only on the cold diagnostic controller. A bounded
+// burst must reach the SDK service before shared-memory producer chunks fill;
+// rendering producers retain the default non-stalling admission policy.
+bool flush_export_batch(perfetto::TracingSession& session,
+                         std::chrono::steady_clock::time_point deadline) {
+  EngineTraceDataSource::Trace([](EngineTraceDataSource::TraceContext context) {
+    context.Flush();
+  });
+  const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+      deadline - std::chrono::steady_clock::now()).count();
+  // FlushBlocking(0) must never turn a sub-millisecond remainder into an
+  // SDK-default wait which escapes this session's absolute deadline.
+  return remaining > 0 && session.FlushBlocking(static_cast<uint32_t>(
+      std::min<int64_t>(remaining, UINT32_MAX)));
+}
+
 bool write_clock_snapshots(
-    std::span<const TraceEvent> events,
+    std::span<const TraceEvent> events, perfetto::TracingSession& session,
     std::chrono::steady_clock::time_point deadline) {
   std::set<uint32_t> clock_ids;
   size_t scanned = 0;
+  size_t emitted = 0;
   for (const TraceEvent& event : events) {
     if (((scanned++) & 0xffu) == 0 &&
         std::chrono::steady_clock::now() >= deadline)
@@ -441,8 +466,11 @@ bool write_clock_snapshots(
       clock->set_timestamp(event.timestamp_ns);
       if (event.clock_id == 3) clock->set_unit_multiplier_ns(1);
     });
+    if (++emitted % kExportFlushEvents == 0 && !flush_export_batch(session, deadline))
+      return false;
   }
-  return std::chrono::steady_clock::now() < deadline;
+  return std::chrono::steady_clock::now() < deadline &&
+      flush_export_batch(session, deadline);
 }
 
 }  // namespace
@@ -502,7 +530,7 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       outgoing_flows[relation.source_record].push_back(relation.relation_id);
       incoming_flows[relation.target_record].push_back(relation.relation_id);
     }
-    if (!write_clock_snapshots(events, deadline)) {
+    if (!write_clock_snapshots(events, *session, deadline)) {
       retain_timed_out_session(session);
       return result;
     }
@@ -534,15 +562,13 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       write_event(event, pid, counter_track,
                   outgoing == outgoing_flows.end() ? no_flows : outgoing->second,
                   incoming == incoming_flows.end() ? no_flows : incoming->second);
+      if (serialized % kExportFlushEvents == 0 &&
+          !flush_export_batch(*session, deadline)) {
+        retain_timed_out_session(session);
+        return result;
+      }
     }
-    EngineTraceDataSource::Trace([](EngineTraceDataSource::TraceContext context) {
-      context.Flush();
-    });
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline ||
-        !session->FlushBlocking(static_cast<uint32_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
-                .count()))) {
+    if (!flush_export_batch(*session, deadline)) {
       // A timed-out session may still be using its data source. Keep the
       // session alive instead of letting its destructor extend finalization
       // past the caller's deadline or race pending SDK work.
@@ -558,6 +584,31 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       return result;
     }
     result.flush_complete = true;
+    struct ReadState {
+      std::promise<void> done;
+      std::vector<char> bytes;
+      bool too_large = false;
+    };
+    auto read_state = std::make_shared<ReadState>();
+    auto read_future = read_state->done.get_future();
+    session->ReadTrace([read_state, max_bytes](auto args) {
+      if (args.size > max_bytes - std::min<size_t>(max_bytes,
+                                                   read_state->bytes.size())) {
+        read_state->too_large = true;
+      } else if (!read_state->too_large && args.size) {
+        read_state->bytes.insert(read_state->bytes.end(), args.data,
+                                 args.data + args.size);
+      }
+      if (!args.has_more) read_state->done.set_value();
+    });
+    if (read_future.wait_until(deadline) != std::future_status::ready) {
+      retain_timed_out_session(session);
+      return result;
+    }
+    if (read_state->too_large || read_state->bytes.empty()) return result;
+    // The SDK increments trace_writer_packet_loss while ReadTrace parses
+    // dropped packet fragments. A pre-read stats query can falsely certify
+    // a capture whose serialized stream already contains packet-loss markers.
     auto stats_promise =
         std::make_shared<std::promise<perfetto::TracingSession::GetTraceStatsCallbackArgs>>();
     auto stats_future = stats_promise->get_future();
@@ -600,28 +651,7 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
          stats.final_flush_outcome() ==
              perfetto::protos::gen::TraceStats_FinalFlushOutcome_FINAL_FLUSH_FAILED))
       return result;
-    struct ReadState {
-      std::promise<void> done;
-      std::vector<char> bytes;
-      bool too_large = false;
-    };
-    auto read_state = std::make_shared<ReadState>();
-    auto read_future = read_state->done.get_future();
-    session->ReadTrace([read_state, max_bytes](auto args) {
-      if (args.size > max_bytes - std::min<size_t>(max_bytes,
-                                                   read_state->bytes.size())) {
-        read_state->too_large = true;
-      } else if (!read_state->too_large && args.size) {
-        read_state->bytes.insert(read_state->bytes.end(), args.data,
-                                 args.data + args.size);
-      }
-      if (!args.has_more) read_state->done.set_value();
-    });
-    if (read_future.wait_until(deadline) != std::future_status::ready) {
-      retain_timed_out_session(session);
-      return result;
-    }
-    if (read_state->too_large || read_state->bytes.empty()) return result;
+
     AtomicArtifact output(path);
     if (!output.open() ||
         !output.write(read_state->bytes.data(), read_state->bytes.size()))

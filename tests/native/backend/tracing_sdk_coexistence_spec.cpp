@@ -166,7 +166,7 @@ std::string facade_request(const std::filesystem::path& trace_path,
   const std::string escaped_receipt = json_escape(receipt_path.string());
   const std::string canonical =
       "{\"attempt_id\":\"coexistence\",\"categories\":" + categories +
-      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,"
+      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":16777216,"
       "\"max_events\":128},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
       escaped_trace + "\",\"receipt\":\"" + escaped_receipt +
       "\"},\"profile_id\":\"sdk-coexistence\",\"question\":\"coexistence\","
@@ -182,7 +182,7 @@ std::string facade_request(const std::filesystem::path& trace_path,
       ",\"required_collectors\":[\"engine-perfetto\"],"
       "\"optional_collectors\":[],\"window\":{\"mode\":\"duration\","
       "\"delay_ms\":0,\"duration_ms\":30000},\"limits\":{\"max_events\":128,"
-      "\"max_bytes\":1048576,\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
+      "\"max_bytes\":16777216,\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
       escaped_trace + "\",\"receipt\":\"" + escaped_receipt +
       "\"},\"config_sha256\":\"" + digest + "\"}";
 }

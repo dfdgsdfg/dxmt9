@@ -242,3 +242,60 @@ cross-builds are not fresh live Wine workload or observer-overhead evidence.
 The larger bounded record and diagnostic capacity partition require matched
 controls before performance-transfer claims. External Instruments/Processor
 Trace/Xcode capture qualification remains independent.
+
+## Independent collectors and batch transport
+
+R-HARN-TRACE-16/17 implementation is recorded by
+[collector independence](collector-independence.md) and
+[asynchronous drain](asynchronous-drain.md). The implementation separates
+acquisition from legacy delivery and uses the original collector gates.
+
+| Contract | Code and executable evidence |
+|---|---|
+| Independent CPU/wait consumers | `dxmt9_cpu_supply_trace.cpp`, `dxmt9_wait_trace.cpp`, `observations/detail_rows.hpp`; typed-row tests and runtime legacy-only/dual/trace-only/unwritable-path modes. |
+| Raw PE samples and final populations | `d3d9_pe_thread_sampler.hpp`, `d3d9_pe_trace.cpp`, `device_c_trace.cpp`, diagnostic ABI v2; sampler field tests, native production receiver rejection tests, x86/x64 compilation and generated ABI fingerprint tests. |
+| One acquired full perf report | `observations/value_batch.hpp`, `dxmt9_perf_counters_report.cpp`; exact unsigned values, copied keys, source mutation, whole-batch overflow and contention tests. |
+| Semantic/structural consumers | `util/log/log.cpp`, framegraph/DAG projection, bounded `StructuredOutputFile`; log filtering independence, trace-only DAG, exact dual parity, failed file output and direct SQL report linkage. |
+| Bounded ownership and completion | `tracing/batch_transport.hpp`, `tracing/session_state.hpp`, `dxmt9_trace.cpp`; partial publication, blocked/failed persistence, exhaustion, stale generation, stop/rearm and deadline decision fixtures. `TracingBatchTransport` adds three deliberate publication/recycle/reuse mutants. |
+| Qualified native and SQL output | `tracing_consumer.py`, `tracing_store.py`, `tracing_harness.py`; named binary fields, exact payloads, QPC qualification, direct structure rows, frozen transport, spool digests and candidate/completion-proof binding. |
+| Workload overhead acceptance | `qualify_trace_observer.py` requires three matched repetitions per mode and numeric budgets frozen before collection. Positive/negative input fixtures pass; fresh workload measurements are not supplied by this evaluator. |
+
+Validation artifacts are retained under ignored
+`experiments/output/independent-trace-collectors/`. SDK-on regression passes
+35/35 and SDK-off passes 31/31. Python tracing contracts pass 81/81,
+shared-store tests 30/30, observer-evidence tests 3/3 and bridge ABI tests 9/9.
+Both PE architectures and the x86_64 unix provider build with generated ABI hash
+`0xd335edebfeb41c3e`; the install-name audit passes. ThreadSanitizer transport
+and writer-admission fixtures pass. TLC completes 72 safety models, 8 progress
+configurations and 181 intended counterexamples.
+
+Native capture checks cover deferred/async with dual, trace-only and failed
+legacy paths, plus separate legacy-only acquisition checks. Each qualified
+capture retains native protobuf, raw JSONL, candidate receipt, terminal proof,
+Trace Processor receipt and immutable SQLite; async also retains the spool.
+The round-trip fixture uses 512-event producer blocks to accommodate its
+contiguous snapshot burst. The default 64-event policy and explicit pool
+exhaustion remain covered by transport fixtures; larger capacity is not an
+overhead improvement claim.
+
+The final eight lanes are retained under `sealed-{deferred,async}-*`, with
+`validation-summary.json` indexing outcomes and validation log hashes. Each of
+the six native/SQL lanes contains 2756 complete shared reports. The two
+legacy-only lanes verify acquisition selection without asserting absent native
+CPU/wait detail. A separate final read-only review found no remaining ownership,
+generation, completion-proof or SDK flush/loss-ordering blocker.
+
+Initial validation exposed SDK packet loss during a burst of thousands of
+counter records. The pinned consumer rejected the missing counters even though
+pre-read SDK statistics had reported no loss. Cold export now flushes every
+64 records within the remaining deadline and checks statistics after `ReadTrace`,
+when the SDK discovers dropped fragments. Failed artifacts and their diagnostics
+remain in the local evidence directory; no checks or loss records were removed.
+
+These are native fixtures and cross-build evidence, not fresh live Wine/Metal
+sampling or overhead qualification. PE raw QPC brackets have no native mapping;
+resume failure stops further output and retains legacy failure counters. A final
+population/report outside trace admission remains legacy evidence. Async mode
+persists a bounded raw spool during collection and exports the canonical native
+timeline after close; it does not provide online Perfetto streaming. SDK service
+and cold export costs remain part of observer qualification.
