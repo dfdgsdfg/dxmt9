@@ -1,6 +1,7 @@
 #include "dxmt9_trace.hpp"
 
 #include "tracing/config.hpp"
+#include "tracing/metrics.hpp"
 #include "tracing/artifact.hpp"
 #include "tracing/perfetto_export.hpp"
 #include "tracing/relations.hpp"
@@ -240,6 +241,7 @@ const char* phase_name(uint8_t phase) {
     case Phase::Instant: return "instant";
     case Phase::Begin: return "begin";
     case Phase::End: return "end";
+    case Phase::Counter: return "counter";
   }
   return "instant";
 }
@@ -275,6 +277,7 @@ const char* event_name(uint16_t event) {
     case EventId::PeChunkCommitBegin: return "pe_chunk_commit_begin";
     case EventId::PeChunkCommitEnd: return "pe_chunk_commit_end";
     case EventId::PeClockCalibration: return "pe_clock_calibration";
+    case EventId::Metric: return "metric";
     default: return "unknown";
   }
 }
@@ -727,9 +730,15 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       if (e.category == static_cast<uint8_t>(Category::Gpu)) out << "null";
       else out << '"' << e.thread_id << '"';
       out
+          << ",\"observation_store\":\"observations.sqlite\""
           << ",\"arg0\":\"" << e.arg0
-          << "\",\"arg1\":\"" << e.arg1 << "\"},\"owner_id\":\""
-          << e.arg0 << "\",\"related_id\":\"" << e.arg1
+          << "\",\"arg1\":\"" << e.arg1 << "\"";
+      if (e.phase == static_cast<uint8_t>(Phase::Counter))
+        out << ",\"counter_value\":\"" << e.metric_value
+            << "\",\"metric_id\":\"" << e.metric_id
+            << "\",\"unit\":\"" << metric_unit(e.metric_id)
+            << "\",\"track_name\":\"" << metric_track_name(e) << "\"";
+      out << "},\"owner_id\":\"" << e.arg0 << "\",\"related_id\":\"" << e.arg1
           << "\",\"uncertainty_ns\":\"" << e.uncertainty_ns
           << "\",\"clock_frequency\":\"" << e.clock_frequency
           << "\",\"source_clock_id\":\"" << e.source_clock_id
@@ -1565,6 +1574,19 @@ bool attach_metal_device(uintptr_t device_handle) noexcept {
   if (!s.gpu_initialized && s.gpu_required)
     report_start_rejection("required Metal GPU trace attachment failed");
   return s.gpu_initialized || !s.gpu_required;
+}
+
+void counter(Category category, Metric metric, uint64_t value,
+             uint64_t owner, uint64_t work) noexcept {
+  if (value > static_cast<uint64_t>(INT64_MAX)) {
+    record_loss(0);
+    return;
+  }
+  (void)emit({.work_id = work, .arg0 = owner, .metric_value = value,
+      .metric_id = static_cast<uint16_t>(metric),
+      .event_id = static_cast<uint16_t>(EventId::Metric),
+      .category = static_cast<uint8_t>(category),
+      .phase = static_cast<uint8_t>(Phase::Counter)});
 }
 
 bool emit(const TraceEvent& input) noexcept {

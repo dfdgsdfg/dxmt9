@@ -9,10 +9,12 @@ tags: [specs, gap, experiments]
 
 ## Detailed performance tracing — partial
 
-[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–11.8.
+[Tracing gaps](harness/tracing/gap.md) own R-HARN-TRACE-1.1–12.6 and R-HARN-8.1.
 CPU supply/wait traces, PE sampling and Metal joins provide existing inputs;
-the required unix-owned Perfetto SDK integration, native trace bundle and
-calibrated cross-source timeline remain unevidenced as an integrated system.
+the unix-owned Perfetto integration has scoped native/Wine evidence. The default
+overview and companion SQLite now share experiment/test provenance; full
+legacy producer replacement and guest coverage beyond the qualified PE
+point-bracket fixture remain open.
 REA-guided target probes and a separate QEMU structural lane have explicit
 acceptance contracts in the
 [tracing spec](harness/tracing/spec.md).

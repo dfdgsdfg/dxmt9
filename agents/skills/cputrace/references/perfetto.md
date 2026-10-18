@@ -145,3 +145,68 @@ remaining clock/coverage/capability limits. Use the
 for the scope of existing qualification. Put durable findings in the owning
 `docs/perfomance/` domain with artifact links; keep bulk captures under ignored
 experiment output directories.
+
+## Default overview and supplemental SQLite
+
+`run_experiment.py run <app-id> --trace` selects `overview`: the engine CPU/wait/
+submission timeline plus optional command-buffer GPU timing. Use `--trace-dry-run`
+to inspect capabilities and paths. `--trace-profile timeline` keeps the CPU-only
+profile; `--trace-profile baseline` disables the integrated trace. Legacy observer
+environment settings remain explicit and must also be disabled for observer-off
+controls. Expensive detail, PE events and encoder-stage GPU timing remain explicit.
+
+Each traced attempt seals `observations.sqlite` before its final manifest. Open
+`engine.pftrace` in Perfetto for the overview. Slice arguments contain
+`observation_store=observations.sqlite` and original `source_record` identities
+(`begin_`/`end_` on paired slices). Resolve the relative database path beside the
+trace, verify its digest in the final manifest, and use the source record to
+query detailed evidence. An absent database is an unresolved link, not empty data.
+
+```sql
+SELECT e.source_record, e.collector, e.record_json
+FROM source_event e JOIN bundle b ON b.id=e.bundle_id
+JOIN artifact a ON a.id=b.artifact_id
+WHERE a.role='engine' AND e.source_record='42';
+
+SELECT t.name, c.ts, c.value_exact, t.unit, k.alignment
+FROM counter c JOIN track t ON t.id=c.track_id
+JOIN clock k ON k.id=c.clock_id;
+
+SELECT r.line_number, r.category, v.key, v.value_exact
+FROM diagnostic_row r JOIN diagnostic_value v ON v.row_id=r.id;
+
+SELECT key, value_json FROM provenance;
+```
+
+This is a companion analysis schema, not a Trace Processor dump or a file that
+Perfetto UI loads directly. `slice.ts`/`counter.ts` retain their declared clock;
+never join timestamps across `clock_id` without validated calibration. A null
+slice duration means a missing endpoint. `value_exact` and source JSON retain
+large integers that SQL floating-point counters cannot represent exactly.
+`qualification` describes normalized source coverage; workload/test outcomes and
+native consumer receipts remain separate provenance. Log metrics without a
+clock stay in `diagnostic_row`/`diagnostic_value`, not synthetic timed counters.
+
+The runner automatically imports selected `DXMT9_CPU_SUPPLY_TRACE` and
+`DXMT9_WAIT_TRACE` files and indexes its workload log. Additional legacy PE logs
+or normalized bundles can be supplied with `--trace-bundle ROLE=PATH`. For opaque
+captures, use `--trace-artifacts PATH` with a JSON list of `role`, `path`, `sha256`
+and optional `collector`. Explicit links additionally name `bundle_role`,
+`event_id` and `evidence`, or owner-scoped `work_id`, `owner_id` and `evidence`.
+Unknown endpoints and digest mismatches reject the evidence product. Directory
+captures use `tracing_store.artifact_identity()`'s `tree-sha256-v1` digest.
+
+For offline conversion or test producers, use the same store directly:
+
+```sh
+scripts/run_python.sh scripts/tools/tracing_store.py \
+  --output observations.sqlite --run-id run-123 --attempt-id attempt-1 \
+  --bundle engine=trace.normalized.json --provenance run-provenance.json
+```
+
+`--provenance` is a JSON object; test producers may include a `test_results`
+name-to-verdict mapping. Archived D3D9 conformance runs already emit this store
+and a hashed `observation-receipt.json`; `--no-archive` explicitly opts out.
+Publication refuses existing outputs. Raw acquisition files, control/receipt
+JSON and opaque capture bundles remain retained evidence; the SQLite file is
+the structured analysis product. Preserve all artifacts needed by its digests.

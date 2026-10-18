@@ -763,3 +763,10 @@ a Mermaid output for roadmap reviews, and provide a nonzero full-support gate
 for release/merge readiness. The full-support gate must pass only when every
 manifest case is `passing`; it must not infer support from local scaffolds or
 partial lane evidence.
+
+**R-TEST-12.22** Archived conformance runs must publish an immutable companion
+SQLite observation store under R-HARN-TRACE-12.2–12.6. It must expose per-test
+verdicts, run/source/staged-build provenance and hashed source artifacts without
+changing legacy verdict JSON. Trace absence must be `not_requested`, never a
+qualified empty timeline. Archive failure must be reported separately from
+the retained test outcomes. `--no-archive` remains an explicit opt-out.

@@ -31,7 +31,13 @@ for global notes.
 | `DXMT9_TRACE_RECEIPT` | Runner-selected receipt destination, bound to the frozen request. A missing or incomplete receipt fails the requested tracing gate independently of workload status. |
 | `DXMT9_TRACE_PE` | Exact value `1` enables bounded PE chunk-boundary batches with QPC and creation identities. The runner sets this only for explicitly requested PE coverage. Disabled paths do not read clocks or cross the bridge. |
 
-Use `run_experiment.py run <app-id> --trace-profile timeline --trace-dry-run`
+Use `run_experiment.py run <app-id> --trace --trace-dry-run`
 to inspect the resolved window and paths. GPU/PE clocks retain their source
 identity until calibration qualifies alignment. See
 [`specs/experiments/harness/tracing/spec.md`](../../specs/experiments/harness/tracing/spec.md).
+
+The default overview emits bounded queue-depth counters without enabling
+`DXMT_TRACE_QUEUE` text output. Explicit queue/progress logs remain available
+for hang diagnostics. Traced experiment attempts index legacy CPU/wait files
+and structured workload-log fields in `observations.sqlite`; see the
+[capture and SQL workflow](../skills/cputrace/references/perfetto.md).

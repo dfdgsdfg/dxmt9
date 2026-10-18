@@ -7,6 +7,49 @@ tags: [specs, experiments, harness, tracing, requirements]
 
 # Detailed Performance Tracing Requirements
 
+## Perfetto-first observation policy
+
+**R-HARN-TRACE-12.1** The default tracing entry point must select a bounded
+Perfetto overview of engine activity. Overview means all available selected
+domains plus explicit coverage/absence, not a claim of whole-process attribution.
+Uninstrumented baseline runs must remain available and must not silently enable
+tracing. Detailed or expensive observers remain explicit profile selections.
+
+**R-HARN-TRACE-12.2** Structured observations not represented by the native
+timeline must have a versioned SQLite analysis surface with Perfetto-style
+track, slice, counter and argument tables where their semantics permit it.
+Native `.pftrace` remains protobuf; a companion SQLite database must not be
+advertised as a native Perfetto trace or as a Trace Processor database dump.
+Unqualified clocks must remain separate and unknown values must remain null.
+
+**R-HARN-TRACE-12.3** Supplemental observations must retain source record,
+artifact digest, collector, run/attempt, identity, clock, unit and qualification.
+Connections to Perfetto must use explicit artifact/event/work identities;
+unproven joins must be recorded as unavailable, never inferred from proximity.
+Opaque captures and bulk payloads may remain files referenced by digest.
+Control requests, immutable acquisition evidence and failure breadcrumbs may
+remain simple files when their lifecycle or external format requires it.
+
+**R-HARN-TRACE-12.4** Migration must preserve counter aggregates, native thread
+CPU versus elapsed time, wait acquisition/state information, sampling
+denominators, capture bounds, loss and existing result consumers. A generic
+counter track must preserve metric identity, unit and exact raw values. Heavy
+observers must not become always-on per-call instrumentation.
+
+**R-HARN-TRACE-12.5** Experiment and test evidence must use the same observation
+store contract. It must retain source/build/runtime/configuration provenance,
+test or workload outcome separately from collector qualification, and hashed
+raw/derived artifact relationships. Publication must be atomic, refuse
+overwrite, and bind the finalized database digest in the parent artifact graph.
+Failed and partial attempts must remain queryable without acquiring a success
+verdict merely because a database was written.
+
+**R-HARN-TRACE-12.6** Acceptance must include SQLite integrity and foreign-key
+checks, exact large-identity preservation, partial scope/unknown clock fixtures,
+missing/malformed supplemental input, collision and tamper rejection, and
+native counter round trips through the pinned Trace Processor. Observer-on/off
+and live runtime performance qualification remain separate evidence gates.
+
 This is a cross-domain tracing contract under the existing
 [harness requirements](../requirements.md), not an eighth harness domain.
 It adds measurement interpretation contracts to the parent's artifact

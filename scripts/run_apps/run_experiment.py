@@ -967,7 +967,7 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
     trace_profile = TRACE_PROFILES.get(trace_profile_name) if trace_profile_name else None
     if trace_profile_name and trace_profile is None:
         raise ValueError(f"unknown trace profile {trace_profile_name!r}")
-    if trace_profile is not None and trace_profile.name not in ("timeline", "gpu-detail") and (
+    if trace_profile is not None and trace_profile.name not in ("overview", "timeline", "gpu-detail") and (
         getattr(args, "trace_include_pe", False)
         or getattr(args, "trace_include_metal", False)
         or getattr(args, "trace_detail", False)
@@ -976,7 +976,23 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         or getattr(args, "trace_gpu_level", None) is not None
         or getattr(args, "trace_gpu_capacity", None) is not None
     ):
-        raise ValueError("trace window and source options require --trace-profile timeline or gpu-detail")
+        raise ValueError("trace window and source options require overview, timeline or gpu-detail")
+    supplemental_bundles = []
+    for spec in getattr(args, "trace_bundle", []):
+        role, separator, path = spec.partition("=")
+        if not separator or not role or not path or role == "engine":
+            raise ValueError("--trace-bundle requires a non-engine ROLE=PATH")
+        supplemental_bundles.append({"role": role, "path": str(Path(path).absolute())})
+    supplemental_artifacts = []
+    if getattr(args, "trace_artifacts", None):
+        supplemental_artifacts = json.loads(args.trace_artifacts.read_text())
+        if not isinstance(supplemental_artifacts, list) or any(
+            not isinstance(row, dict) or not row.get("sha256")
+            for row in supplemental_artifacts
+        ):
+            raise ValueError("--trace-artifacts requires a list of hashed artifact references")
+    if trace_profile is None and (supplemental_bundles or supplemental_artifacts):
+        raise ValueError("supplemental observations require --trace")
     trace_run_id = uuid.uuid4().hex if trace_profile is not None else None
     effective_trace_timeout = (
         getattr(args, "timeout", None)
@@ -1003,17 +1019,17 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             elif trace_duration_ms > 1_800_000:
                 trace_window_error = "trace duration exceeds the frozen 30 minute profile bound"
     gpu_requested = bool(
-        trace_profile is not None and trace_profile.name == "gpu-detail"
+        trace_profile is not None and trace_profile.name in ("overview", "gpu-detail")
     ) or bool(getattr(args, "trace_include_metal", False))
     gpu_level = getattr(args, "trace_gpu_level", None) or "command-buffer"
     requested_gpu_capacity = getattr(args, "trace_gpu_capacity", None)
     gpu_capacity = 256 if requested_gpu_capacity is None else requested_gpu_capacity
     if (trace_profile is not None and getattr(args, "trace_gpu_level", None)
             and not gpu_requested):
-        trace_window_error = "--trace-gpu-level requires gpu-detail or --trace-include-metal"
+        trace_window_error = "--trace-gpu-level requires overview, gpu-detail or --trace-include-metal"
     if (trace_profile is not None and getattr(args, "trace_gpu_capacity", None) is not None
             and not gpu_requested):
-        trace_window_error = "--trace-gpu-capacity requires gpu-detail or --trace-include-metal"
+        trace_window_error = "--trace-gpu-capacity requires overview, gpu-detail or --trace-include-metal"
     if gpu_requested and (gpu_capacity < 1 or gpu_capacity > 256):
         trace_window_error = "GPU timing capacity must be between 1 and 256"
     if getattr(args, "trace_dry_run", False):
@@ -1057,6 +1073,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "request": request, "runtime": resolved_runtime,
             "observer_config": launch_trace_config,
             "source": source, "will_launch": False,
+            "supplemental_bundles": supplemental_bundles,
+            "supplemental_artifacts": supplemental_artifacts,
         }, indent=2, sort_keys=True))
         return 0 if trace_profile.supported and preflight_error is None else 2
     blockers = catalogue_blockers(app)
@@ -1155,6 +1173,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 for name in trace_profile.optional_collectors
             ],
             "artifacts": [],
+            "supplemental_bundles": supplemental_bundles,
+            "supplemental_artifacts": supplemental_artifacts,
         }
         if trace_request is not None:
             atomic_write_json(trace_paths["request"], trace_request)
@@ -1831,11 +1851,31 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
 
         result["status"] = "pass" if not result["failures"] else "fail"
         if trace_manifest is not None and trace_paths is not None:
+            trace_manifest["workload_outcome"] = {
+                "status": "fail" if any(f.get("type") != "trace_qualification"
+                                         for f in result["failures"]) else "pass",
+                "returncode": result.get("returncode"), "timed_out": timed_out,
+            }
+            trace_manifest["supplemental_artifacts"].append({
+                "role": "workload-log", "path": str(log_path), "sha256": sha256_file(log_path),
+                "format": "dxmt9-log", "collector": "workload-stdout-stderr",
+                "reason": "acquisition transcript and failure breadcrumbs",
+            })
+            trace_manifest["test_provenance"] = {
+                "producer": "run_experiment", "catalogue_sha256": sha256_file(CATALOGUE_PATH),
+                "failures": result["failures"], "staged_build": result.get("staged_build"),
+            }
             sealed = seal_trace_manifest(trace_paths, trace_manifest)
             result.setdefault("trace", {}).update(sealed)
+            if sealed["observations"]["status"] == "partial":
+                result["trace"]["qualified"] = False
+                result["trace"]["status"] = "failed"
+                result["failures"].append({"type": "observation_store", "errors":
+                                           sealed["observations"]["normalization_errors"]})
+                result["status"] = "fail"
             result["trace"].update(parent_result_binding(
                 run_id=trace_run_id or "", attempt_id=trace_attempt_id or "",
-                workload_status=result["status"],
+                workload_status=trace_manifest["workload_outcome"]["status"],
                 trace_qualified=bool(result.get("trace", {}).get("qualified")), sealed=sealed,
             ))
         result_path.write_text(json.dumps(result, indent=2, sort_keys=True))
@@ -1940,13 +1980,17 @@ def main() -> int:
     run_parser = subparsers.add_parser("run", help="Run one experiment")
     run_parser.add_argument("name", help="Catalogue entry name")
     run_parser.add_argument(
-        "--trace-profile", choices=tuple(TRACE_PROFILES),
-        help="Freeze and record a tracing profile for this unique run attempt.",
+        "--trace-profile", "--trace", nargs="?", const="overview", choices=tuple(TRACE_PROFILES),
+        help="Capture a bounded Perfetto overview (CPU and available GPU by default); baseline disables the integrated trace.",
     )
     run_parser.add_argument(
         "--trace-dry-run", action="store_true",
         help="Print the resolved tracing request and artifact paths without launching.",
     )
+    run_parser.add_argument("--trace-bundle", action="append", default=[], metavar="ROLE=PATH",
+                            help="Normalize supplemental CPU/wait/PE evidence into the attempt SQLite store.")
+    run_parser.add_argument("--trace-artifacts", type=Path,
+                            help="JSON list of supplemental artifact digests and explicit event/work links.")
     run_parser.add_argument("--trace-duration-ms", type=int,
                             help="Override the bounded trace window duration in milliseconds.")
     run_parser.add_argument("--trace-delay-ms", type=int, default=0,

@@ -64,6 +64,11 @@ class TraceProfile:
 
 _COARSE_CATEGORIES = ("import", "replay", "queue", "encode", "wait", "submit", "completion")
 TRACE_PROFILES: dict[str, TraceProfile] = {
+    "overview": TraceProfile(
+        "overview", "Overview of engine CPU, waits, submission and available GPU timing",
+        ("engine-perfetto",), ("pe-events", "metal-timing"),
+        _COARSE_CATEGORIES, "duration", 1_000_000, 134_217_728, 30_000, True,
+    ),
     "baseline": TraceProfile(
         "baseline", "Workload timing without detailed tracing", (), (), (),
         "none", 0, 0, 0, True,
@@ -260,12 +265,14 @@ def attempt_paths(output_dir: Path, run_id: str) -> dict[str, Path]:
         "request": root / "trace-request.json",
         "receipt": root / "trace-receipt.json",
         "pftrace": root / "engine.pftrace",
+        "observations": root / "observations.sqlite",
     }
 
 
 def artifact_graph(paths: dict[str, Path]) -> list[dict[str, Any]]:
     """Return the content-addressed graph of artifacts available at seal time."""
     candidates = (
+        ("observations-sqlite", paths["observations"]),
         ("request", paths["request"]),
         ("receipt", paths["receipt"]),
         ("engine-trace", paths["pftrace"]),
@@ -286,8 +293,73 @@ def artifact_graph(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return graph
 
 
+def publish_observations(paths: dict[str, Path], manifest: dict[str, Any]) -> dict[str, Any]:
+    """Preserve even failed attempts in a cold-path, immutable analysis store."""
+    from scripts.tools.tracing_store import publish_store, MAX_INPUT_BYTES, safe_path
+    from scripts.tools.tracing_normalize import adapt
+
+    run_id = manifest.get("run_id", paths["root"].name)
+    attempt_id = manifest.get("attempt_id", run_id)
+    bundles = []
+    artifacts = []
+    errors = []
+    engine = paths["root"] / "normalized-bundle.json"
+    if not engine.exists():
+        engine = Path(str(paths["pftrace"]) + ".raw.jsonl")
+    sources = [("engine", engine)] if engine.exists() else []
+    environment = manifest.get("runtime", {}).get("env_snapshot", {})
+    for key, role in (("DXMT9_CPU_SUPPLY_TRACE", "cpu-supply"),
+                      ("DXMT9_WAIT_TRACE", "wait-trace")):
+        value = environment.get(key)
+        if value and value != "0":
+            sources.append((role, Path(value)))
+    sources.extend((row["role"], Path(row["path"]))
+                   for row in manifest.get("supplemental_bundles", []))
+    for role, source in sources:
+        try:
+            safe_path(source)
+            if source.stat().st_size > MAX_INPUT_BYTES:
+                raise ValueError("input exceeds observation byte budget")
+            adapt(source, "auto", run_id=run_id, process_incarnation="unknown")
+            bundles.append((role, source))
+        except (OSError, ValueError) as exc:
+            errors.append({"role": role, "path": str(source), "error": str(exc)})
+        # Preserve failed input evidence without pretending it yielded events.
+        artifacts.append({"role": role + "-source", "path": str(source),
+                          "required": False, "reason": "immutable acquisition evidence"})
+    for row in artifact_graph(paths):
+        if row["role"] != "observations-sqlite":
+            artifacts.append(row)
+    artifacts.extend(manifest.get("supplemental_artifacts", []))
+    provenance = {k: v for k, v in manifest.items()
+                  if k not in ("artifacts", "observations", "sealed")}
+    provenance["normalization_errors"] = errors
+    try:
+        result = publish_store(paths["observations"], run_id=run_id, attempt_id=attempt_id,
+                               provenance=provenance, bundles=bundles, artifacts=artifacts)
+    except (ValueError, OSError) as exc:
+        if paths["observations"].exists():
+            raise
+        errors.append({"role": "store-input", "error": str(exc)})
+        provenance["normalization_errors"] = errors
+        provenance["rejected_inputs"] = artifacts
+        result = publish_store(paths["observations"], run_id=run_id, attempt_id=attempt_id,
+                               provenance=provenance, bundles=[], artifacts=[])
+    result["normalization_errors"] = errors
+    result["status"] = "partial" if errors else "published"
+    return result
+
+
 def seal_trace_manifest(paths: dict[str, Path], manifest: dict[str, Any]) -> dict[str, Any]:
     """Publish the final attempt manifest once and bind its artifact graph."""
+    if paths["manifest"].exists():
+        raise FileExistsError(paths["manifest"])
+    manifest["observations"] = publish_observations(paths, manifest)
+    if manifest["observations"]["normalization_errors"]:
+        manifest.setdefault("qualification", {}).update(
+            status="failed", required_trace_qualified=False,
+            observation_errors=manifest["observations"]["normalization_errors"])
+        manifest["validity"] = {"status": "invalid", "checks": ["observation_store_inputs_failed"]}
     manifest["artifacts"] = artifact_graph(paths)
     manifest["artifact_graph_sha256"] = canonical_digest(manifest["artifacts"])
     manifest["sealed"] = True
@@ -297,6 +369,7 @@ def seal_trace_manifest(paths: dict[str, Path], manifest: dict[str, Any]) -> dic
         "manifest_sha256": sha256_file(paths["manifest"]),
         "artifact_graph_sha256": manifest["artifact_graph_sha256"],
         "artifacts": manifest["artifacts"],
+        "observations": manifest["observations"],
     }
 
 
@@ -322,6 +395,7 @@ def make_trace_request(
     include_detail: bool = False,
     gpu_level: str = "command-buffer", gpu_capacity: int = 256,
 ) -> dict[str, Any]:
+    include_metal = include_metal or profile.name == "overview"
     if gpu_level not in ("command-buffer", "encoder-stage"):
         raise ValueError("GPU timing level must be command-buffer or encoder-stage")
     if isinstance(gpu_capacity, bool) or not isinstance(gpu_capacity, int) or not 1 <= gpu_capacity <= 256:

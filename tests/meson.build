@@ -627,7 +627,7 @@ test('dxmt9-symbolicate-xctrace-pe', python3,
      is_parallel: false)
 
 # Deterministic tracing protocol and pure adapters; GPU runs are explicit.
-foreach tracing_test : ['harness', 'normalize', 'consumer', 'external']
+foreach tracing_test : ['harness', 'normalize', 'consumer', 'external', 'store']
   test('dxmt9-tracing-' + tracing_test, python3,
        args: [join_paths(meson.project_source_root(),
               'tests/scripts/test_tracing_' + tracing_test + '.py')])

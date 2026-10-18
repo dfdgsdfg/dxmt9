@@ -172,6 +172,12 @@ def normalized_bundle():
 
 
 class TracingConsumerTests(unittest.TestCase):
+    def test_counter_csv_decimal_is_exact_and_fractional_is_rejected(self):
+        self.assertEqual(consumer._counter_integer('123456789.000000'),123456789)
+        for invalid in ('1.25','NaN','Infinity'):
+            with self.assertRaises(consumer.ConsumerError):
+                consumer._counter_integer(invalid)
+
     def test_native_annotation_float_formatting_tolerance_is_limited_to_calibration(self):
         row = {"ts": 1, "dur": 2, "name": "gpu", "track_kind": "process",
                "tid": None, "pid": 3, "key": "debug.begin_calibration_scale",

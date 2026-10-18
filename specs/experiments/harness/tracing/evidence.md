@@ -107,3 +107,31 @@ hash recorded above. All six PE captures pass strict normalization and pinned
 Trace Processor; each retains six endpoints and zero loss. This is clock,
 identity, serialization and output qualification for the fixture, not a
 negligible-overhead or general guest-function attribution claim.
+
+## Perfetto-first observation migration
+
+R-HARN-TRACE-12.1–12.6, R-HARN-8.1 and R-TEST-12.22 are implemented by
+`tracing_store.py`, `tracing_harness.py`, `run_experiment.py`,
+`run_d3d9_conformance.py` and the native metric exporter. The default `overview`
+requests optional command-buffer timing; strict GPU detail remains explicit.
+SQLite stores normalized observations, source-line diagnostic fields, test
+verdicts, exact values, source clocks, artifact bindings and provenance.
+
+Deterministic evidence: `test_tracing_store.py`, `test_tracing_harness.py`,
+`test_run_d3d9_conformance.py`, `test_tracing_consumer.py` and
+`tracing_runtime_spec.cpp`. Cases include unknown clocks, clipped scopes, large
+unsigned values, hashed capture directories, malformed/missing supplemental
+inputs, collisions/symlinks, digest mismatch, unknown event links, original
+workload/test failures and native integer-counter CSV decoding.
+
+Local validation artifacts live under
+`experiments/output/perfetto-unification/validation/`. The retained
+`dxmt9-tracing-runtime-13110` capture under the same parent contains 54 native
+records, four counter samples and three typed flows. Its `consumer.json` passes
+pinned Trace Processor v58.2 exact expectations; its companion SQLite retains
+all source records. SDK-off tracing tests pass 18/18; the SDK-on tracing/legacy/conformance set
+passes 22/22; TLA verification passes.
+These are native/fixture and dry-run checks, not fresh Wine workload or observer
+cost qualification. Complete replacement of legacy producers, physical GPU
+sampler sharing and guest attribution beyond the qualified PE point-bracket
+fixture remain open as recorded in gap.md.

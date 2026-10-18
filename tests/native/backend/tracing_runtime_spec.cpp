@@ -113,6 +113,10 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   assert(enabled());
 
+  counter(Category::Queue, Metric::QueueReady, 0, 88);
+  counter(Category::Queue, Metric::QueueReady, 17, 88);
+  counter(Category::Queue, Metric::QueueReady, 9, 99);
+  counter(Category::Replay, Metric::NativeThreadCpuNs, 123456789, 0);
   const uint64_t base_time = now_ns();
   const uint64_t main_tid = native_thread_id();
   uint64_t peHostBase = 0u;
@@ -295,6 +299,10 @@ int main(int argc, char** argv) {
   assertPeEventTrack(static_cast<uint16_t>(EventId::PeChunkCommitEnd));
   assert(raw_text.find("\"binding_kind\":\"raw_publication\"") !=
          std::string::npos);
+  assert(raw_text.find("\"phase\":\"counter\"") != std::string::npos);
+  assert(raw_text.find("\"counter_value\":\"17\"") != std::string::npos);
+  assert(raw_text.find("queue_ready/owner/99/thread/") != std::string::npos);
+  assert(raw_text.find("observations.sqlite") != std::string::npos);
   assert(raw_text.find("\"phase\":\"begin\"") != std::string::npos);
   assert(raw_text.find("\"phase\":\"end\"") != std::string::npos);
   assert(raw_text.find("\"scope_id\":\"") != std::string::npos);

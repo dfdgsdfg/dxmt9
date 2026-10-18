@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from decimal import Decimal, InvalidOperation
 import hashlib
 import importlib.util
 import io
@@ -237,6 +238,18 @@ def _csv_rows(stdout: str) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(stdout.strip())))
 
 
+def _counter_integer(value: str) -> int:
+    # Trace Processor CSV serializes SQLite REAL counters with a decimal point.
+    # Reject fractional/nonfinite values rather than silently truncating them.
+    try:
+        number = Decimal(value)
+        if not number.is_finite() or number != number.to_integral_value():
+            raise ValueError("counter is not a finite integer")
+        return int(number)
+    except (InvalidOperation, ValueError) as exc:
+        raise ConsumerError(f"invalid integer counter value: {value}") from exc
+
+
 def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
     """Derive exact native SQL expectations from a normalized source bundle."""
     processes = {p["process_id"]: p for p in bundle["processes"]}
@@ -267,6 +280,7 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
     counters: list[dict[str, Any]] = []
     annotation_rows: list[dict[str, Any]] = []
     annotation_fields = {
+        "observation_store": "debug.observation_store",
         "owner_id": "debug.owner_id", "work_id": "debug.work_id",
         "related_id": "debug.related_id", "source_record": "debug.source_record",
         "scope_id": "debug.scope_id", "uncertainty_ns": "debug.uncertainty_ns",
@@ -556,7 +570,7 @@ def qualify_trace(trace: Path, *, tp: Path | None = None,
                        "in_tid": None if r["in_tid"] == "[NULL]" else int(r["in_tid"]),
                        "in_pid": None if r["in_pid"] == "[NULL]" else int(r["in_pid"])}
                       for r in flow_rows],
-        "counter_rows": [{"ts": int(r["ts"]), "value": int(r["value"]),
+        "counter_rows": [{"ts": int(r["ts"]), "value": _counter_integer(r["value"]),
                           "track_name": r["track_name"]} for r in counter_rows],
         "process_track_uuids": sorted(int(r["track_uuid"]) & ((1 << 64) - 1)
                                       for r in process_track_ids),
