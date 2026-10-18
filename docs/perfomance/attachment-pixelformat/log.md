@@ -140,7 +140,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix x8-suppress --frame 
 
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/debug_metal.rules.md` for the full capture/finalize workflow.
+`agents/rules/debug_xcode_metal.rules.md` for the full capture/finalize workflow.
 
 ## Cross-references
 - [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving first-order owner every probe in this domain points back to; the VS-write density / TVB model these texture-write deltas fail to touch.

@@ -15,9 +15,9 @@ root and Python through `scripts/run_python.sh`.
 |---|---|---|
 | How does engine submission relate to GPU command buffers or stages? | Perfetto `gpu-detail` | [Perfetto rules](../../rules/trace_perfetto.rules.md), [GPU recipe](references/perfetto.md) |
 | What GPU/driver activity overlaps the workload? | Metal System Trace `.trace` | [xctrace rules](../../rules/trace_xctrace.rules.md), [Instruments rules](../../rules/trace_instruments.rules.md), [Metal timeline recipe](references/instruments.md) |
-| Which draw, resource or pipeline caused a rendering defect? | Xcode Metal Debugger `.gputrace` | [Metal rules](../../rules/debug_metal.rules.md), [frame capture](references/frame-capture.md) |
+| Which draw, resource or pipeline caused a rendering defect? | Xcode Metal Debugger `.gputrace` | [Metal rules](../../rules/debug_xcode_metal.rules.md), [frame capture](references/frame-capture.md) |
 | Which encoder dominates replay counters? | Xcode counter export and matched replay analysis | [Xcode exports](references/xcode-counters.md), [counter semantics and variance](references/gpu-counters.md) |
-| Is this an API or shader error? | Scoped validation and shader inspection | [Metal rules](../../rules/debug_metal.rules.md), [validation recipe](references/shader-validation.md) |
+| Is this an API or shader error? | Scoped validation and shader inspection | [Metal rules](../../rules/debug_xcode_metal.rules.md), [validation recipe](references/shader-validation.md) |
 
 Load the references for the selected route. `.trace`, `.gputrace`, and `.pftrace`
 are different artifacts; do not substitute one for another or promise that an

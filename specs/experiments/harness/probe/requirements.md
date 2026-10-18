@@ -147,7 +147,7 @@ validity assertion for the restore itself).
 R-HARN-PROBE-4.1 writes its temporary copy into the same directory as
 the file being replaced and publishes it with an atomic rename, never
 an in-place overwrite of the live file. Rationale:
-`agents/rules/debug_metal.rules.md` records that an in-place `cp`
+`agents/rules/debug_xcode_metal.rules.md` records that an in-place `cp`
 onto `wine.real` reproduced `SIGKILL (Code Signature Invalid)` /
 "Taskgated Invalid Signature" even when `codesign --verify` passed
 afterward — the live binary was observably corrupt during the copy

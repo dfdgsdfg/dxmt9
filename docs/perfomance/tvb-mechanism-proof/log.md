@@ -139,7 +139,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix tvb-opaque --frame 6
 
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/debug_metal.rules.md` for the full workflow.
+`agents/rules/debug_xcode_metal.rules.md` for the full workflow.
 
 ## Cross-references
 - [hidden-backend-storage](../hidden-backend-storage/index.md) — supplies the TVB cost model this domain proves; the hidden VS-write bucket is the thing being reduced.

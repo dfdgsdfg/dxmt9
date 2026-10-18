@@ -93,7 +93,7 @@ rather than only the numeric direction (R-HARN-GATE-2.1):
 
 | Flag | Mechanism it proves |
 |---|---|
-| `--require-tvb-mechanism-proof` | Top-N hidden backend write, `VS Buffer Device Memory Bytes Written`, `vs_invocations`, and `gpu_ms` all strictly decrease together — the specific TVB/parameter-buffer-pressure claim `agents/rules/debug_metal.rules.md`'s TVB section describes, not a generic GPU-time win. |
+| `--require-tvb-mechanism-proof` | Top-N hidden backend write, `VS Buffer Device Memory Bytes Written`, `vs_invocations`, and `gpu_ms` all strictly decrease together — the specific TVB/parameter-buffer-pressure claim `agents/rules/debug_xcode_metal.rules.md`'s TVB section describes, not a generic GPU-time win. |
 | `--require-stable-frame-proof` | Composite (below): top row-key set unchanged, top GPU/VS-buffer-write/unexplained-write all decrease, top draw/vertex/triangle drift within a tolerance that defaults to 5% when the caller does not override it (`:1994-1999`). |
 | `--require-cache-opt-apply-proof` | Composite: `--require-stable-frame-proof` plus target-row actual LRU32 miss decrease, VS buffer-write decrease, and VS-invocation decrease — proof that a specific target row's index-cache reorder was actually *applied*, not merely that some row somewhere improved. |
 | `--require-target-index-cache-miss32-decrease` | Generic actual indexed LRU32 miss-estimate telemetry decreased on the target row(s) — the diagnostic-probe shape of cache-locality proof. |
@@ -147,7 +147,7 @@ intended to move." `failed_requirements()` (`:3421-...`) uses the same
 per-check-labeled-failure shape as §3.1's underlying closures
 (`require_derived_decrease`/`require_derived_not_increase`/
 `require_available_derived_not_increase`, `:3431-3460`).
-`agents/rules/debug_metal.rules.md`'s own text states this
+`agents/rules/debug_xcode_metal.rules.md`'s own text states this
 domain's mechanism-naming intent directly: "use gates such as
 `--require-draw-run-records-increase`, ...,  and
 `--require-encode-draw-cpu-decrease` so the intended mechanism is
@@ -309,7 +309,7 @@ default=None, ...)`, and `main()` only evaluates the gate "if
 args.max_cv_pct is not None" (`:291`) — omitting the flag makes this
 script report-only, with no default noise-floor threshold enforced.
 The "5" that appears in
-`agents/rules/debug_metal.rules.md`'s own worked example
+`agents/rules/debug_xcode_metal.rules.md`'s own worked example
 (`--max-cv-pct 5`) is that runbook's own recommended value, passed
 explicitly on the command line; it is not a value this script falls
 back to on its own. This document does not attribute a "typically
@@ -326,7 +326,7 @@ its `--summary-output` CSV or its report Markdown before computing a
 `compare_xcode_dxmt_bottlenecks.py`/`compare_3dmark05_perf_counters.py`
 verdict — verified by `grep -rl "replay_variance"
 scripts/tools/compare_*.py`, which returns no match. A human follows
-`agents/rules/debug_metal.rules.md`'s documented five-step replay
+`agents/rules/debug_xcode_metal.rules.md`'s documented five-step replay
 procedure and judges the CV report by eye before deciding whether to
 trust a small `compare_xcode_dxmt_bottlenecks.py` delta; nothing in
 this domain enforces that ordering in code.
@@ -334,7 +334,7 @@ this domain enforces that ordering in code.
 **A broken citation, noted rather than repeated.** Both this script's
 own docstring (`:8`, "See
 docs/superpowers/specs/2026-06-03-xcode-replay-variance-design.md.")
-and `agents/rules/debug_metal.rules.md`'s "Design:" line cite a
+and `agents/rules/debug_xcode_metal.rules.md`'s "Design:" line cite a
 design document at that path. `find . -iname
 '*replay-variance*'` under `docs/superpowers/` returns no match, and
 `ls docs/superpowers/specs/` lists only three unrelated
@@ -370,7 +370,7 @@ this domain can be invoked with only one side of a comparison.
 
 ### 6.2 The wrapper-level baseline-presence check (R-HARN-GATE-5.2/5.3) belongs to `probe`/`join`, not to this domain
 
-The rule the task brief and `agents/rules/debug_metal.rules.md`
+The rule the task brief and `agents/rules/debug_xcode_metal.rules.md`
 state — "run-level gates require `--baseline-output`" / "Xcode
 comparison gates require `--baseline-joined`" — is implemented in two
 wrapper scripts outside this domain, each with its own flag spelling,

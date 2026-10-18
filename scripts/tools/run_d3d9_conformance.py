@@ -472,7 +472,7 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     # Same-directory temp + atomic rename, never an in-place overwrite. An
     # in-place cp over a Mach-O file inside the live Wine tree has reproduced
     # `SIGKILL (Code Signature Invalid)` even when codesign --verify passed
-    # (see run_with_wine_metal_capture_layer.sh and debug_metal.rules.md),
+    # (see run_with_wine_metal_capture_layer.sh and debug_xcode_metal.rules.md),
     # and any process with the old winemetal_dxmt9.so still mapped can be killed when
     # its pages are invalidated. The PE DLLs above are not Mach-O and are not
     # exposed to this.

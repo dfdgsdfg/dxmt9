@@ -169,7 +169,7 @@ scripts/tools/run_3dmark05_perf_probe.sh` returns no match on
 domain's `summarize_3dmark05_perf.py` can parse
 `[dxmt9-perf-argbuf-payload-delta-source]` lines and always writes
 `3dmark05-perf-argbuf-payload-delta-sources.csv` (§5, §6), but nothing
-in the standard probe recipe (`agents/rules/debug_metal.rules.md`
+in the standard probe recipe (`agents/rules/debug_xcode_metal.rules.md`
 §9) ever sets the one variable
 (`agents/rules/environment_variables_perf.rules.md`'s
 `DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE` row) that would make dxmt9

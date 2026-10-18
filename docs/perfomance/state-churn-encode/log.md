@@ -1899,7 +1899,7 @@ The `[dxmt9-perf-encoder]` / `[dxmt9-perf-encoder-stream]` lines and
 and replay attribution. The exact
 per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/debug_metal.rules.md` for the full workflow.
+`agents/rules/debug_xcode_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

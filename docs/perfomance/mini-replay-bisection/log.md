@@ -282,7 +282,7 @@ python3 scripts/tools/run_3dmark05_mini_replay.py traces/<run>/analysis/mini-rep
 The exact per-experiment flags (draw windows, `--primitive-order` choices,
 `--depth-clear`) live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/debug_metal.rules.md` for the full workflow.
+`agents/rules/debug_xcode_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

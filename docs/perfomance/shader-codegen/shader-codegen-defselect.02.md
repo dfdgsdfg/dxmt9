@@ -24,7 +24,7 @@ frame279). Does the same removal convert there?
 (the `float4 cFloat[256]` copy), candidate `d63f7a65` (pointer alias + ternary
 DEF select) — run against `-gt2`. Scene fps from per-frame `wall_ms` samples
 with `DXMT9_PERF_FRAME_SAMPLING=1`, per
-`agents/rules/debug_metal.rules.md`, which forbids using GT2's
+`agents/rules/debug_xcode_metal.rules.md`, which forbids using GT2's
 presents-at-kill. Plus one `frame279` `.gputrace` and Xcode encoder-counter
 export per lane, 17 encoders each.
 

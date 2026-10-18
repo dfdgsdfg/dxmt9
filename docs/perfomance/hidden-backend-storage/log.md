@@ -571,7 +571,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix hidden-backend --fra
 Cross-capture scaling correlation uses `analyze_vs_buffer_scaling.py`. The exact
 per-experiment flags live in each leaf's `**Method.**` field; see
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/debug_metal.rules.md` for the full workflow.
+`agents/rules/debug_xcode_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

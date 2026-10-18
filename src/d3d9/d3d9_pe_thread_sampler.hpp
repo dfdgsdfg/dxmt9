@@ -6,7 +6,7 @@
 // Instruments only maps translated PCs back to origin images for dyld-known
 // images, and PE modules are not dyld images, so a probe-verified module map
 // still leaves ~93% of the wine game thread's samples as unmapped 64-bit
-// addresses (see agents/rules/debug_metal.rules.md). The working path is
+// addresses (see agents/rules/debug_xcode_metal.rules.md). The working path is
 // to sample the game thread's *true Win32 program counter* from inside the
 // process and classify it against the same module map that
 // DXMT9_PE_MODULE_MAP already builds.

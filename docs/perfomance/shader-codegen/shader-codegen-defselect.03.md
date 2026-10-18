@@ -23,7 +23,7 @@ subject is skinned characters. Do they render, and does SFIV's performance move?
 
 **Method.** Visual gates on the candidate build. GT3: two capture ranges,
 frames `300..1500` step `200` and `2200..2600` step `100`, the second chosen to
-cover the `1:06-1:08` window `agents/rules/debug_metal.rules.md` flags as
+cover the `1:06-1:08` window `agents/rules/debug_xcode_metal.rules.md` flags as
 visually sensitive. SFIV: frames `200..1100` step `300`. SFIV performance was
 then measured separately, without frame capture, on both the candidate and a
 rebuilt `959c848c^` baseline, using `DXMT9_PERF_FRAME_SAMPLING=1`.

@@ -57,5 +57,5 @@ SFIV CB GPU p50 `73 -> 2.4ms`, presents `1,740 -> 5,100`.
 
 - `docs/perfomance/present-pacing/log.md` rows H224-H226 — the full
   attribution chain (variant tails → in-place constant reads).
-- `agents/rules/debug_metal.rules.md` — counter export discipline.
+- `agents/rules/debug_xcode_metal.rules.md` — counter export discipline.
 - `agents/rules/environment_variables_encoder.rules.md` — the trim knobs.

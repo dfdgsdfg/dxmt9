@@ -1,6 +1,6 @@
 # Metal frame capture and inspection
 
-Read [Metal rules](../../../rules/debug_metal.rules.md). Run commands from the repository root; replace placeholder paths and frame numbers. For 3DMark, use [the supervised probe](gt1-probes.md).
+Read [Metal rules](../../../rules/debug_xcode_metal.rules.md). Run commands from the repository root; replace placeholder paths and frame numbers. For 3DMark, use [the supervised probe](gt1-probes.md).
 
 ## Programmatic frame capture (.gputrace)
 `MetalCaptureController` (`src/dxmt9/dxmt9_capture.{hpp,cpp}`) triggers a

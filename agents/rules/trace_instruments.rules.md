@@ -13,7 +13,7 @@ alwaysApply: false
 
 These rules own instrument selection and interpretation. Use
 [xctrace rules](trace_xctrace.rules.md) for CLI collection/export and
-[Metal rules](debug_metal.rules.md) for Xcode's separate Metal frame debugger.
+[Metal rules](debug_xcode_metal.rules.md) for Xcode's separate Metal frame debugger.
 Execution entrypoints are [cputrace](../skills/cputrace/SKILL.md) and
 [gputrace](../skills/gputrace/SKILL.md).
 

@@ -18,7 +18,7 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | `agents/rules/codebase_conventions.rules.md` | Any implementation change — PE/unix/Metal boundary, hot-path DOD shape, span ownership, formatting. |
 | `agents/rules/build.rules.md` | Driving builds — build-dir naming contract, install_name fixup gotcha, ABI lockstep; full guide in `docs/build.md`. |
 | `agents/rules/environment_variables.rules.md` | Any `DXMT*` / `DXMT9*` runtime knob (master list). |
-| `agents/rules/debug_metal.rules.md` | Xcode Metal Debugger: capture-layer, resource, validation and replay-counter constraints. Workflow: `agents/skills/gputrace/SKILL.md`. |
+| `agents/rules/debug_xcode_metal.rules.md` | Xcode Metal Debugger: capture-layer, resource, validation and replay-counter constraints. Workflow: `agents/skills/gputrace/SKILL.md`. |
 | `agents/rules/experiment_3dmark.rules.md` | Running and qualifying 3DMark05/06 scene, CPU, HDR, and result-artifact lanes. |
 | `agents/rules/experiment_sfiv.rules.md` | Running and qualifying the Street Fighter IV benchmark lane. |
 | `agents/rules/rendering_correctness.rules.md` | Stateful rendering optimizations: formal/refinement-first evidence, model-code binding, GPU oracle, and promotion order. |
