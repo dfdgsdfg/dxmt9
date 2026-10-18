@@ -3,6 +3,11 @@
 #include "../../../src/dxmt9/dxmt9_wait_trace.hpp"
 #include "../../../src/dxmt9/tracing/config.hpp"
 
+#include "../../../src/dxmt9/dxmt9_query_poll_observer.hpp"
+#include "../../../src/d3d9/device_c_query_receipt_observer.hpp"
+#include "../../../src/dxmt9/dxmt9_append_diag.hpp"
+#include "../../../src/dxmt9/observations/perf_snapshot.hpp"
+
 #include <CommonCrypto/CommonDigest.h>
 #include <mach/mach_time.h>
 
@@ -59,6 +64,7 @@ dxmt9::tracing::TraceEvent event(uint16_t event_id, uint8_t category,
 int main(int argc, char** argv) {
   using namespace dxmt9::tracing;
   unsetenv("DXMT9_TRACE_CONFIG");
+  setenv("DXMT9_COMPAT_APPEND_DIAGNOSTICS", "2", 1);
   if (argc > 2) return 2;
   const bool preserve_artifacts = argc == 2;
   const auto parent = preserve_artifacts
@@ -83,8 +89,8 @@ int main(int argc, char** argv) {
       "[\"import\",\"replay\",\"queue\",\"encode\",\"wait\",\"submit\",\"completion\",\"pe\"]";
   const std::string canonical =
       "{\"attempt_id\":\"attempt\",\"categories\":" + categories +
-      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":4194304,"
-      "\"max_events\":16384},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
+      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":16777216,"
+      "\"max_events\":65536},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"profile_id\":\"profile\",\"question\":\"runtime-smoke\","
       "\"required_categories\":" + categories +
@@ -100,7 +106,7 @@ int main(int argc, char** argv) {
       ",\"required_collectors\":[\"engine-perfetto\"],"
       "\"optional_collectors\":[],\"window\":{\"mode\":\"duration\","
       "\"delay_ms\":0,\"duration_ms\":30000},"
-      "\"limits\":{\"max_events\":16384,\"max_bytes\":4194304,"
+      "\"limits\":{\"max_events\":65536,\"max_bytes\":16777216,"
       "\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"config_sha256\":\"" + digest + "\"}";
@@ -142,6 +148,43 @@ int main(int argc, char** argv) {
   dxmt9::waittrace::finish(waitRow);
   dxmt9::supply::present(4);
   dxmt9::waittrace::present(4);
+  {
+    namespace backend = dxmt9::query::polldiag;
+    backend::Sample sample;
+    sample.timed = true;
+    sample.last = 100;
+    sample.at(backend::Phase::QueueWait, 137);
+    backend::Totals totals;
+    totals.add(sample, true, dxmt9::query::Poll::Pending);
+    sample.at(backend::Phase::Exit, 1); // Invalid clocks retain census only.
+    totals.add(sample, false, dxmt9::query::Poll::Failed);
+    backend::project(totals, 2);
+    backend::Totals counts;
+    counts.add({}, false, dxmt9::query::Poll::Pending);
+    backend::project(counts, 1);
+    namespace receipt = dxmt9::d3d9::query_receipt_diag;
+    receipt::Sample r;
+    r.timed = true;
+    r.route = receipt::Route::Handled;
+    r.ns[0] = 53;
+    receipt::Totals rt;
+    rt.add(r, 1, 0);
+    receipt::project(rt, 2);
+    dxmt9::perf::CounterSnapshot previous, current;
+    previous.drawCalls = 3;
+    current.drawCalls = 10;
+    previous.commandBuffers = 4; // Regression is explicit, never unsigned wrap.
+    current.commandBuffers = 2;
+    current.encodeDrawCpuNs = 1234;
+    current.renderEncoderGpuLastPso = UINT64_MAX;
+    dxmt9::observations::project_frame(123, previous, current);
+    {
+      dxmt9::append_diag::Scope parent(dxmt9::append_diag::Phase::Batch);
+      dxmt9::append_diag::Scope child(dxmt9::append_diag::Phase::Append);
+    }
+    const auto acquired = dxmt9::append_diag::snapshot();
+    assert(acquired[0].calls == 1 && acquired[2].calls == 1);
+  }
   const uint64_t base_time = now_ns();
   const uint64_t main_tid = native_thread_id();
   uint64_t peHostBase = 0u;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../dxmt9_trace.hpp"
+#include "../observations/metadata.hpp"
 #include <string>
 
 namespace dxmt9::tracing {
@@ -17,15 +18,24 @@ inline const char* metric_name(uint16_t metric) noexcept {
     case Metric::NativeThreadCpuNs: return "native_thread_cpu_ns";
     case Metric::WaitMutexAcquireElapsedNs: return "wait_mutex_acquire_elapsed_ns";
     case Metric::WaitBodyElapsedNs: return "wait_body_elapsed_ns";
+    case Metric::SnapshotCount: return "snapshot_count";
+    case Metric::SnapshotElapsedNs: return "snapshot_elapsed_ns";
+    case Metric::SnapshotIdentity: return "snapshot_identity";
   }
   return "unknown";
 }
 inline const char* metric_unit(uint16_t metric) noexcept {
+  if (metric == static_cast<uint16_t>(Metric::SnapshotCount)) return "count";
+  if (metric == static_cast<uint16_t>(Metric::SnapshotIdentity)) return "id";
   return metric >= static_cast<uint16_t>(Metric::FrameEncodeChunkElapsedNs) ? "ns" : "count";
 }
 // Cold export only. Exact owner and thread identities prevent track aliasing.
 inline std::string metric_track_name(const TraceEvent& event) {
-  return std::string(metric_name(event.metric_id)) + "/owner/" +
+  const std::string name = event.observation_kind >= 3
+      ? std::string(observations::source_name(event.observation_kind)) + "/" +
+          observations::field(event.observation_kind, event.observation_field).name
+      : metric_name(event.metric_id);
+  return name + "/owner/" +
       std::to_string(event.arg0) + "/thread/" + std::to_string(event.track_id);
 }
 }  // namespace dxmt9::tracing

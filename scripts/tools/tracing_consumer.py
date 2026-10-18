@@ -183,12 +183,21 @@ FROM counter c JOIN track tr ON tr.id = c.track_id
 ORDER BY c.ts, c.value, tr.name
 """
 
+OBSERVATION_FIELDS = (
+    "observation_source", "observation_record", "acquisition_version",
+    "observation_timestamp_kind", "observation_field", "observation_value",
+    "observation_unit", "observation_aggregation", "observer_mode", "timing_stride",
+)
+
 OBSERVATION_COUNTER_QUERY = """
 SELECT c.ts, tr.name AS track_name, a.key, a.display_value AS value
 FROM counter c JOIN track tr ON tr.id = c.track_id
 JOIN args a ON a.arg_set_id = c.arg_set_id
 WHERE a.key IN ('debug.observation_source', 'debug.observation_record',
-                'debug.acquisition_version', 'debug.observation_timestamp_kind')
+                'debug.acquisition_version', 'debug.observation_timestamp_kind',
+                'debug.observation_field', 'debug.observation_value',
+                'debug.observation_unit', 'debug.observation_aggregation',
+                'debug.observer_mode', 'debug.timing_stride')
 ORDER BY c.ts, tr.name, a.key, a.display_value
 """
 
@@ -325,10 +334,13 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
         "queue_id": "debug.queue_id",
         "device_generation": "debug.device_generation",
         "lane_id": "debug.lane_id"}
+    annotation_fields.update({key: "debug." + key for key in OBSERVATION_FIELDS})
     include_zero_annotations = {"source_record", "relation_source_id",
                                 "calibration_offset", "calibration_source_first",
                                 "calibration_host_first_ns", "calibration_source_second",
                                 "calibration_host_second_ns"}
+
+    include_zero_annotations.update(OBSERVATION_FIELDS)
 
     def collect_annotations(event: dict[str, Any], row: dict[str, Any],
                             endpoint: str = "") -> None:
@@ -378,8 +390,7 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
                 raise ConsumerError("counter event lacks an exact counter value")
             counters.append({"ts": mapped_ts(event), "value": int(str(value)),
                              "track_name": str(attrs.get("track_name", name))})
-            for key in ("observation_source", "observation_record", "acquisition_version",
-                        "observation_timestamp_kind"):
+            for key in OBSERVATION_FIELDS:
                 if key in attrs:
                     observation_counters.append({"ts": mapped_ts(event),
                         "track_name": str(attrs.get("track_name", name)),
@@ -427,11 +438,19 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
     # Perfetto reports instant slices at the current nesting depth of their
     # track. Include points enclosed by normalized scopes in the expected
     # depth, while leaving process/GPU events on independent tracks alone.
+    coincident_instants: dict[tuple, int] = {}
     for event in bundle["events"]:
         if event.get("kind") != "instant":
             continue
         row = event_slice[event["event_id"]]
         timestamp = mapped_ts(event)
+        # Pinned TP retains zero-duration slices at their timestamp. Successive
+        # instant fields from one snapshot therefore occupy successive depths;
+        # this is viewer layout, not an inferred nesting of measured work.
+        track = (event["process_id"], event["thread_id"],
+                 event.get("track_kind", "thread"), timestamp)
+        row["depth"] += coincident_instants.get(track, 0)
+        coincident_instants[track] = coincident_instants.get(track, 0) + 1
         for begin, end, _ in intervals:
             if (begin["process_id"] == event["process_id"] and
                     begin["thread_id"] == event["thread_id"] and

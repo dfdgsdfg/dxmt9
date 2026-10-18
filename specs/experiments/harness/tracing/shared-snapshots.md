@@ -43,9 +43,11 @@ report and retain a regression census. Latest resource/PSO IDs must preserve
 exact unsigned values without signed-counter truncation.
 
 Each projection captures one generation, native timestamp and source-local
-ordinal reused by all fields. Failure never changes input/legacy aggregates.
-Partial batches/loss invalidate completeness. Query uses wait; frame/append use
-encode. Overview does not enable diagnostic acquisition.
+ordinal reused by all fields. A bounded batch stages all fields and admits them
+under one writer lease; closure, filtering or capacity failure cannot retain a
+partial snapshot. Numeric overflow records generation-qualified loss and drops
+the snapshot. Failure never changes input/legacy aggregates. Query uses wait;
+frame/append use encode. Overview does not enable diagnostic acquisition.
 
 Native and normalized metadata include acquisition_version, observation_source,
 observation_record, observation_timestamp_kind=snapshot-observed, observer mode,

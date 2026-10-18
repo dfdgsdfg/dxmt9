@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util/log/log.hpp"
+#include "../dxmt9/observations/snapshot_sink.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -72,6 +73,21 @@ inline std::uint64_t nowNs() noexcept {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+// Cold value projection: totals already contain the original sampled timings.
+inline void project(const Totals& t, unsigned observerMode) noexcept {
+  if (!tracing::enabled()) return;
+  observations::SnapshotSink sink(observations::Source::QueryReceipt,
+      observerMode, observerMode == 2 ? 64 : 0);
+  std::uint16_t index = 0;
+  auto put = [&](std::uint64_t v) { sink.value(index++, v); };
+  put(t.calls); put(t.flush); put(t.samples); put(t.invalidClocks);
+  for (auto v : t.routes) put(v);
+  for (auto v : t.kinds) put(v);
+  for (auto v : t.results) put(v);
+  for (auto v : t.sampledResults) put(v);
+  for (auto v : t.ns) put(v);
+  for (const auto& row : t.resultNs) for (auto v : row) put(v);
+}
 class Ledger {
  public:
   ~Ledger() { std::lock_guard lock(mutex_); emit(); }
@@ -80,11 +96,13 @@ class Ledger {
            std::optional<std::int32_t> result) noexcept {
     std::lock_guard lock(mutex_);
     totals_.add(s, flags, result);
+    if (totals_.calls == 1) project(totals_, mode());
     if (totals_.calls % 4096 == 0 && reports_ < 64) emit();
   }
  private:
   void emit() noexcept {
     ++reports_;
+    project(totals_, mode());
     const auto u = [](std::uint64_t v) { return static_cast<unsigned long long>(v); };
     util::logf(util::LogLevel::Info, "dxmt9-query-receipt",
         "calls=%llu flush=%llu samples=%llu invalid_clocks=%llu ok=%llu pending=%llu error=%llu fallback=%llu reports=%llu",

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "../dxmt9_trace.hpp"
+#include "metadata.hpp"
 #include <cstdint>
 
 namespace dxmt9::observations {
-enum class Source : std::uint16_t { CpuSupply = 1, Wait = 2 };
 
 // A projection of an existing observation, not a second measurement. Native
 // timestamp denotes the CPU-query start or wait-result observation. Original

@@ -1,4 +1,5 @@
 #include "dxmt9_append_diag.hpp"
+#include "observations/snapshot_sink.hpp"
 #include <atomic>
 #include <chrono>
 #include <cassert>
@@ -44,6 +45,14 @@ Snapshot snapshot() noexcept {
   for (unsigned i = 0; i < result.size(); ++i) {
     result[i] = {counters[i].ns.load(std::memory_order_relaxed),
                  counters[i].calls.load(std::memory_order_relaxed)};
+  }
+  if (mode() && tracing::enabled()) {
+    observations::SnapshotSink sink(observations::Source::CompatAppend, mode(), 0);
+    std::uint16_t index = 0;
+    for (const auto& row : result) {
+      sink.value(index++, row.ns);
+      sink.value(index++, row.calls);
+    }
   }
   return result;
 }

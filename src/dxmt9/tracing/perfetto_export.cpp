@@ -201,7 +201,7 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
     if (event.observation_kind) {
       auto* source = track_event->add_debug_annotations();
       source->set_name("observation_source");
-      source->set_string_value(event.observation_kind == 1 ? "cpu-supply" : "wait");
+      source->set_string_value(observations::source_name(event.observation_kind));
       auto* record = track_event->add_debug_annotations();
       record->set_name("observation_record");
       record->set_uint_value(event.observation_record);
@@ -210,8 +210,21 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
       version->set_uint_value(1);
       auto* semantics = track_event->add_debug_annotations();
       semantics->set_name("observation_timestamp_kind");
-      semantics->set_string_value(event.observation_kind == 1
-          ? "cpu-query-start" : "wait-result-observed");
+      semantics->set_string_value(observations::timestamp_kind(event.observation_kind));
+    }
+    if (event.observation_kind >= 3) {
+      const auto field = observations::field(event.observation_kind, event.observation_field);
+      const auto annotation = [&](const char* name, const std::string& value) {
+        auto* arg = track_event->add_debug_annotations();
+        arg->set_name(name);
+        arg->set_string_value(value);
+      };
+      annotation("observation_field", field.name);
+      annotation("observation_value", std::to_string(event.metric_value));
+      annotation("observation_unit", field.unit);
+      annotation("observation_aggregation", field.aggregation);
+      annotation("observer_mode", std::to_string(event.observation_mode));
+      annotation("timing_stride", std::to_string(event.observation_stride));
     }
     if (event.arg0) {
       auto* owner = track_event->add_debug_annotations();
@@ -478,7 +491,7 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       retain_timed_out_session(session);
       return result;
     }
-    std::map<std::tuple<uint64_t, uint64_t, uint16_t>, uint64_t> counter_tracks;
+    std::map<std::tuple<uint64_t, uint64_t, uint16_t, uint16_t, uint16_t>, uint64_t> counter_tracks;
     std::set<uint64_t> occupied;
     for (const auto& event : events) occupied.insert(event.track_id);
     uint64_t next_counter = UINT64_MAX;
@@ -494,7 +507,8 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       static const std::vector<uint64_t> no_flows;
       uint64_t counter_track = 0;
       if (event.phase == static_cast<uint8_t>(Phase::Counter)) {
-        const auto key = std::make_tuple(event.track_id, event.arg0, event.metric_id);
+        const auto key = std::make_tuple(event.track_id, event.arg0, event.metric_id,
+                                         event.observation_kind, event.observation_field);
         auto found = counter_tracks.find(key);
         if (found == counter_tracks.end()) {
           while (occupied.contains(next_counter)) --next_counter;

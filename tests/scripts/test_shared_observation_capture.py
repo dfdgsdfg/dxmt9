@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as directory:
     bundle = adapt(raw, "auto", run_id="run", process_incarnation="unknown")
     bundle_path = capture / 'normalized.json'
     bundle_path.write_text(json.dumps(bundle))
-    projections = [e for e in bundle['events'] if e['attrs'].get('observation_source')]
+    projections = [e for e in bundle['events'] if e['attrs'].get('observation_source') in ('cpu-supply', 'wait')]
     assert len(projections) == 4, projections
     rows = {}
     for source, name in [('cpu-supply', 'cpu-supply.csv'), ('wait', 'wait.csv')]:
@@ -44,7 +44,8 @@ with tempfile.TemporaryDirectory() as directory:
             assert attrs['observation_timestamp_kind'] == 'wait-result-observed'
     native = qualify_trace(capture / 'trace.pftrace', expected=derive_expected(bundle))
     assert native['verdict'] == 'qualified'
-    assert len(native['queries']['observation_counter_rows']) == 16
+    assert len([r for r in native['queries']['observation_counter_rows']
+                if r['key'] == 'debug.observation_source' and r['value'] in ('cpu-supply', 'wait')]) == 4
     database = capture / 'observations.sqlite'
     publish_store(database, run_id='run', attempt_id='attempt',
                   provenance={'test_results': {'shared-observation': {'status': 'pass'}}},
