@@ -1,5 +1,6 @@
 #pragma once
 
+#include "observations/endpoint.hpp"
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -40,6 +41,7 @@ struct Row {
   std::uint64_t firstFrame = 0, lastFrame = 0, waits = 0;
   Snapshot before{}, after{};
   std::uint64_t traceGeneration = 0;
+  observations::Endpoint beginPoint{}, acquiredPoint{}, endPoint{};
   Site site = Site::Resource;
 };
 
@@ -67,7 +69,8 @@ auto observeWait(std::mutex& mutex, CV& cv, const void* owner,
                  Pending&& pending) noexcept {
   auto row = begin(site, owner, target);
   std::unique_lock lock(mutex);
-  row.acquired = now();
+  row.acquiredPoint = observations::endpoint(row.traceGeneration, now);
+  row.acquired = row.acquiredPoint.source;
   auto value = capture();
   row.before = value.second;
   while (pending(value.first)) {
@@ -78,7 +81,8 @@ auto observeWait(std::mutex& mutex, CV& cv, const void* owner,
   }
   value = capture(); // Preserve the production post-wait terminal recheck.
   row.after = value.second;
-  row.end = now();
+  row.endPoint = observations::endpoint(row.traceGeneration, now);
+  row.end = row.endPoint.source;
   lock.unlock();
   finish(row);
   return value.first;

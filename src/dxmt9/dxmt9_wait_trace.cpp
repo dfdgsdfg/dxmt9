@@ -131,7 +131,8 @@ Row begin(Site site, const void* owner, const void* target) noexcept {
 #elif defined(__linux__)
   r.tid = static_cast<std::uint64_t>(syscall(SYS_gettid));
 #endif
-  r.begin = now();
+  r.beginPoint = observations::endpoint(r.traceGeneration, now);
+  r.begin = r.beginPoint.source;
   return r;
 }
 void finish(Row& row) noexcept {
@@ -144,6 +145,44 @@ void finish(Row& row) noexcept {
     if (i < capacity) {
       s.entries.writable(i) = row;
       s.entries.publish(i);
+      if (row.traceGeneration) {
+        observations::DiagnosticContext c;
+        c.generation = row.traceGeneration; c.record = i + 1; c.work = row.sequence;
+        const bool qualified = row.beginPoint.qualified() && row.acquiredPoint.qualified() &&
+            row.endPoint.qualified() && row.begin == row.beginPoint.source &&
+            row.acquired == row.acquiredPoint.source && row.end == row.endPoint.source &&
+            row.begin <= row.acquired && row.acquired <= row.end &&
+            row.beginPoint.after <= row.acquiredPoint.before &&
+            (row.acquiredPoint.after <= row.endPoint.before ||
+             row.acquiredPoint.source == row.endPoint.source);
+        char details[2048]{};
+        const auto written = std::snprintf(details, sizeof(details),
+            "owner=%llu target=%llu query=%llu queue=%llu sequence=%llu initializer=%llu requested_queue=%llu begin=%llu acquired=%llu end=%llu tid=%llu first_frame=%llu last_frame=%llu waits=%llu site=%u before_raw=%llu before_queued=%llu before_completed=%llu before_state=%u after_raw=%llu after_queued=%llu after_completed=%llu after_state=%u qualified=%u begin_native_before=%llu begin_native_after=%llu acquired_native_before=%llu acquired_native_after=%llu end_native_before=%llu end_native_after=%llu resolution_ns=%llu source_clock=steady_clock",
+            row.owner, row.target, row.query, row.queue, row.sequence, row.initializer,
+            row.requestedQueue, row.begin, row.acquired, row.end, row.tid,
+            row.firstFrame, row.lastFrame, row.waits, static_cast<unsigned>(row.site),
+            row.before.raw, row.before.queued, row.before.completed, row.before.state,
+            row.after.raw, row.after.queued, row.after.completed, row.after.state, qualified ? 1u : 0u,
+            row.beginPoint.before, row.beginPoint.after, row.acquiredPoint.before, row.acquiredPoint.after,
+            row.endPoint.before, row.endPoint.after, row.beginPoint.resolution);
+        observations::report(observations::Source::WaitDetail, "wait-row-v1", details, c,
+            written < 0 || static_cast<size_t>(written) >= sizeof(details));
+        if (qualified) {
+          using tracing::Phase;
+          const auto mutexScope = (i + 1) * 2 + (1ull << 62);
+          const auto bodyScope = mutexScope + 1;
+          auto a = observations::endpoint_event(observations::Source::WaitDetail, c, row.beginPoint,
+              "wait.mutex", Phase::Begin, mutexScope);
+          auto b = observations::endpoint_event(observations::Source::WaitDetail, c, row.acquiredPoint,
+              "wait.mutex", Phase::End, mutexScope);
+          auto d = observations::endpoint_event(observations::Source::WaitDetail, c, row.acquiredPoint,
+              "wait.body", Phase::Begin, bodyScope);
+          auto e = observations::endpoint_event(observations::Source::WaitDetail, c, row.endPoint,
+              "wait.body", Phase::End, bodyScope);
+          const tracing::TraceEvent endpoints[] = {a, b, d, e};
+          tracing::emit_observations(endpoints, c.generation);
+        }
+      }
       if (row.traceGeneration && row.begin <= row.acquired && row.acquired <= row.end) {
         const auto observed = tracing::now_ns();
         s.traceAttempted.fetch_add(2, std::memory_order_relaxed);
@@ -182,7 +221,8 @@ std::unique_lock<std::mutex> queryLock(std::mutex& mutex,
   row.initializer = initializer;
   row.requestedQueue = requestedQueue;
   std::unique_lock lock(mutex);
-  row.acquired = row.end = now();
+  row.acquiredPoint = row.endPoint = observations::endpoint(row.traceGeneration, now);
+  row.acquired = row.end = row.acquiredPoint.source;
   // Bounded row storage only, no output or sink lock under the runtime mutex.
   finish(row);
   return lock;

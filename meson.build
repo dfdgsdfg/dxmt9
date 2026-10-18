@@ -56,6 +56,7 @@ bridge_codegen = custom_target(
     '--server-entries', '@OUTPUT3@',
   ],
   depend_files: files(
+    'include/dxmt9/diagnostic_report.h',
     'src/winemetal/winemetal_unix_schema.h',
     'src/winemetal/winemetal_thunks.hpp',
     'scripts/codegen/gen_wine_bridge.py',

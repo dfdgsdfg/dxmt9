@@ -1,3 +1,4 @@
+#include "util/diagnostic_file.hpp"
 // Frame Graph DAG debug export (Task B10, L1).
 //
 // Spec: specs/d3d9-renderer/spec.md §3.5, requirements.md R-BACK-39.7.
@@ -716,7 +717,7 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
         break;
     }
 
-    std::ofstream out(path, std::ios::out | std::ios::trunc | std::ios::binary);
+    dxmt9::diagnostics::OutputFile out(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (!out.is_open() || !(out << contents)) {
       if (!warned.exchange(true)) {
         util::logf(util::LogLevel::Warn, "dxmt9-renderer",

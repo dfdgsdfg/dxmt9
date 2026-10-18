@@ -8,6 +8,14 @@
 #include "../../../src/dxmt9/dxmt9_append_diag.hpp"
 #include "../../../src/dxmt9/observations/perf_snapshot.hpp"
 
+#include "../../../src/dxmt9/observations/diagnostic_sink.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters_internal.hpp"
+#include "dxmt9/device_c.h"
+#include "../../../src/dxmt9/dxmt9_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_signposts.hpp"
+#include "../../../src/dxmt9/dxmt9_query_timeline_observer.hpp"
+#include "../../../src/d3d9/device_c_query_drain_observer.hpp"
+#include "../../../src/util/diagnostic_file.hpp"
 #include <CommonCrypto/CommonDigest.h>
 #include <mach/mach_time.h>
 
@@ -64,6 +72,9 @@ dxmt9::tracing::TraceEvent event(uint16_t event_id, uint8_t category,
 int main(int argc, char** argv) {
   using namespace dxmt9::tracing;
   unsetenv("DXMT9_TRACE_CONFIG");
+  setenv("DXMT_PERF_COUNTERS", "1", 1);
+  setenv("DXMT_TRACE_QUEUE", "1", 1);
+  setenv("DXMT9_PERF_PROCESS_MEMORY_PRESENTS", "1", 1);
   setenv("DXMT9_COMPAT_APPEND_DIAGNOSTICS", "2", 1);
   if (argc > 2) return 2;
   const bool preserve_artifacts = argc == 2;
@@ -89,7 +100,7 @@ int main(int argc, char** argv) {
       "[\"import\",\"replay\",\"queue\",\"encode\",\"wait\",\"submit\",\"completion\",\"pe\"]";
   const std::string canonical =
       "{\"attempt_id\":\"attempt\",\"categories\":" + categories +
-      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":16777216,"
+      ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":67108864,"
       "\"max_events\":65536},\"optional_collectors\":[],\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"profile_id\":\"profile\",\"question\":\"runtime-smoke\","
@@ -106,7 +117,7 @@ int main(int argc, char** argv) {
       ",\"required_collectors\":[\"engine-perfetto\"],"
       "\"optional_collectors\":[],\"window\":{\"mode\":\"duration\","
       "\"delay_ms\":0,\"duration_ms\":30000},"
-      "\"limits\":{\"max_events\":65536,\"max_bytes\":16777216,"
+      "\"limits\":{\"max_events\":65536,\"max_bytes\":67108864,"
       "\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
       "\"},\"config_sha256\":\"" + digest + "\"}";
@@ -184,6 +195,56 @@ int main(int argc, char** argv) {
     }
     const auto acquired = dxmt9::append_diag::snapshot();
     assert(acquired[0].calls == 1 && acquired[2].calls == 1);
+  }
+  {
+    using namespace dxmt9::observations;
+    // Every family uses the same bounded admission and cold SQL representation.
+    for (const auto source : {Source::QueryReport, Source::PerfReport, Source::ProcessMemory,
+                             Source::PeReport, Source::QueueReport, Source::Signpost, Source::Renderer}) {
+      assert(report(source, "shared-report-fixture-v1", "samples=11 omitted=3 identity=18446744073709551615"));
+    }
+    assert(value(Source::PerfReport, "exact-counter-fixture", UINT64_MAX, "id:latest"));
+    dxmt9::perf::countPresentEncoded(); // One real OS memory sample, shared output.
+    dxmt9::perf::detail::report(); // Entire production table, including ring populations.
+    D9CDiagnosticReport wire{};
+    wire.structSize = sizeof(wire); wire.version = 1;
+    wire.sessionGeneration = capture_generation(); wire.nativeThreadId = native_thread_id();
+    wire.guestProcessId = 777; wire.guestThreadId = 888;
+    wire.processCreateTime100ns = 111; wire.threadCreateTime100ns = 222; wire.sourceOrder = 999;
+    std::strcpy(wire.schema, "dxmt9-pe-sampler");
+    std::strcpy(wire.payload, "samples=11 omitted_samples=3 overflow_samples=1 mode=top");
+    wire.length = std::strlen(wire.payload);
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 0);
+    wire.version = 2; assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
+    wire.version = 1; ++wire.sessionGeneration;
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 3);
+    const std::string splitUtf8 = std::string(190, 'x') + "한글";
+    assert(report(Source::Renderer, "unicode-fragment-fixture", splitUtf8));
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-query-timeline",
+                     "queue=%llu query=%llu issue=%u", 17ull, 19ull, 2u);
+    {
+      dxmt9::d3d9::query_drain_diag::Ledger ledger;
+      dxmt9::d3d9::query_drain_diag::Detail detail;
+      detail.queryIdentity = 19; detail.drained = true; detail.drainNanoseconds = 1234;
+      ledger.record(detail);
+      ledger.report();
+    }
+    // A deterministic qualified endpoint pair exercises native interval export.
+    DiagnosticContext c;
+    const Endpoint first{100, c.timestamp, c.timestamp + 2};
+    const Endpoint last{200, c.timestamp + 100, c.timestamp + 102};
+    const TraceEvent endpoints[] = {
+      endpoint_event(Source::WaitDetail, c, first, "fixture.wait", Phase::Begin, 910001),
+      endpoint_event(Source::WaitDetail, c, last, "fixture.wait", Phase::End, 910001)};
+    assert(emit_observations(endpoints, c.generation));
+    dxmt9::core::metalqueue::QueueTraceSnapshot queue;
+    queue.eventSeqId = 123; queue.readyCount = 7; queue.inflightCount = 2;
+    dxmt9::core::metalqueue::traceQueueEvent("fixture", queue, "shared=1");
+    dxmt9::signposts::tracePoint("fixture", 42, true, 123);
+    dxmt9::signposts::tracePoint("fixture", 42, false, 123);
+    const auto path = base / "renderer-structure.json";
+    { dxmt9::diagnostics::OutputFile out(path.string(), std::ios::trunc);
+      out << "{\"passes\":[{\"id\":18446744073709551615,\"draws\":3}]}"; }
   }
   const uint64_t base_time = now_ns();
   const uint64_t main_tid = native_thread_id();

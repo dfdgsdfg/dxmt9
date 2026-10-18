@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "dxmt9/trace_batch.h"
+#include "diagnostic_report.h"
 
 #ifndef DXMT9_NODISCARD
 #if defined(__cplusplus) && __cplusplus >= 201703L
@@ -1362,6 +1363,8 @@ DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommand
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk_segmented(
     D9CDevice*, const D9CCommandChunkSegmentedTransportV1*);
 /* Optional diagnostic host-clock probe. It emits no trace event. */
+int32_t dxmt9c_device_diagnostic_report(D9CDevice*, const D9CDiagnosticReport* report);
+
 int32_t dxmt9c_trace_clock_probe(D9CDevice*, D9CTraceClockProbe* outProbe);
 /* Optional diagnostic transport. This call never changes render state or the
  * D3D9 operation result. */

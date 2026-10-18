@@ -18,6 +18,7 @@
 #include "d3d9_pe_device_impl.hpp"
 
 #include <new>
+#include "util/diagnostic_report.hpp"
 
 namespace {
 
@@ -42,6 +43,7 @@ void dxmt9PerfLogStderrAtomic(const char *fmt, ...) noexcept {
         len = sizeof(line) - 1u;
         line[len - 1u] = '\n';
     }
+    dxmt9::diagnostics::report("dxmt9-pe-recorder", {line, len}, written >= static_cast<int>(sizeof(line)));
     dxmt9WriteStderrLineAtomic(line, len);
 }
 

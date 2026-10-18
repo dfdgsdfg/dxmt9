@@ -2,6 +2,7 @@
 #include "d3d9_pe_trace.hpp"
 
 #include "dxmt9/dxmt9_trace.hpp"
+#include "dxmt9/observations/diagnostic_sink.hpp"
 
 #include <array>
 #include <cstdint>
@@ -177,4 +178,29 @@ extern "C" int32_t dxmt9c_device_trace_batch(
   outReceipt->hostUncertaintyNs = hostClockResolutionNs();
   if (outReceipt->hostUncertaintyNs == 0u) outReceipt->hostUncertaintyNs = 1u;
   return 0;
+}
+
+extern "C" int32_t dxmt9c_device_diagnostic_report(
+    D9CDevice*, const D9CDiagnosticReport* report) {
+  if (dxmt9c_diagnostic_report_validate(report)) return 2;
+  using namespace dxmt9;
+  const auto generation = tracing::capture_generation();
+  if (!generation) return 0;
+  if (generation != report->sessionGeneration || nativeThreadId() != report->nativeThreadId) return 3;
+  observations::DiagnosticContext context;
+  context.generation = generation;
+  context.record = report->sourceOrder;
+  // A received summary is not a QPC sample endpoint.
+  tracing::TraceEvent identity{};
+  identity.guest_process_id = report->guestProcessId;
+  identity.guest_thread_id = report->guestThreadId;
+  identity.process_create_time100ns = report->processCreateTime100ns;
+  identity.thread_create_time100ns = report->threadCreateTime100ns;
+  if (report->droppedReports) {
+    tracing::TraceEvent invalid{};
+    invalid.category = static_cast<uint8_t>(tracing::Category::Count);
+    (void)tracing::emit_batch_captured({&invalid, 1}, generation, report->droppedReports);
+  }
+  return observations::report(observations::Source::PeReport, report->schema,
+      {report->payload, report->length}, context, report->truncated, &identity, true) ? 0 : 4;
 }

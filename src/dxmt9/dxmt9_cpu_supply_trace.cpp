@@ -1,6 +1,7 @@
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "observations/bounded_records.hpp"
 #include "observations/trace_sink.hpp"
+#include "observations/endpoint.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -135,7 +136,9 @@ void record(Event event, const void* owner, std::uint64_t id,
     return;
   }
   auto& r = s.rows.writable(index);
-  r.wall = clockNs(CLOCK_MONOTONIC);
+  const auto traceGeneration = tracing::enabled() ? tracing::capture_generation() : 0;
+  const auto point = observations::endpoint(traceGeneration, [] { return clockNs(CLOCK_MONOTONIC); });
+  r.wall = point.source;
   static thread_local const std::uint64_t tid = [] {
     std::uint64_t result = 0;
 #if defined(__APPLE__)
@@ -144,7 +147,6 @@ void record(Event event, const void* owner, std::uint64_t id,
     return result;
   }();
   r.tid = tid;
-  const auto traceGeneration = tracing::enabled() ? tracing::capture_generation() : 0;
   const auto cpuQueryTime = traceGeneration ? tracing::now_ns() : 0;
   r.cpu = nativeCpuNs(tid);
   r.owner = reinterpret_cast<std::uintptr_t>(owner);
@@ -153,6 +155,25 @@ void record(Event event, const void* owner, std::uint64_t id,
   r.frame = frame;
   r.event = event;
   s.rows.publish(index);
+  if (traceGeneration) {
+    observations::DiagnosticContext c;
+    c.generation = traceGeneration; c.record = index + 1; c.work = id;
+    char details[512]{};
+    std::snprintf(details, sizeof(details),
+        "wall_ns=%llu cpu_ns=%llu tid=%llu owner=%llu id=%llu value=%llu frame=%llu event=%u qualified=%u native_before_ns=%llu native_after_ns=%llu source_clock=CLOCK_MONOTONIC",
+        r.wall, r.cpu, r.tid, r.owner, r.id, r.value, r.frame,
+        static_cast<unsigned>(r.event), point.qualified() ? 1u : 0u, point.before, point.after);
+
+    observations::report(observations::Source::CpuDetail, "cpu-supply-row-v1", details, c);
+    if (point.qualified()) {
+      auto endpoint = observations::endpoint_event(observations::Source::CpuDetail, c, point,
+          "cpu-supply.endpoint");
+      endpoint.metric_value = static_cast<std::uint32_t>(event);
+      endpoint.arg0 = r.owner;
+      endpoint.arg1 = r.value;
+      tracing::emit_observation(endpoint, traceGeneration);
+    }
+  }
   if (traceGeneration && r.cpu) {
     s.traceAttempted.fetch_add(1, std::memory_order_relaxed);
     if (observations::counter(traceGeneration, observations::Source::CpuSupply,

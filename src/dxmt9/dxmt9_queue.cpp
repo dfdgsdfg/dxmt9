@@ -6505,6 +6505,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     {
       os_log_t signpostLog = dxmt9::signposts::log();
       os_signpost_id_t commitSignpost = os_signpost_id_generate(signpostLog);
+      if (tracing::enabled()) signposts::tracePoint("commit", commitSignpost, true, record.seqId);
       os_signpost_interval_begin(signpostLog, commitSignpost, "commit",
                                  "seq=%llu",
                                  static_cast<unsigned long long>(record.seqId));
@@ -6539,6 +6540,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
         ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 5);
       if (::dxmt9::supply::enabled())
         ::dxmt9::supply::record(::dxmt9::supply::Event::Submit, this, record.seqId);
+      if (tracing::enabled()) signposts::tracePoint("commit", commitSignpost, false, record.seqId);
       os_signpost_interval_end(signpostLog, commitSignpost, "commit",
                                "seq=%llu",
                                static_cast<unsigned long long>(record.seqId));

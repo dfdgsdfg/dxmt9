@@ -50,23 +50,26 @@ class PercentileRing {
   // p in [0.0, 1.0]. Returns 0 when the ring is empty. Uses nearest-rank
   // (ceil) over the sorted snapshot, stable for the kCapacity range used here
   // and matching what runbook scripts expect.
-  std::uint64_t percentile(double p) const {
+  struct Observation { std::uint64_t value, samples; };
+  Observation observePercentile(double p) const {
     const auto sorted = snapshot();
     if (sorted.empty()) {
-      return 0;
+      return {0, 0};
     }
     if (p <= 0.0) {
-      return sorted.front();
+      return {sorted.front(), sorted.size()};
     }
     if (p >= 1.0) {
-      return sorted.back();
+      return {sorted.back(), sorted.size()};
     }
     auto rank = static_cast<std::size_t>(p * static_cast<double>(sorted.size()));
     if (rank >= sorted.size()) {
       rank = sorted.size() - 1;
     }
-    return sorted[rank];
+    return {sorted[rank], sorted.size()};
   }
+
+  std::uint64_t percentile(double p) const { return observePercentile(p).value; }
 
  private:
   std::array<std::atomic<std::uint64_t>, kCapacity> samples_{};

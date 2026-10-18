@@ -187,6 +187,8 @@ OBSERVATION_FIELDS = (
     "observation_source", "observation_record", "acquisition_version",
     "observation_timestamp_kind", "observation_field", "observation_value",
     "observation_unit", "observation_aggregation", "observer_mode", "timing_stride",
+    "diagnostic_schema", "diagnostic_payload", "diagnostic_part", "diagnostic_parts",
+    "diagnostic_encoding", "diagnostic_value", "diagnostic_display",
 )
 
 OBSERVATION_COUNTER_QUERY = """
@@ -197,7 +199,9 @@ WHERE a.key IN ('debug.observation_source', 'debug.observation_record',
                 'debug.acquisition_version', 'debug.observation_timestamp_kind',
                 'debug.observation_field', 'debug.observation_value',
                 'debug.observation_unit', 'debug.observation_aggregation',
-                'debug.observer_mode', 'debug.timing_stride')
+                'debug.observer_mode', 'debug.timing_stride', 'debug.diagnostic_schema',
+                'debug.diagnostic_payload', 'debug.diagnostic_part', 'debug.diagnostic_parts',
+                'debug.diagnostic_encoding', 'debug.diagnostic_value', 'debug.diagnostic_display')
 ORDER BY c.ts, tr.name, a.key, a.display_value
 """
 

@@ -1,4 +1,5 @@
 #include "dxmt9_perf_counters.hpp"
+#include "observations/diagnostic_sink.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_wait_trace.hpp"
 
@@ -286,18 +287,23 @@ void updateMin(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
 }
 
 void sampleProcessMemory() {
+  observations::DiagnosticContext sample;
   task_vm_info_data_t taskInfo{};
   mach_msg_type_number_t taskInfoCount = TASK_VM_INFO_COUNT;
   if (task_info(mach_task_self(), TASK_VM_INFO,
                 reinterpret_cast<task_info_t>(&taskInfo),
                 &taskInfoCount) != KERN_SUCCESS) {
     add(counters().processMemoryQueryFailures);
+    sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+    observations::value(observations::Source::ProcessMemory, "sample_status", 0, "bool:sample-failed", sample);
     return;
   }
   // task_info is versioned: never report fields beyond the returned word
   // count, even when the kernel call itself succeeded.
   if (taskInfoCount < TASK_VM_INFO_COUNT) {
     add(counters().processMemoryQueryFailures);
+    sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+    observations::value(observations::Source::ProcessMemory, "sample_status", 0, "bool:sample-failed", sample);
     return;
   }
 
@@ -316,6 +322,8 @@ void sampleProcessMemory() {
     }
     if (result != KERN_SUCCESS || size == 0) {
       add(counters().processMemoryQueryFailures);
+      sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+      observations::value(observations::Source::ProcessMemory, "sample_status", 0, "bool:sample-failed", sample);
       return;
     }
     if (region.is_submap) {
@@ -330,6 +338,8 @@ void sampleProcessMemory() {
     low4 = addLowAddressMappedInterval(low4, begin, end);
     if (!low4.valid || end <= begin) {
       add(counters().processMemoryQueryFailures);
+      sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+      observations::value(observations::Source::ProcessMemory, "sample_status", 0, "bool:sample-failed", sample);
       return;
     }
     address = static_cast<mach_vm_address_t>(end);
@@ -337,6 +347,8 @@ void sampleProcessMemory() {
   low4 = finishLowAddressMapSummary(low4);
   if (!low4.valid) {
     add(counters().processMemoryQueryFailures);
+    sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+    observations::value(observations::Source::ProcessMemory, "sample_status", 0, "bool:sample-failed", sample);
     return;
   }
 
@@ -358,6 +370,13 @@ void sampleProcessMemory() {
   c.processMemoryLow4LargestGapBytes.store(low4.largestGapBytes,
                                            std::memory_order_relaxed);
   updateMin(c.processMemoryLow4LargestGapMinBytes, low4.largestGapBytes);
+  sample.timestamp = sample.generation ? tracing::now_ns() : 0;
+  observations::value(observations::Source::ProcessMemory, "sample_status", 1, "bool:sample-valid", sample);
+  observations::value(observations::Source::ProcessMemory, "rss", taskInfo.resident_size, "bytes:sample", sample);
+  observations::value(observations::Source::ProcessMemory, "vm", taskInfo.virtual_size, "bytes:sample", sample);
+  observations::value(observations::Source::ProcessMemory, "physical_footprint", taskInfo.phys_footprint, "bytes:sample", sample);
+  observations::value(observations::Source::ProcessMemory, "low4_mapped", low4.mappedBytes, "bytes:sample", sample);
+  observations::value(observations::Source::ProcessMemory, "low4_largest_gap", low4.largestGapBytes, "bytes:sample", sample);
 }
 
 void recordCpuTime(std::atomic<std::uint64_t>& total,

@@ -447,6 +447,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
 
   case BridgeOpcode::dxmt9c_trace_clock_probe:
   case BridgeOpcode::dxmt9c_device_trace_batch:
+  case BridgeOpcode::dxmt9c_device_diagnostic_report:
     return BridgeClass::Other;
 
   case BridgeOpcode::dxmt9c_bridge_op_count:

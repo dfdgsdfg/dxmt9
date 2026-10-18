@@ -4214,11 +4214,13 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           static thread_local bool frameSignpostActive = false;
           static thread_local std::uint64_t frameSignpostSeq = 0;
           if (frameSignpostActive) {
+            if (tracing::enabled()) signposts::tracePoint("frame", OS_SIGNPOST_ID_EXCLUSIVE, false, frameSignpostSeq);
             os_signpost_interval_end(signpostLog, OS_SIGNPOST_ID_EXCLUSIVE,
                                      "frame", "seq=%llu",
                                      static_cast<unsigned long long>(frameSignpostSeq));
           }
           ++frameSignpostSeq;
+          if (tracing::enabled()) signposts::tracePoint("frame", OS_SIGNPOST_ID_EXCLUSIVE, true, frameSignpostSeq);
           os_signpost_interval_begin(signpostLog, OS_SIGNPOST_ID_EXCLUSIVE,
                                      "frame", "seq=%llu",
                                      static_cast<unsigned long long>(frameSignpostSeq));

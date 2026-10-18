@@ -1,4 +1,5 @@
 #include "log.hpp"
+#include "../diagnostic_report.hpp"
 
 #include "../config/config.hpp"
 #include "../util_string.hpp"
@@ -122,10 +123,11 @@ bool shouldLog(LogLevel level) {
   return level >= configuredLogLevel() && configuredLogLevel() != LogLevel::None;
 }
 
-void logLine(LogLevel level, const char* tag, const std::string& line) {
+static void logLineImpl(LogLevel level, const char* tag, const std::string& line, bool truncated) {
   if (!shouldLog(level)) {
     return;
   }
+  diagnostics::report(tag ? tag : "dxmt9", line, truncated);
   std::lock_guard lock(logMutex());
   std::ostringstream out;
   out << '[' << (tag ? tag : "dxmt9") << "] " << levelPrefix(level) << ": " << line << '\n';
@@ -139,6 +141,10 @@ void logLine(LogLevel level, const char* tag, const std::string& line) {
   }
 }
 
+void logLine(LogLevel level, const char* tag, const std::string& line) {
+  logLineImpl(level, tag, line, false);
+}
+
 void vlogf(LogLevel level, const char* tag, const char* fmt, std::va_list args) {
   if (!shouldLog(level)) {
     return;
@@ -148,9 +154,10 @@ void vlogf(LogLevel level, const char* tag, const char* fmt, std::va_list args) 
   if (written <= 0) {
     return;
   }
-  logLine(level, tag,
+  logLineImpl(level, tag,
           std::string(buffer.data(),
-                      static_cast<std::size_t>(std::min<int>(written, static_cast<int>(buffer.size() - 1)))));
+                      static_cast<std::size_t>(std::min<int>(written, static_cast<int>(buffer.size() - 1)))),
+          written >= static_cast<int>(buffer.size()));
 }
 
 void logf(LogLevel level, const char* tag, const char* fmt, ...) {
