@@ -380,3 +380,35 @@ actual-platform evidence and Perfetto consumer checks before admission.
 qualified general tracer. macOS debugger/Mach or Wine marker adapters require
 independent guest-state and overhead qualification. Retired IDs 7.1/7.2 remain
 reserved; these contracts do not reinstate the removed generic tool adapters.
+
+## 13. Shared Acquisition and Independent Consumers
+
+**R-HARN-TRACE-13.1** A physical observation is acquired once when consumers
+request the same object, lifetime, sampling point and interval. Perfetto, legacy
+aggregates and SQL consume that result; equal labels or overlapping time alone
+do not establish equivalence. The common source is SDK-independent.
+
+**R-HARN-TRACE-13.2** Shared GPU source storage belongs to the retained Metal
+object lifetime, not a Perfetto session. Encoder sample indices are single-use
+within a buffer. Trace tickets additionally retain session/work generations.
+Closing one consumer must not free resources needed by another or by the GPU.
+Resolve only after completion; failures and missing/non-monotone timestamps
+remain invalid. Production retirement authority must not change.
+
+**R-HARN-TRACE-13.3** Existing CPU supply and wait sites keep their gates, frame
+windows, detail selection and original records. Native thread CPU, elapsed wall
+time, mutex acquisition and CV-plus-reacquisition time remain distinct. Output
+adapters reuse acquired values; they must not repeat a thread-CPU query or wait.
+Expensive observations do not become implicit in the overview profile.
+
+**R-HARN-TRACE-13.4** Native records and companion SQL retain acquisition version,
+consumer selection, source record keys, clocks and per-consumer loss/closure.
+Compatibility files may remain acquisition artifacts; SQL remains the structured
+analysis product for experiments and tests. A consumer's closure does not imply
+that another consumer covered the same window.
+
+**R-HARN-TRACE-13.5** Verification covers SDK-off, legacy-only, trace-only and
+simultaneous consumers, concurrent reads, failed completion, retained storage
+after close and fresh object generations. GPU lifecycle model/code checks and
+source/consumer round trips are required. Live observer overhead and Wine
+workload qualification remain separate evidence gates.

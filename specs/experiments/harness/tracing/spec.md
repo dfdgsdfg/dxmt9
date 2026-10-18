@@ -64,8 +64,9 @@ Native numeric metrics use dedicated counter tracks with fixed metric names and
 units; event owner IDs must never be repurposed as metric values. Queue depth
 snapshots are a coarse initial consumer. Existing aggregate reports remain
 available, and detailed observer migration requires semantic parity before
-retiring any legacy gate or parser. GPU physical sampler sharing and PE clock
-qualification are independent follow-on contracts, not implied by a SQL export.
+retiring any legacy gate or parser. The [shared acquisition contract](shared-acquisition.md) separates physical
+sampling from consumer lifetimes. PE clock qualification remains independent
+of sampler sharing and SQL export.
 
 Verification maps R-HARN-TRACE-12.1–12.6 to store round trips and failure fixtures,
 runner manifest sealing, native counter consumer tests, and existing lifecycle
