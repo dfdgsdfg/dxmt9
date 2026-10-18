@@ -43,6 +43,14 @@ qualify an unavailable external collector or establish negligible overhead.
 | R-HARN-TRACE-11.4–11.6 | Portable wrap-safe perf parsing, loss/throttle records, sample/register semantics and attribution exclusions. | Fixtures do not establish live Linux scheduling or macOS target coverage. |
 | R-HARN-TRACE-11.7–11.8 | Owned bounded attach/detach state model and fail-closed capability admission. | No live target mutation occurs without an admitted adapter. No perftrace code or mandatory dependency is included. |
 
+## Optional cross-run analytics
+
+Optional [cross-run DuckDB/Parquet analysis](spec.md#optional-cross-run-analytics)
+has a documented [directory layout](../../../../experiments/analysis/README.md)
+and a developer CLI entry in `Brewfile`. No integrated exporter or scale/parity
+benchmark is provided. Adoption is conditional on a measured analytical query need;
+this is not a required runtime collector or a gap in per-run SQLite publication.
+
 ## External Collection
 
 External collection gaps are owned by the

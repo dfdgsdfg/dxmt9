@@ -103,6 +103,50 @@ bounded observer registry. PE records are drained in batches or to a local
 diagnostic sink; exporters and external SDK integration execute outside hot
 calls. No new bridge call per draw/state operation is permitted.
 
+### Optional cross-run analytics
+
+DuckDB may serve as an offline analytical consumer when repeated scans, joins
+or distribution queries across many runs exceed measured SQLite/Python latency
+or memory budgets. It is optional: capture, engine builds, ordinary harness
+runs and per-run qualification must remain usable without DuckDB or Parquet.
+
+The root `Brewfile` provisions the DuckDB CLI as a developer analysis tool;
+this does not create a runtime dependency. Committed study definitions and SQL
+live in `experiments/analysis/<study>/`; reusable extraction/validation tools
+belong in `scripts/tools/`. Generated products live in a new ignored
+`experiments/output/analysis/<analysis-id>/`, separate from source attempts.
+The [analysis layout](../../../../experiments/analysis/README.md) defines
+manifest, database, Parquet, result and scratch locations.
+
+| Surface | Responsibility |
+|---|---|
+| Perfetto Trace Processor | Native trace semantics, timeline queries and consumer qualification. |
+| `observations.sqlite` | Immutable per-attempt observations, source links, failures and experiment/test provenance. |
+| Optional DuckDB analysis | Cross-run/build/device aggregation over read-only source stores or derived Parquet tables. |
+
+The analysis owner selects immutable attempts, verifies their manifests and
+digests, and derives tables after collection and qualification. Original traces,
+stores and receipts remain retained evidence. Derived tables must preserve
+`run_id`, `attempt_id`, source artifact digest, source schema version and
+source-record identity; local SQL row IDs alone are not globally unique keys.
+An analysis manifest records inputs, extraction/query revision, tool and
+extension versions, filters, output schema and output digests. Derived products
+must not modify sealed source manifests or require a second acquisition.
+
+Projection must preserve exact integers, units, clock domains, populations,
+loss and qualification status. Use exact integer/decimal or text types for
+large unsigned values rather than floating-point conversion. Preserve failed
+attempts and report exclusions. Cross-run comparisons require compatible
+workloads, windows, observer settings and correctness outcomes; build/device
+differences must be explicit comparison dimensions. Do not join independent
+run timestamps or pool incompatible populations to manufacture a percentile.
+DuckDB query success does not upgrade clock, coverage or attribution evidence.
+
+Adoption requires a representative query benchmark against the existing path,
+explicit time/memory budgets, exact-value/provenance parity and rejection tests
+for incompatible schemas, mismatched digests and invalid joins. Availability
+of DuckDB alone is not a reason to replace the per-run SQLite contract.
+
 ## 2. Collection Lifecycle and Profiles
 
 ```mermaid

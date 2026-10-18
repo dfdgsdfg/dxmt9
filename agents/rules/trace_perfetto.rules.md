@@ -108,6 +108,20 @@ domain; follow [documentation rules](documentation.rules.md).
   breadcrumbs and opaque captures where their format/lifecycle requires files.
   Existing aggregates remain usable with the SDK disabled.
 
+For cross-run analytical queries, apply the
+[optional analytics boundary](../../specs/experiments/harness/tracing/spec.md#optional-cross-run-analytics).
+DuckDB belongs to offline analysis when measured query cost justifies it;
+keep runtime collection and ordinary qualification independent of it. Preserve
+sealed per-attempt SQLite and native traces. Derived Parquet or DuckDB outputs
+retain source digests, run/attempt identities, exact values and qualification;
+they cannot establish clock alignment or comparable sample populations.
+Keep reusable study SQL in `experiments/analysis/<study>/` and generated
+products in ignored `experiments/output/analysis/<analysis-id>/`; follow the
+[analysis layout](../../experiments/analysis/README.md). The Brewfile supplies
+the optional CLI without making it a capture prerequisite.
+Use the [cross-run analysis workflow](../skills/cputrace/references/perfetto.md#optional-cross-run-analysis)
+for adoption decisions.
+
 ## Shared acquisition
 
 - The SDK-independent observation source owns physical acquisition. Trace and

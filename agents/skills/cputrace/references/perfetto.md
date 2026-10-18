@@ -220,6 +220,38 @@ Publication refuses existing outputs. Raw acquisition files, control/receipt
 JSON and opaque capture bundles remain retained evidence; the SQLite file is
 the structured analysis product. Preserve all artifacts needed by its digests.
 
+## Optional cross-run analysis
+
+Keep single-attempt timeline queries in Trace Processor and detailed/provenance
+queries in SQLite. Consider DuckDB for repeated build regressions, large PC
+sample populations or many-run joins only after observing a query bottleneck.
+This guidance is shared with gputrace; CPU and GPU metrics keep their units and
+observation semantics. See the
+[analytics contract](../../../../specs/experiments/harness/tracing/spec.md#optional-cross-run-analytics).
+
+1. Define the comparison, selected attempts, workload/window/observer controls
+   and time/memory budget. Measure the current SQLite/Python query first.
+2. Verify source digests and qualification. Record failed/excluded attempts;
+   do not silently select only passing runs or align independent clocks.
+3. If measured scale justifies DuckDB, use read-only SQLite inputs through an
+   explicitly versioned extension or derive Parquet in a separate analysis
+   directory at `experiments/output/analysis/<analysis-id>/`. Retain exact
+   values, source-record keys, run/attempt IDs and provenance in the analysis
+   manifest. Preserve sealed inputs.
+4. Compare results and resource use with the existing query. Declare whether
+   percentiles describe each run or a pooled compatible population, and retain
+   the query, filters, tool versions and input/output hashes with the result.
+
+Keep reusable queries under `experiments/analysis/<study>/` and use the
+[analysis layout](../../../../experiments/analysis/README.md) for manifests,
+`analysis.duckdb`, `tables/`, `results/` and `scratch/`. The root `Brewfile`
+provides the CLI; record `duckdb --version` and any extension versions used.
+
+There is no integrated DuckDB/Parquet exporter or mandatory runtime dependency
+today.
+Treat this as an adoption workflow, not an available harness command. An
+unavailable optional analysis tool does not invalidate the source capture.
+
 ## Optional asynchronous persistence
 
 Use `--trace-drain-mode async` to persist bounded binary batches during capture.

@@ -12,7 +12,9 @@ current `dxmt9` runtime.
 | `prefixs/` | no | Per-experiment Wine prefixes. |
 | `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
 | `launchers/` | yes | Per-app launcher scripts. |
+| `analysis/` | yes | Reusable offline analysis definitions and SQL queries; see [analysis layout](analysis/README.md). |
 | `output/` | partial (`.gitkeep` only) | Run results. |
+| `output/analysis/<analysis-id>/` | no | Derived analysis manifests, DuckDB databases, Parquet tables and query results. |
 | `references/` | yes | Reference screenshots. |
 | `CATALOGUE.toml` | yes | Manifest of every experiment. |
 
