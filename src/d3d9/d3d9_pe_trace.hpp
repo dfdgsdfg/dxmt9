@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <cstdint>
+#include <array>
 
 inline bool dxmt9PeTraceEnabled() noexcept {
   static const bool enabled = []() noexcept {
@@ -58,6 +59,38 @@ struct Dxmt9PeTracePointBracket {
   bool disabled;
   bool generationMismatch;
 };
+
+struct Dxmt9PeRawSample {
+  uint64_t ordinal;
+  uint64_t targetProcessId;
+  uint64_t targetThreadId;
+  uint64_t targetProcessCreateTime100ns;
+  uint64_t targetThreadCreateTime100ns;
+  uint64_t qpcFrequency;
+  uint64_t qpcBeforeSuspend;
+  uint64_t qpcAfterResume;
+  uint64_t pc;
+  uint64_t outcome;
+  uint64_t attempts;
+  uint64_t successfulSamples;
+  uint64_t suspendFailures;
+  uint64_t contextFailures;
+  uint64_t resumeFailures;
+  uint64_t omittedSamples;
+};
+
+constexpr std::array<uint64_t, 17> dxmt9PeRawSampleFields(
+    const Dxmt9PeRawSample& sample) noexcept {
+  return {1u, sample.ordinal, sample.targetProcessId, sample.targetThreadId,
+          sample.targetProcessCreateTime100ns, sample.targetThreadCreateTime100ns,
+          sample.qpcFrequency, sample.qpcBeforeSuspend, sample.qpcAfterResume,
+          sample.pc, sample.outcome, sample.attempts, sample.successfulSamples,
+          sample.suspendFailures, sample.contextFailures, sample.resumeFailures,
+          sample.omittedSamples};
+}
+
+bool dxmt9PeTraceRawSample(const Dxmt9PeRawSample& sample) noexcept;
+bool dxmt9PeTraceRawPopulation(const Dxmt9PeRawSample& sample) noexcept;
 
 constexpr Dxmt9PeTracePointBracket dxmt9PeTraceClearBracket(
     Dxmt9PeTracePointBracket point) noexcept {

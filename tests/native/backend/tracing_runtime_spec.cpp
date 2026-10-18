@@ -23,6 +23,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -45,6 +46,18 @@ std::string sha256(const std::string& text) {
   for (unsigned char byte : digest) {
     result.push_back(hex[byte >> 4]);
     result.push_back(hex[byte & 15]);
+  }
+  return result;
+}
+
+std::string hexBytes(const void* data, size_t size) {
+  const auto* bytes = static_cast<const unsigned char*>(data);
+  static constexpr char digits[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(size * 2u);
+  for (size_t i = 0; i < size; ++i) {
+    result.push_back(digits[bytes[i] >> 4]);
+    result.push_back(digits[bytes[i] & 0xf]);
   }
   return result;
 }
@@ -83,13 +96,32 @@ int main(int argc, char** argv) {
       : std::filesystem::temp_directory_path();
   const auto base = parent /
       ("dxmt9-tracing-runtime-" + std::to_string(getpid()));
+  std::string peRawHex;
   std::filesystem::create_directories(base);
+  const char* drainModeValue = std::getenv("DXMT9_TEST_DRAIN_MODE");
+  const std::string drainMode = drainModeValue ? drainModeValue : "deferred";
+  if (drainMode != "deferred" && drainMode != "async") return 2;
   const auto supply_path = base / "cpu-supply.csv";
   const auto wait_path = base / "wait.csv";
-  setenv("DXMT9_CPU_SUPPLY_TRACE", supply_path.c_str(), 1);
+  const char* collectorModeValue = std::getenv("DXMT9_TEST_COLLECTOR_MODE");
+  const std::string collectorMode = collectorModeValue ? collectorModeValue : "dual";
+  const auto unavailableSupplyPath = base / "missing-supply-dir" / "cpu-supply.csv";
+  const auto unavailableWaitPath = base / "missing-wait-dir" / "wait.csv";
+  const char* supplySelection = supply_path.c_str();
+  const char* waitSelection = wait_path.c_str();
+  if (collectorMode == "perfetto") {
+    supplySelection = "perfetto";
+    waitSelection = "perfetto";
+  } else if (collectorMode == "unwritable") {
+    supplySelection = unavailableSupplyPath.c_str();
+    waitSelection = unavailableWaitPath.c_str();
+  } else if (collectorMode != "dual" && collectorMode != "legacy-only") {
+    return 2;
+  }
+  setenv("DXMT9_CPU_SUPPLY_TRACE", supplySelection, 1);
   setenv("DXMT9_CPU_SUPPLY_TRACE_FIRST_PRESENT", "1", 1);
   setenv("DXMT9_CPU_SUPPLY_TRACE_LAST_PRESENT", "2", 1);
-  setenv("DXMT9_WAIT_TRACE", wait_path.c_str(), 1);
+  setenv("DXMT9_WAIT_TRACE", waitSelection, 1);
   setenv("DXMT9_WAIT_TRACE_FIRST_PRESENT", "1", 1);
   setenv("DXMT9_WAIT_TRACE_LAST_PRESENT", "2", 1);
   const auto config_path = base / "request.json";
@@ -106,7 +138,9 @@ int main(int argc, char** argv) {
       "\"},\"profile_id\":\"profile\",\"question\":\"runtime-smoke\","
       "\"required_categories\":" + categories +
       ",\"required_collectors\":[\"engine-perfetto\"],\"run_id\":\"run\","
-      "\"schema\":\"dxmt9.trace.request.v1\",\"window\":{\"delay_ms\":0,"
+      "\"schema\":\"dxmt9.trace.request.v1\",\"transport\":{\"batch_events\":512,\"mode\":\"" +
+      drainMode + "\",\"service_interval_ms\":1,\"transport_events\":16384},"
+      "\"window\":{\"delay_ms\":0,"
       "\"duration_ms\":30000,\"mode\":\"duration\"}}";
   const std::string digest = sha256(canonical);
   const std::string request =
@@ -120,7 +154,9 @@ int main(int argc, char** argv) {
       "\"limits\":{\"max_events\":65536,\"max_bytes\":67108864,"
       "\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
       trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
-      "\"},\"config_sha256\":\"" + digest + "\"}";
+      "\"},\"config_sha256\":\"" + digest + "\",\"transport\":{"
+      "\"batch_events\":512,\"mode\":\"" + drainMode +
+      "\",\"service_interval_ms\":1,\"transport_events\":16384}}";
   {
     std::ofstream out(config_path, std::ios::binary);
     out << request;
@@ -149,6 +185,8 @@ int main(int argc, char** argv) {
   counter(Category::Queue, Metric::QueueReady, 17, 88);
   counter(Category::Queue, Metric::QueueReady, 9, 99);
   counter(Category::Replay, Metric::NativeThreadCpuNs, 123456789, 123);
+  const bool legacyOnly = collectorMode == "legacy-only";
+  if (legacyOnly) g_trace_enabled.store(false, std::memory_order_relaxed);
   dxmt9::supply::present(1);
   dxmt9::supply::record(dxmt9::supply::Event::RawReady, nullptr, 1);
   dxmt9::waittrace::present(1);
@@ -159,6 +197,8 @@ int main(int argc, char** argv) {
   dxmt9::waittrace::finish(waitRow);
   dxmt9::supply::present(4);
   dxmt9::waittrace::present(4);
+  if (drainMode == "async") std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  if (legacyOnly) g_trace_enabled.store(true, std::memory_order_relaxed);
   {
     namespace backend = dxmt9::query::polldiag;
     backend::Sample sample;
@@ -202,12 +242,16 @@ int main(int argc, char** argv) {
     for (const auto source : {Source::QueryReport, Source::PerfReport, Source::ProcessMemory,
                              Source::PeReport, Source::QueueReport, Source::Signpost, Source::Renderer}) {
       assert(report(source, "shared-report-fixture-v1", "samples=11 omitted=3 identity=18446744073709551615"));
+      if (drainMode == "async")
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     assert(value(Source::PerfReport, "exact-counter-fixture", UINT64_MAX, "id:latest"));
     dxmt9::perf::countPresentEncoded(); // One real OS memory sample, shared output.
     dxmt9::perf::detail::report(); // Entire production table, including ring populations.
+    if (drainMode == "async") std::this_thread::sleep_for(std::chrono::milliseconds(2));
     D9CDiagnosticReport wire{};
-    wire.structSize = sizeof(wire); wire.version = 1;
+    wire.structSize = sizeof(wire); wire.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+    wire.encoding = D9C_DIAGNOSTIC_ENCODING_TEXT;
     wire.sessionGeneration = capture_generation(); wire.nativeThreadId = native_thread_id();
     wire.guestProcessId = 777; wire.guestThreadId = 888;
     wire.processCreateTime100ns = 111; wire.threadCreateTime100ns = 222; wire.sourceOrder = 999;
@@ -215,9 +259,36 @@ int main(int argc, char** argv) {
     std::strcpy(wire.payload, "samples=11 omitted_samples=3 overflow_samples=1 mode=top");
     wire.length = std::strlen(wire.payload);
     assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 0);
-    wire.version = 2; assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
-    wire.version = 1; ++wire.sessionGeneration;
+    wire.version = 1; assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
+    wire.version = D9C_DIAGNOSTIC_REPORT_VERSION; ++wire.sessionGeneration;
     assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 3);
+    const uint64_t peRawFields[] = {
+        1u, 17u, 0x1234u, 0x5678u, 0x1111222233334444ull,
+        0x5555666677778888ull, 24'000'000u, 0x1234567890ull,
+        0x12345678a0ull, 0xfedcba9876543210ull, 3u, 20u, 17u, 1u, 2u, 0u, 3u};
+    peRawHex = hexBytes(peRawFields, sizeof(peRawFields));
+    wire.sessionGeneration = capture_generation();
+    wire.encoding = D9C_DIAGNOSTIC_ENCODING_U64_LE;
+    wire.guestProcessId = 0x1234u; wire.guestThreadId = 0x5678u;
+    wire.processCreateTime100ns = 0x1111222233334444ull;
+    wire.threadCreateTime100ns = 0x5555666677778888ull;
+    wire.sourceOrder = 91017u;
+    std::strcpy(wire.schema, "pe-pc-sample-v1");
+    std::memcpy(wire.payload, peRawFields, sizeof(peRawFields));
+    wire.length = sizeof(peRawFields);
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 0);
+    wire.length -= 1u;
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
+    wire.length += 1u;
+    wire.encoding = 99u;
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
+    wire.encoding = D9C_DIAGNOSTIC_ENCODING_U64_LE;
+    wire.version = 1u;
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
+    wire.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+    const uint64_t badRecordVersion = 2u;
+    std::memcpy(wire.payload, &badRecordVersion, sizeof(badRecordVersion));
+    assert(dxmt9c_device_diagnostic_report(nullptr, &wire) == 2);
     const std::string splitUtf8 = std::string(190, 'x') + "한글";
     assert(report(Source::Renderer, "unicode-fragment-fixture", splitUtf8));
     dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-query-timeline",
@@ -360,12 +431,75 @@ int main(int argc, char** argv) {
   for (auto& producer : producers) producer.join();
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
   assert(stop_and_finalize());
+  {
+    // A sample racing with close must count as omitted, not accepted.
+    D9CDiagnosticReport closed{};
+    closed.structSize = sizeof(closed);
+    closed.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+    closed.encoding = D9C_DIAGNOSTIC_ENCODING_U64_LE;
+    closed.length = D9C_PE_RAW_SAMPLE_BYTES;
+    closed.sessionGeneration = peGeneration;
+    closed.nativeThreadId = main_tid;
+    closed.guestProcessId = closed.guestThreadId = 1;
+    closed.processCreateTime100ns = closed.threadCreateTime100ns = 1;
+    closed.sourceOrder = 1;
+    std::strcpy(closed.schema, "pe-pc-sample-v1");
+    closed.payload[0] = 1;
+    assert(dxmt9c_device_diagnostic_report(nullptr, &closed) == 4);
+  }
+  const auto proof_path = std::filesystem::path(receipt_path.string() + ".completion.json");
+  const auto proof_deadline = std::chrono::steady_clock::now() +
+      std::chrono::seconds(5);
+  while (!std::filesystem::exists(proof_path) &&
+         std::chrono::steady_clock::now() < proof_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  assert(std::filesystem::exists(proof_path));
+  std::ifstream completionProof(proof_path, std::ios::binary);
+  const std::string proofText(std::istreambuf_iterator<char>(completionProof), {});
+  assert(proofText.find("\"schema\":\"dxmt9.trace.completion.v1\"") !=
+      std::string::npos);
+  assert(proofText.find("\"status\":\"complete\"") != std::string::npos);
+  assert(proofText.find("\"run_id\":\"run\"") != std::string::npos);
+  assert(proofText.find("\"attempt_id\":\"attempt\"") != std::string::npos);
+  assert(proofText.find("\"config_sha256\":\"" + digest + "\"") !=
+      std::string::npos);
 
   assert(std::filesystem::file_size(trace_path) > 0);
   assert(std::filesystem::file_size(raw_path) > 0);
   std::ifstream raw(raw_path, std::ios::binary);
   const std::string raw_text(std::istreambuf_iterator<char>(raw), {});
   assert(raw_text.find("\"schema\":\"dxmt9.trace.raw.v1\"") != std::string::npos);
+  assert(raw_text.find("\"diagnostic_schema\":\"pe-pc-sample-v1\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"diagnostic_payload\":\"" + peRawHex + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"diagnostic_encoding\":\"4\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"observation_record\":\"91017\"") !=
+         std::string::npos);
+  const bool hasSupplyDetail =
+      raw_text.find("cpu-supply-row-v2") != std::string::npos;
+  const bool hasWaitDetail = raw_text.find("wait-row-v2") != std::string::npos;
+  if (collectorMode == "legacy-only") {
+    assert(!hasSupplyDetail && !hasWaitDetail);
+  } else {
+    assert(hasSupplyDetail && hasWaitDetail);
+  }
+  if (collectorMode == "dual" || collectorMode == "legacy-only") {
+    assert(std::filesystem::exists(supply_path));
+    assert(std::filesystem::exists(wait_path));
+    std::ifstream supplyCsv(supply_path, std::ios::binary);
+    std::ifstream waitCsv(wait_path, std::ios::binary);
+    const std::string supplyText(std::istreambuf_iterator<char>(supplyCsv), {});
+    const std::string waitText(std::istreambuf_iterator<char>(waitCsv), {});
+    assert(supplyText.find("wall_ns,cpu_ns,tid,owner,id,value,frame,event") !=
+        std::string::npos);
+    assert(waitText.find("site,owner,target,query,queue,sequence") !=
+        std::string::npos);
+  } else {
+    assert(!std::filesystem::exists(supply_path));
+    assert(!std::filesystem::exists(wait_path));
+  }
   assert(raw_text.find("\"relations\":[{\"relation_id\":") != std::string::npos);
   assert(raw_text.find("\"work_ids\":[\"9001\"]") != std::string::npos);
   const std::string pointMapping = "\"mapping_kind\":\"point_bracket\"";
@@ -429,9 +563,14 @@ int main(int argc, char** argv) {
   assert(raw_text.find("\"binding_kind\":\"raw_publication\"") !=
          std::string::npos);
   assert(raw_text.find("\"phase\":\"counter\"") != std::string::npos);
-  assert(raw_text.find("\"observation_source\":\"cpu-supply\"") != std::string::npos);
-  assert(raw_text.find("\"observation_source\":\"wait\"") != std::string::npos);
-  assert(raw_text.find("wait_mutex_acquire_elapsed_ns") != std::string::npos);
+  if (collectorMode == "legacy-only") {
+    assert(raw_text.find("\"observation_source\":\"cpu-supply\"") == std::string::npos);
+    assert(raw_text.find("\"observation_source\":\"wait\"") == std::string::npos);
+  } else {
+    assert(raw_text.find("\"observation_source\":\"cpu-supply\"") != std::string::npos);
+    assert(raw_text.find("\"observation_source\":\"wait\"") != std::string::npos);
+    assert(raw_text.find("wait_mutex_acquire_elapsed_ns") != std::string::npos);
+  }
   assert(raw_text.find("\"counter_value\":\"17\"") != std::string::npos);
   assert(raw_text.find("queue_ready/owner/99/thread/") != std::string::npos);
   assert(raw_text.find("observations.sqlite") != std::string::npos);
@@ -443,6 +582,8 @@ int main(int argc, char** argv) {
   assert(receipt_text.find("\"status\":\"complete\"") != std::string::npos);
   assert(receipt_text.find("\"flush\":{\"status\":\"complete\"}") !=
          std::string::npos);
+  assert(proofText.find("\"candidate_receipt_sha256\":\"" +
+      sha256(receipt_text) + "\"") != std::string::npos);
   if (!preserve_artifacts) std::filesystem::remove_all(base);
   std::cout << "Tracing runtime smoke passed\n";
 #else

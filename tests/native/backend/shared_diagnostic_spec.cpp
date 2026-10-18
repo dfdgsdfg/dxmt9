@@ -9,6 +9,7 @@
 #include <map>
 #include <thread>
 #include "dxmt9/observations/reservation.hpp"
+#include "util/diagnostic_file.hpp"
 
 namespace { std::vector<dxmt9::tracing::TraceEvent> captured; uint64_t losses=0, loads=0; bool accepting=true; }
 namespace dxmt9::tracing {
@@ -54,6 +55,30 @@ int main() {
     assert(cursor == slots.size());
   }
   DiagnosticContext context;
+  install_diagnostic_consumer();
+  captured.clear();
+  const std::string structuralJson =
+      "{\"structural_kind\":\"fixture\",\"seq\":18446744073709551615}";
+  {
+    // /dev/null is not a directory, so the artifact open must fail while the
+    // bounded owned tee still publishes the exact structured observation.
+    diagnostics::StructuredOutputFile out(
+        "/dev/null/dxmt9-structural-fixture.json", std::ios::trunc,
+        "dxmt9-structural-json-v1");
+    out << structuralJson;
+  }
+  std::string structuralJoined;
+  bool foundStructural = false;
+  for (const auto& event : captured) {
+    if (std::string_view(event.diagnostic_schema) ==
+        "dxmt9-structural-json-v1") {
+      structuralJoined.append(event.diagnostic_payload,
+                              std::strlen(event.diagnostic_payload));
+      foundStructural = true;
+    }
+  }
+  assert(foundStructural && structuralJoined == structuralJson);
+  captured.clear();
   std::string payload(500, 'a');
   assert(report(Source::QueryReport, "query", payload, context));
   assert(captured.size()==3);
@@ -81,13 +106,20 @@ int main() {
   assert(good.qualified() && good.midpoint()==105);
   assert(!reversed.qualified() && !wide.qualified() && !missing.qualified());
   D9CDiagnosticReport wire{};
-  wire.structSize=sizeof(wire); wire.version=1;
+  wire.structSize=sizeof(wire); wire.version=D9C_DIAGNOSTIC_REPORT_VERSION;
+  wire.encoding=D9C_DIAGNOSTIC_ENCODING_TEXT;
   wire.sessionGeneration=wire.nativeThreadId=wire.guestProcessId=wire.guestThreadId=1;
   wire.processCreateTime100ns=wire.threadCreateTime100ns=wire.sourceOrder=1;
   std::strcpy(wire.schema,"sampler"); std::strcpy(wire.payload,"samples=3"); wire.length=9;
   assert(dxmt9c_diagnostic_report_validate(&wire)==0);
   wire.length=4096; assert(dxmt9c_diagnostic_report_validate(&wire)); wire.length=9;
-  wire.version=2; assert(dxmt9c_diagnostic_report_validate(&wire)); wire.version=1;
+  wire.version=1; assert(dxmt9c_diagnostic_report_validate(&wire));
+  wire.version=D9C_DIAGNOSTIC_REPORT_VERSION;
+  wire.encoding=D9C_DIAGNOSTIC_ENCODING_U64_LE;
+  std::memset(wire.payload, 0, sizeof(wire.payload)); wire.length=16;
+  assert(dxmt9c_diagnostic_report_validate(&wire)==0);
+  wire.length=15; assert(dxmt9c_diagnostic_report_validate(&wire));
+  wire.length=16; wire.encoding=D9C_DIAGNOSTIC_ENCODING_TEXT;
   wire.schema[127]='x'; std::memset(wire.schema,'x',127);
   assert(dxmt9c_diagnostic_report_validate(&wire));
   captured.clear();

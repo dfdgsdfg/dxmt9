@@ -8,6 +8,7 @@
 // file-writing helpers.
 
 #include "fg_debug_export.hpp"
+#include "util/diagnostic_report.hpp"
 
 #include "dxmt9/core_constants.hpp"     // core::RS_*, core::CompareFunc
 #include "dxmt9/core_snapshots.hpp"     // core::flatStateOr
@@ -305,6 +306,8 @@ DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
 std::string serializeDagJson(const DagSnapshot& snapshot) {
   std::ostringstream os;
   os << "{\n";
+  os << "  \"structural_kind\": \"framegraph_dag\",\n";
+  os << "  \"source_identity\": \"chunk_seq_id\",\n";
   os << "  \"frame_id\": " << snapshot.frame_id << ",\n";
   os << "  \"chunk_seq_id\": " << snapshot.chunk_seq_id << ",\n";
   os << "  \"stage\": \"" << jsonEscape(snapshot.stage) << "\",\n";
@@ -532,9 +535,32 @@ std::optional<std::string> dumpDagDir() {
     if (env == nullptr || env[0] == '\0') {
       return std::nullopt;
     }
+    if (std::string_view(env) == "perfetto") {
+      return std::nullopt;
+    }
     return std::string(env);
   }();
   return value;
+}
+
+bool dumpDagTraceEnabled() {
+  static const bool value = [] {
+    const char* env = std::getenv("DXMT9_RENDERER_DUMP_DAG");
+    const char* trace = std::getenv("DXMT9_RENDERER_DUMP_DAG_TRACE");
+    return (env && std::string_view(env) == "perfetto") ||
+           (trace && std::string_view(trace) == "1");
+  }();
+  return value;
+}
+
+bool dumpDagSelected() {
+  return dumpDagDir().has_value() || dumpDagTraceEnabled();
+}
+
+void publishDagJsonReport(std::string_view json) noexcept {
+  if (!dumpDagTraceEnabled()) return;
+  dxmt9::diagnostics::report("dxmt9-structural-json-v1", json,
+                             json.size() > 191u * 64u);
 }
 
 bool resolveDumpDagDraws(const char* env) {
@@ -671,14 +697,16 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
                   std::uint64_t chunk_seq_id, const char* stage,
                   core::SourcePayloadView payload) {
   const std::optional<std::string> dir = dumpDagDir();
-  if (!dir.has_value()) {
+  const bool trace = dumpDagTraceEnabled();
+  if (!dir.has_value() && !trace) {
     return;
   }
 
   // Resolve formats once (env read each call is cheap and keeps writeDagDump
   // free of additional process-global state).
-  const std::vector<DumpFormat> formats =
-      resolveDumpFormats(std::getenv("DXMT9_RENDERER_DUMP_DAG_FORMATS"));
+  const std::vector<DumpFormat> formats = dir.has_value()
+      ? resolveDumpFormats(std::getenv("DXMT9_RENDERER_DUMP_DAG_FORMATS"))
+      : std::vector<DumpFormat>{};
 
   // One field-walk, reused by every selected format (R-BACK-39.7). The optional
   // per-draw detail is resolved inside buildSnapshot only when payload is valid
@@ -686,6 +714,12 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
   const DagSnapshot snapshot = buildSnapshot(fg, chunk_seq_id, stage, payload);
 
   const std::string stageStr = stage ? std::string(stage) : std::string();
+  std::string json;
+  if (trace || std::find(formats.begin(), formats.end(), DumpFormat::Json) !=
+                   formats.end()) {
+    json = serializeDagJson(snapshot);
+  }
+  if (trace) publishDagJsonReport(json);
 
   // Warn at most once per process if the dump dir turns out to be unwritable.
   static std::atomic<bool> warned{false};
@@ -707,7 +741,7 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
     std::string contents;
     switch (fmt) {
       case DumpFormat::Json:
-        contents = serializeDagJson(snapshot);
+        contents = json;
         break;
       case DumpFormat::Dot:
         contents = serializeDagDot(snapshot);

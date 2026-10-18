@@ -192,6 +192,11 @@ std::vector<DumpFormat> resolveDumpFormats(const char* env);
 // Reads DXMT9_RENDERER_DUMP_DAG once (static-const pattern). Returns the dump
 // directory if set to a non-empty value, else std::nullopt.
 std::optional<std::string> dumpDagDir();
+// `DXMT9_RENDERER_DUMP_DAG=perfetto` selects direct structured tracing without
+// creating a filesystem artifact.
+bool dumpDagTraceEnabled();
+bool dumpDagSelected();
+void publishDagJsonReport(std::string_view json) noexcept;
 
 // Pure resolver for DXMT9_RENDERER_DUMP_DAG_FRAME (1-based inter-present frame
 // number). nullptr / empty / "0" / non-numeric all resolve to std::nullopt,

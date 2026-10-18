@@ -188,6 +188,50 @@ bool dxmt9PeTraceChunkBegin(D9CDevice* device) noexcept {
   return active;
 }
 
+static bool dxmt9PeTraceRawRecord(const Dxmt9PeRawSample& sample,
+                                 const char* schema) noexcept {
+  const DWORD savedError = GetLastError();
+  PeTraceThreadState& state = threadState();
+  if (!dxmt9PeTraceEnabled() || !state.identityValid) {
+    SetLastError(savedError);
+    return false;
+  }
+  D9CTraceClockProbe probe{};
+  if (dxmt9c_trace_clock_probe(nullptr, &probe) != 0 ||
+      probe.status != D9C_TRACE_RECEIPT_ACCEPTED ||
+      probe.sessionGeneration == 0u || probe.nativeThreadId == 0u) {
+    SetLastError(savedError);
+    return false;
+  }
+  D9CDiagnosticReport report{};
+  report.structSize = sizeof(report);
+  report.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+  report.encoding = D9C_DIAGNOSTIC_ENCODING_U64_LE;
+  report.sessionGeneration = probe.sessionGeneration;
+  report.nativeThreadId = probe.nativeThreadId;
+  report.guestProcessId = state.processId;
+  report.guestThreadId = state.threadId;
+  report.processCreateTime100ns = state.processCreateTime100ns;
+  report.threadCreateTime100ns = state.threadCreateTime100ns;
+  report.sourceOrder = sample.ordinal;
+  const size_t schemaSize = std::strlen(schema);
+  std::memcpy(report.schema, schema, schemaSize + 1u);
+  const auto fields = dxmt9PeRawSampleFields(sample);
+  report.length = static_cast<uint32_t>(sizeof(fields));
+  std::memcpy(report.payload, fields.data(), sizeof(fields));
+  const bool accepted = dxmt9c_device_diagnostic_report(nullptr, &report) == 0;
+  SetLastError(savedError);
+  return accepted;
+}
+
+bool dxmt9PeTraceRawSample(const Dxmt9PeRawSample& sample) noexcept {
+  return dxmt9PeTraceRawRecord(sample, "pe-pc-sample-v1");
+}
+
+bool dxmt9PeTraceRawPopulation(const Dxmt9PeRawSample& sample) noexcept {
+  return dxmt9PeTraceRawRecord(sample, "pe-pc-population-v1");
+}
+
 void dxmt9PeTraceChunkEnd(D9CDevice* device) noexcept {
   const DWORD priorError = GetLastError();
   PeTraceThreadState& state = threadState();
@@ -299,6 +343,7 @@ void sendDiagnosticReport(const char* schema, std::string_view bytes, bool trunc
   D9CDiagnosticReport report{};
   report.structSize = sizeof(report);
   report.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+  report.encoding = D9C_DIAGNOSTIC_ENCODING_TEXT;
   report.sessionGeneration = probe.sessionGeneration;
   report.nativeThreadId = probe.nativeThreadId;
   report.guestProcessId = state.processId;

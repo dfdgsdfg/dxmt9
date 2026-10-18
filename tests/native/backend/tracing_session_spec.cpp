@@ -87,7 +87,7 @@ private:
         : "";
     const std::string canonical =
         "{\"attempt_id\":\"attempt-" + directory.filename().string() +
-        "\",\"categories\":[\"replay\",\"wait\",\"encode\"],\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,\"max_events\":" +
+        "\",\"categories\":[\"replay\",\"wait\",\"encode\"],\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":16777216,\"max_events\":" +
         std::to_string(max_events) +
         "},\"optional_collectors\":" + optional_collectors + ",\"output\":{\"pftrace\":\"" +
         trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
@@ -110,7 +110,7 @@ private:
         "\"window\":{\"mode\":\"duration\",\"delay_ms\":" +
         std::to_string(delay_ms) + ",\"duration_ms\":30000},"
         "\"limits\":{\"max_events\":" + std::to_string(max_events) +
-        ",\"max_bytes\":1048576,\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
+        ",\"max_bytes\":16777216,\"finalize_timeout_ms\":5000},\"output\":{\"pftrace\":\"" +
         trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
         "\"},\"config_sha256\":\"" + digest + "\"}";
     std::ofstream output(request_path, std::ios::binary);
@@ -131,7 +131,20 @@ TraceEvent replayEvent(uint16_t event_id =
   return event;
 }
 
+// An incomplete stop reports the decision before its retained owner finishes
+// publishing the terminal proof. Rearm is the production quiescence gate;
+// retry only this expected cold lifecycle rejection, with a bounded deadline.
+[[maybe_unused]] bool prepareAfterOwnerRelease(const Capture& capture) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  do {
+    if (prepare_and_start(capture.config())) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  } while (std::chrono::steady_clock::now() < deadline);
+  return false;
+}
+
 void waitForCollection() {
+
   for (unsigned i = 0; i < 1000 && !enabled(); ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   assert(enabled());
@@ -323,7 +336,7 @@ int main() {
 
   // Batch loss is admitted under the same generation writer lease as events.
   Capture lostBatch(root, "admitted-batch-loss");
-  assert(prepare_and_start(lostBatch.config()));
+  assert(prepareAfterOwnerRelease(lostBatch));
   waitForCollection();
   const TraceEvent lostEvent = replayEvent();
   assert(emit_batch(std::span<const TraceEvent>(&lostEvent, 1), 1));
@@ -333,7 +346,7 @@ int main() {
 
   // A rearmed session starts with its own loss count.
   Capture afterLoss(root, "after-admitted-batch-loss");
-  assert(prepare_and_start(afterLoss.config()));
+  assert(prepareAfterOwnerRelease(afterLoss));
   waitForCollection();
   assert(emit(replayEvent()));
   assert(stop_and_finalize());
@@ -350,7 +363,7 @@ int main() {
   assert(numericOverflow.readRaw().find("\"loss\":{\"total\":\"1\"}") != std::string::npos);
 
   Capture overflow(root, "overflow", 1);
-  assert(prepare_and_start(overflow.config()));
+  assert(prepareAfterOwnerRelease(overflow));
   waitForCollection();
   assert(emit(replayEvent()));
   dxmt9::observations::SnapshotSink exhausted(dxmt9::observations::Source::QueryBackend, 1, 0);
@@ -361,6 +374,13 @@ int main() {
   assert(!stop_and_finalize());
   assert(overflow.readReceipt().find("\"status\":\"incomplete\"") !=
          std::string::npos);
+  // The final incomplete capture may still own proof I/O. A subsequent clean
+  // capture proves owner release before this fixture removes its artifacts.
+  Capture afterOverflow(root, "after-overflow-owner-release");
+  assert(prepareAfterOwnerRelease(afterOverflow));
+  waitForCollection();
+  assert(emit(replayEvent()));
+  assert(stop_and_finalize());
 #else
   Capture inactive(root, "sdk-off");
   assert(!prepare_and_start(inactive.config()));

@@ -1,6 +1,10 @@
 #pragma once
 #include "diagnostic_sink.hpp"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
+
 namespace dxmt9::observations {
 struct Endpoint {
   std::uint64_t source = 0, before = 0, after = 0;
@@ -28,13 +32,21 @@ inline tracing::TraceEvent endpoint_event(Source source, const DiagnosticContext
   e.phase = static_cast<std::uint8_t>(phase);
   e.scope_id = scope;
   e.uncertainty_ns = (point.after - point.before + 1) / 2 + 2 * point.resolution;
-  std::snprintf(e.diagnostic_schema, sizeof(e.diagnostic_schema), "%s", schema);
-  std::snprintf(e.diagnostic_payload, sizeof(e.diagnostic_payload),
-      "source_ns=%llu native_before_ns=%llu native_after_ns=%llu resolution_ns=%llu qualified=1",
-      static_cast<unsigned long long>(point.source), static_cast<unsigned long long>(point.before),
-      static_cast<unsigned long long>(point.after), static_cast<unsigned long long>(point.resolution));
+  const auto schemaSize = std::min(std::strlen(schema), sizeof(e.diagnostic_schema) - 1);
+  if (schemaSize) std::memcpy(e.diagnostic_schema, schema, schemaSize);
+  const std::uint64_t fields[] = {point.source, point.before, point.after,
+                                  point.resolution};
+  constexpr std::size_t fieldBytes = sizeof(fields);
+  for (std::size_t byte = 0; byte < fieldBytes; ++byte) {
+    const auto fieldIndex = byte / sizeof(std::uint64_t);
+    const auto fieldByte = byte % sizeof(std::uint64_t);
+    e.diagnostic_payload[byte] = static_cast<char>(
+        (fields[fieldIndex] >> (fieldByte * 8)) & 0xffu);
+  }
+  e.diagnostic_size = static_cast<std::uint16_t>(fieldBytes);
   e.diagnostic_parts = 1;
-  e.observation_mode = 3;
+  e.observation_stride = sizeof(std::uint64_t);
+  e.observation_mode = 5;
   return e;
 }
 } // namespace dxmt9::observations

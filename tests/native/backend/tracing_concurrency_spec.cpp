@@ -10,7 +10,7 @@ int main() {
   using namespace dxmt9::tracing;
 
   // A producer snapshots generation N, then is descheduled before its count
-  // increment. Close, quiesce and reopen as N+1 before it resumes. Its CAS
+  // increment. Close, quiesce and reopen as N+1 before it resumes. Its probe
   // must reject the old token instead of admitting into N+1 storage.
   std::atomic<uint64_t> gate{makeAdmissionGate(41, 0, false)};
   const uint64_t delayedGeneration = captureAdmissionGeneration(gate);
@@ -35,8 +35,19 @@ int main() {
   releaseWriter(gate);
   assert(admissionWriters(gate.load(std::memory_order_acquire)) == 0);
 
+  // A rejected stale probe may be paused between its fetch_add and undo.
+  // Reopen must never overwrite that count and let the undo corrupt N+1.
+  std::atomic<uint64_t> probeGate{makeAdmissionGate(50, 0, true)};
+  const uint64_t rejectedProbe = probeGate.fetch_add(1, std::memory_order_acq_rel);
+  assert(!mayAcquireWriter(TraceState::Collecting, rejectedProbe, 49));
+  assert(!openAdmission(probeGate, 51));
+  releaseWriter(probeGate);
+  assert(openAdmission(probeGate, 51));
+  assert(admissionGeneration(probeGate.load()) == 51);
+  assert(admissionWriters(probeGate.load()) == 0);
+
   // Exercise the close/admit linearization under simultaneous contenders.
-  // Once closeAdmission returns, no new producer may increment the gate. A
+  // Once closeAdmission returns, no new producer may acquire a lease. A
   // producer which won first remains counted until its explicit release.
   for (uint64_t generation = 1; generation <= 256; ++generation) {
     std::atomic<uint64_t> raceGate{makeAdmissionGate(generation, 0, false)};

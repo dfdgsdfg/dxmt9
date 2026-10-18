@@ -1,8 +1,10 @@
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "observations/bounded_records.hpp"
+#include "observations/detail_rows.hpp"
 #include "observations/trace_sink.hpp"
 #include "observations/endpoint.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstddef>
@@ -63,6 +65,7 @@ struct Sink {
   std::atomic<std::uint64_t> frame{0};
   std::atomic<std::uint64_t> writers{0};
   std::atomic<std::uint64_t> traceAttempted{0}, traceAccepted{0};
+  std::atomic<bool> missingTraceReported{false};
   std::atomic<bool> finished{false};
   std::uint64_t first = setting("DXMT9_CPU_SUPPLY_TRACE_FIRST_PRESENT", 300);
   std::uint64_t last = setting("DXMT9_CPU_SUPPLY_TRACE_LAST_PRESENT", 600);
@@ -71,10 +74,12 @@ struct Sink {
   Sink() noexcept {
     const char* path = std::getenv("DXMT9_CPU_SUPPLY_TRACE");
     if (!path || last <= first) return;
-    // Never overwrite another run's evidence. Opening/allocation precedes
-    // the warm-up window; failure produces no apparently valid transcript.
-    file = std::fopen(path, "wx");
-    if (file) rows.allocate();
+    // Keep acquisition independent from the optional legacy CSV consumer.
+    // Never overwrite another run's evidence; allocation still precedes the
+    // warm-up window when the path cannot be opened.
+    if (!traceOnly()) file = std::fopen(path, "wx");
+    if (!rows.allocate() || (!traceOnly() && !file))
+      std::fprintf(stderr, "[cpu-supply] output or row storage unavailable\n");
   }
   void finish(bool closed) noexcept {
     if (finished.exchange(true) || !file) return;
@@ -157,14 +162,16 @@ void record(Event event, const void* owner, std::uint64_t id,
   s.rows.publish(index);
   if (traceGeneration) {
     observations::DiagnosticContext c;
-    c.generation = traceGeneration; c.record = index + 1; c.work = id;
-    char details[512]{};
-    std::snprintf(details, sizeof(details),
-        "wall_ns=%llu cpu_ns=%llu tid=%llu owner=%llu id=%llu value=%llu frame=%llu event=%u qualified=%u native_before_ns=%llu native_after_ns=%llu source_clock=CLOCK_MONOTONIC",
+    c.generation = traceGeneration;
+    c.timestamp = tracing::now_ns();
+    c.record = index + 1;
+    c.work = id;
+    const std::array<std::uint64_t, observations::cpu_supply_row_fields.size()> fields = {
         r.wall, r.cpu, r.tid, r.owner, r.id, r.value, r.frame,
-        static_cast<unsigned>(r.event), point.qualified() ? 1u : 0u, point.before, point.after);
-
-    observations::report(observations::Source::CpuDetail, "cpu-supply-row-v1", details, c);
+        static_cast<std::uint64_t>(r.event), point.qualified() ? 1u : 0u,
+        point.before, point.after, point.resolution};
+    (void)observations::emit_detail_row(observations::Source::CpuDetail,
+        "cpu-supply-row-v2", c, fields);
     if (point.qualified()) {
       auto endpoint = observations::endpoint_event(observations::Source::CpuDetail, c, point,
           "cpu-supply.endpoint");
@@ -186,6 +193,9 @@ void record(Event event, const void* owner, std::uint64_t id,
 void present(std::uint64_t ordinal) noexcept {
   auto& s = sink();
   s.frame.store(ordinal, std::memory_order_relaxed);
+  if (traceOnly() && !tracing::enabled() &&
+      !s.missingTraceReported.exchange(true, std::memory_order_relaxed))
+    std::fprintf(stderr, "[cpu-supply] perfetto consumer selected without an active trace session\n");
   record(Event::Present, nullptr, ordinal);
   // Export outside the measured interval. Readers acquire each row's ready
   // flag; an in-flight writer is counted as incomplete, never raced or waited.

@@ -106,7 +106,15 @@ inline void consume_report(const char* tag, std::string_view data, bool truncate
   else return;
   (void)report(source, name, data, {}, truncated);
 }
+inline bool interested_report(const char* tag) noexcept {
+  if (!tracing::enabled() || !tag) return false;
+  const std::string_view name(tag);
+  return name.find("query") != name.npos || name.find("pe-") != name.npos ||
+      name.find("perf") != name.npos || name.find("queue") != name.npos ||
+      name.starts_with("dxmt9") || name.starts_with("dxmt");
+}
 inline void install_diagnostic_consumer() noexcept {
+  diagnostics::interest.store(interested_report, std::memory_order_release);
   diagnostics::consumer.store(consume_report, std::memory_order_release);
 }
 }  // namespace dxmt9::observations

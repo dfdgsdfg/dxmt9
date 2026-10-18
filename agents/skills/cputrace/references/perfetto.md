@@ -187,6 +187,15 @@ large integers that SQL floating-point counters cannot represent exactly.
 native consumer receipts remain separate provenance. Log metrics without a
 clock stay in `diagnostic_row`/`diagnostic_value`, not synthetic timed counters.
 
+Set `DXMT9_CPU_SUPPLY_TRACE=perfetto` or `DXMT9_WAIT_TRACE=perfetto` for
+explicit detail acquisition without CSV output. A path selects the legacy file
+plus the active native consumer; an unwritable file does not disable native
+records. Keep the existing frame/window gates. Trace-only selection requires an
+active detail-enabled session. Typed rows and endpoint brackets appear in
+`observation_report`/`observation_field`; PE PC samples retain their QPC domain,
+target incarnation, failures and omission counts without inventing alignment.
+Renderer structural rows can link directly through `structural_value.report_id`.
+
 The runner automatically imports selected `DXMT9_CPU_SUPPLY_TRACE` and
 `DXMT9_WAIT_TRACE` files and indexes its workload log. Additional legacy PE logs
 or normalized bundles can be supplied with `--trace-bundle ROLE=PATH`. For opaque
@@ -210,3 +219,24 @@ and a hashed `observation-receipt.json`; `--no-archive` explicitly opts out.
 Publication refuses existing outputs. Raw acquisition files, control/receipt
 JSON and opaque capture bundles remain retained evidence; the SQLite file is
 the structured analysis product. Preserve all artifacts needed by its digests.
+
+## Optional asynchronous persistence
+
+Use `--trace-drain-mode async` to persist bounded binary batches during capture.
+`--trace-batch-events` defaults to 64, `--trace-service-interval-ms` to 10, and
+`--trace-transport-events` to 16384. Freeze these settings before comparing runs;
+small producer blocks can lose bursty reports even with spare total capacity.
+Deferred mode remains the default. Native Perfetto serialization still occurs
+after close in both modes; async is not live streaming to the Perfetto viewer.
+
+Retain the async spool and its manifest digest. New engine receipts require a
+matching `.completion.json` proof; a candidate receipt alone is insufficient.
+Timeout or loss keeps a capture unqualified, and retained diagnostic ownership
+can temporarily reject rearming. Run the normal harness qualification instead
+of treating file existence or `stop_and_finalize()` alone as completion proof.
+
+For overhead comparisons, supply matched repeated observer-off/deferred/async
+evidence and a budget frozen before collection to
+`scripts/tools/qualify_trace_observer.py`. This evaluator does not launch runs or
+collect missing metrics. Native fixture success does not establish Wine/Metal
+workload overhead; see the [transport contract](../../../../specs/experiments/harness/tracing/asynchronous-drain.md).

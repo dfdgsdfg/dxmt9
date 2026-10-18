@@ -27,9 +27,13 @@ percentile calculations or DAG construction.
 The SDK-independent output facade accepts owned bounded POD records. Typed
 fields retain unsigned integers exactly; formatted diagnostic reports retain
 their original bytes and format/schema identity instead of reparsing external
-log files. Reports exceeding one record use bounded, ordered fragments admitted
-as one generation-qualified batch. Overflow or truncation cannot become a
-successful complete report. Compatibility output remains independent.
+log files. CPU-supply, wait and PE sample detail use binary little-endian row
+records (encoding 4); bracketed endpoint records use binary encoding 5. These
+schemas are expanded into named fields on the cold export path, not formatted
+by the producer or spool worker. Reports exceeding one record use bounded,
+ordered fragments admitted as one generation-qualified batch. Overflow or
+truncation cannot become a successful complete report. Compatibility output
+remains independent.
 
 Native events expose source, source-local record ordinal, report/field schema,
 original value and timestamp semantics. Cold normalization reconstructs report
@@ -37,7 +41,12 @@ fragments and materializes structured rows in observations.sqlite; unknown or
 ambiguous report tokens remain text, never guessed numeric units. Large
 structural metadata and opaque artifacts retain hashes and source links.
 Report fields with no established aggregation retain source-defined semantics;
-they are not silently treated as frame deltas or interval samples.
+they are not silently treated as frame deltas or interval samples. Renderer
+structural JSON/CSV reports carry their complete acquired payload under a
+source report ID; the cold importer writes pointer leaves or ordered rows
+directly to `structural_value.report_id` without reopening a producer file.
+Opaque artifact outputs retain the artifact-ID path and explicit source-event
+link.
 
 The PE bridge copies bounded pointer-free report records through the generated
 dispatch schema. It preserves guest process/thread incarnation and captures
@@ -57,11 +66,14 @@ and frame-window fields. Native slices require paired qualified endpoints;
 unpaired endpoints remain explicit evidence.
 
 Consumers share the existing trace admission gate, byte budget, generation and
-drain/seal protocol. No consumer owns production query, queue or resource
-lifetime. Legacy report gates and expensive collector selection remain in
-force; overview alone does not enable them. Closing trace admission never
-suppresses compatibility output. Artifacts/SQLite inherit immutable attempt and
-test provenance. External Instruments, Processor Trace and Xcode captures stay
+drain/seal protocol. Writer admission uses one `fetch_add` probe with a paired
+decrement when rejected; it does not retry under contention. Deferred
+shared-diagnostic partition reservation is separate and uses a bounded
+four-attempt CAS. No consumer owns production query, queue or resource lifetime.
+Legacy report gates and expensive collector selection remain in force; overview
+alone does not enable them. Closing trace admission never suppresses
+compatibility output. Artifacts/SQLite inherit immutable attempt and test
+provenance. External Instruments, Processor Trace and Xcode captures stay
 separate acquisitions and require their own identity/clock qualification.
 
 ## Verification
@@ -85,11 +97,15 @@ fit signed counters use separate native tracks; identities and larger unsigned
 values remain exact instant annotations. Percentiles retain the sample count
 from the same sorted ring observation, including empty rings.
 
-Encoding 3 denotes individually bracketed endpoints. CPU supply projects
-qualified points, while wait acquisition/body pairs produce native slices only
-when all three endpoints qualify. Source clock reads are not retried to obtain
-more favorable brackets. Failed brackets retain original values and explicit
-qualification status in SQL; they do not fabricate time-aligned slices.
+Encoding 3 retains the legacy textual endpoint representation. Binary encoding
+4 carries `cpu-supply-row-v2`, `wait-row-v2`, and PE sample/population records;
+the native and SQL consumers expand their ordered unsigned fields while
+preserving the original row report identity. Binary encoding 5 carries
+bracketed endpoints. CPU supply projects qualified points, while wait
+acquisition/body pairs produce native slices only when all three endpoints
+qualify. Source clock reads are not retried to obtain more favorable brackets.
+Failed brackets retain original values and explicit qualification status in
+SQL; they do not fabricate time-aligned slices.
 
 For sessions with at least 4096 slots, half of the existing event allocation is
 reserved for shared diagnostic admission. A bounded CAS reservation runs under
@@ -101,9 +117,11 @@ loss without changing the legacy consumer. The larger record size and changed
 capacity partition require fresh overhead and retention-window qualification.
 
 `observation_report`/`observation_field` preserve source/schema/ordinal,
-fragment completeness, exact values and raw payload bytes. `structural_value`
-contains JSON pointer leaves or ordered CSV rows from producer-linked artifacts.
-Artifact hashes and `artifact_link` bind these rows to native source events;
+fragment completeness, exact values and raw payload bytes; the report ID owns
+the expanded field rows and links back to its native source event.
+`structural_value` stores JSON-pointer leaves or ordered CSV rows either under
+that `report_id` for acquired structural reports, or under an `artifact_id` for
+opaque file outputs. `artifact_link` binds file outputs to their source event;
 failed files remain explicit records. Paths are resolved at the producer. No
 artifact timestamp is promoted into an execution interval.
 

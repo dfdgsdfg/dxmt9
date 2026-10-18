@@ -119,6 +119,8 @@ struct TraceEvent {
   char diagnostic_payload[192];
   uint16_t diagnostic_part;
   uint16_t diagnostic_parts;
+  // Encoding 4 is binary little-endian uint64 fields, including embedded NUL.
+  uint16_t diagnostic_size;
 };
 
 struct TraceConfig {
@@ -193,7 +195,9 @@ bool emit_batch_captured(std::span<const TraceEvent> events,
 
 // Control-path only. Closes admission, waits for admitted writers until the
 // configured deadline, writes raw evidence and a native Perfetto trace, then
-// atomically publishes the engine receipt. A false result means incomplete.
+// publishes a candidate receipt and decides completion within the deadline.
+// True means the decision is complete; offline qualification additionally
+// requires the matching durable completion proof, whose I/O may still be pending.
 bool stop_and_finalize() noexcept;
 bool stop_and_finalize(uint64_t expected_generation) noexcept;
 void record_loss(uint32_t reason, uint64_t count = 1) noexcept;

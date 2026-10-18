@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -185,7 +186,8 @@ extern "C" int32_t dxmt9c_device_diagnostic_report(
   if (dxmt9c_diagnostic_report_validate(report)) return 2;
   using namespace dxmt9;
   const auto generation = tracing::capture_generation();
-  if (!generation) return 0;
+  if (!generation)
+    return report->encoding == D9C_DIAGNOSTIC_ENCODING_U64_LE ? 4 : 0;
   if (generation != report->sessionGeneration || nativeThreadId() != report->nativeThreadId) return 3;
   observations::DiagnosticContext context;
   context.generation = generation;
@@ -196,6 +198,33 @@ extern "C" int32_t dxmt9c_device_diagnostic_report(
   identity.guest_thread_id = report->guestThreadId;
   identity.process_create_time100ns = report->processCreateTime100ns;
   identity.thread_create_time100ns = report->threadCreateTime100ns;
+  if (report->encoding == D9C_DIAGNOSTIC_ENCODING_U64_LE) {
+    if (report->length > 192u) return 2;
+    dxmt9::tracing::TraceEvent event{};
+    event.timestamp_ns = dxmt9::tracing::now_ns();
+    event.process_id = static_cast<uint64_t>(getpid());
+    event.thread_id = nativeThreadId();
+    event.guest_process_id = report->guestProcessId;
+    event.guest_thread_id = report->guestThreadId;
+    event.process_create_time100ns = report->processCreateTime100ns;
+    event.thread_create_time100ns = report->threadCreateTime100ns;
+    event.observation_record = report->sourceOrder;
+    event.observation_kind = 12u;
+    event.observation_mode = 4u;
+    event.observation_stride = 8u;
+    event.diagnostic_part = 0u;
+    event.diagnostic_parts = 1u;
+    event.diagnostic_size = static_cast<uint16_t>(report->length);
+    event.event_id = static_cast<uint16_t>(dxmt9::tracing::EventId::Diagnostic);
+    event.category = static_cast<uint8_t>(tracing::Category::Pe);
+    event.phase = static_cast<uint8_t>(tracing::Phase::Instant);
+    std::memcpy(event.diagnostic_schema, report->schema, sizeof(event.diagnostic_schema));
+    std::memcpy(event.diagnostic_payload, report->payload, report->length);
+    // Binary records keep their explicit length; exporters must not infer it
+    // from a NUL terminator or align the source QPC to native receipt time.
+    const bool emitted = tracing::emit_observations({&event, 1u}, generation);
+    return emitted ? 0 : 4;
+  }
   if (report->droppedReports) {
     tracing::TraceEvent invalid{};
     invalid.category = static_cast<uint8_t>(tracing::Category::Count);

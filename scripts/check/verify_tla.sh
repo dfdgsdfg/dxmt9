@@ -12,6 +12,7 @@ tlc_workers="${DXMT9_TLC_WORKERS:-auto}"
 normal_models=(
   TracingGpuRetirement
   TracingSessionLifecycle
+  TracingBatchTransport
   AutogenMipGeneration
   BufferBackingVersioning
   BufferMutationOffload
@@ -83,10 +84,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=71
+expected_normal_count=72
 expected_progress_count=8
-expected_counterexample_count=178
-expected_cfg_count=257
+expected_counterexample_count=181
+expected_cfg_count=261
 progress_configs=(
   TracingGpuRetirement.progress
   TracingSessionLifecycle.progress
@@ -147,6 +148,9 @@ counterexample_models=(
   "TracingGpuRetirement|.session-reuse.counterexample|Invariant SessionReuseRequiresQuiescence is violated"
   "TracingGpuRetirement|.early-retire.counterexample|Invariant NoRetireBeforeGpuCompletion is violated"
   "TracingGpuRetirement|.reader-retire.counterexample|Invariant NoRetireWithCpuReaders is violated"
+  "TracingBatchTransport|.early-publication.counterexample|Invariant NoUninitializedRead is violated"
+  "TracingBatchTransport|.early-recycle.counterexample|Invariant NoRecycleBeforePersistence is violated"
+  "TracingBatchTransport|.live-reuse.counterexample|Invariant NoLiveGenerationReuse is violated"
   "TracingSessionLifecycle|.late-admission.counterexample|Invariant AdmittedOnlyDuringCollection is violated"
   "TracingSessionLifecycle|.premature-seal.counterexample|Invariant SealWaitsForQuiescence is violated"
   "TracingSessionLifecycle|.append-after-seal.counterexample|Invariant NoAppendToSealedStorage is violated"

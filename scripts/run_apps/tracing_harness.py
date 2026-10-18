@@ -14,6 +14,7 @@ import re
 import subprocess
 import stat
 import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -275,8 +276,10 @@ def artifact_graph(paths: dict[str, Path]) -> list[dict[str, Any]]:
         ("observations-sqlite", paths["observations"]),
         ("request", paths["request"]),
         ("receipt", paths["receipt"]),
+        ("completion-proof", Path(str(paths["receipt"]) + ".completion.json")),
         ("engine-trace", paths["pftrace"]),
         ("engine-raw-events", Path(str(paths["pftrace"]) + ".raw.jsonl")),
+        ("engine-raw-spool", Path(str(paths["pftrace"]) + ".raw.jsonl.spool")),
         ("normalized-bundle", paths["root"] / "normalized-bundle.json"),
         ("trace-processor-receipt", paths["root"] / "trace-processor-receipt.json"),
     )
@@ -311,7 +314,7 @@ def publish_observations(paths: dict[str, Path], manifest: dict[str, Any]) -> di
     for key, role in (("DXMT9_CPU_SUPPLY_TRACE", "cpu-supply"),
                       ("DXMT9_WAIT_TRACE", "wait-trace")):
         value = environment.get(key)
-        if value and value != "0":
+        if value and value not in ("0", "perfetto"):
             sources.append((role, Path(value)))
     sources.extend((row["role"], Path(row["path"]))
                    for row in manifest.get("supplemental_bundles", []))
@@ -394,12 +397,25 @@ def make_trace_request(
     include_pe: bool = False, include_metal: bool = False,
     include_detail: bool = False,
     gpu_level: str = "command-buffer", gpu_capacity: int = 256,
+    drain_mode: str = "deferred", batch_events: int = 64,
+    service_interval_ms: int = 10, transport_events: int = 16_384,
 ) -> dict[str, Any]:
     include_metal = include_metal or profile.name == "overview"
     if gpu_level not in ("command-buffer", "encoder-stage"):
         raise ValueError("GPU timing level must be command-buffer or encoder-stage")
     if isinstance(gpu_capacity, bool) or not isinstance(gpu_capacity, int) or not 1 <= gpu_capacity <= 256:
         raise ValueError("GPU timing capacity must be between 1 and 256")
+    if drain_mode not in ("deferred", "async"):
+        raise ValueError("trace drain mode must be deferred or async")
+    for name, value, minimum, maximum in (
+        ("batch events", batch_events, 1, 4_096),
+        ("service interval", service_interval_ms, 1, 1_000),
+        ("transport events", transport_events, 1, 65_536),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"trace {name} must be between {minimum} and {maximum}")
+    if transport_events < batch_events * 4:
+        raise ValueError("trace transport events must be at least four batches")
     window: dict[str, Any] = {"mode": profile.window_mode}
     if profile.window_mode == "duration":
         window.update({"delay_ms": delay_ms, "duration_ms": duration_ms or 5_000})
@@ -432,6 +448,12 @@ def make_trace_request(
         "qualification_policy": profile.frozen_config()["qualification_policy"],
         "required_collectors": list(profile.required_collectors),
         "optional_collectors": optional_collectors,
+        "transport": {
+            "mode": drain_mode,
+            "batch_events": batch_events,
+            "service_interval_ms": service_interval_ms,
+            "transport_events": transport_events,
+        },
         "output": {"pftrace": str(paths["pftrace"]), "receipt": str(paths["receipt"])},
     }
     if profile.name == "gpu-detail" or include_metal:
@@ -554,6 +576,85 @@ def verify_engine_receipt(
         errors.append("request_config_digest_mismatch")
     if receipt.get("status") != "complete":
         errors.append(f"engine_status:{receipt.get('status', 'missing')}")
+    if "proof_required" in receipt:
+        proof_ref = receipt.get("completion_proof")
+        proof_path = Path(str(receipt_path) + ".completion.json")
+        if receipt.get("proof_required") is not True:
+            errors.append("completion_proof_requirement_invalid")
+        if (not isinstance(proof_ref, dict) or proof_ref.get("required") is not True
+                or not _same_lexical_path(proof_ref.get("path"), proof_path)):
+            errors.append("completion_proof_reference_invalid")
+        limits = request.get("limits", {})
+        wait_ms = _nonnegative_integer(limits.get("finalize_timeout_ms")) if isinstance(limits, dict) else 0
+        proof_deadline = time.monotonic() + min(wait_ms or 0, 120_000) / 1000
+        while not proof_path.exists() and time.monotonic() < proof_deadline:
+            time.sleep(min(0.02, max(0.0, proof_deadline - time.monotonic())))
+        try:
+            if not _safe_artifact_path(proof_path):
+                raise OSError("completion proof path is unsafe")
+            proof_stat = proof_path.lstat()
+            if not stat.S_ISREG(proof_stat.st_mode):
+                raise OSError("completion proof is not a regular file")
+            proof = json.loads(proof_path.read_text())
+            if not isinstance(proof, dict):
+                raise ValueError("completion proof root is not an object")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"completion_proof_unavailable:{exc}")
+        else:
+            if proof.get("schema") != "dxmt9.trace.completion.v1":
+                errors.append("completion_proof_schema_mismatch")
+            for key in ("run_id", "attempt_id", "config_sha256"):
+                if proof.get(key) != receipt.get(key):
+                    errors.append(f"completion_proof_mismatch:{key}")
+            if proof.get("generation") != receipt.get("generation"):
+                errors.append("completion_proof_mismatch:generation")
+            if (not isinstance(receipt.get("generation"), str)
+                    or re.fullmatch(r"(?:0|[1-9][0-9]*)", receipt["generation"]) is None):
+                errors.append("completion_proof_generation_malformed")
+            if proof.get("status") != "complete":
+                errors.append(f"completion_proof_status:{proof.get('status', 'missing')}")
+            decided_ns = _nonnegative_integer(proof.get("completed_ns"))
+            deadline_ns = _nonnegative_integer(proof.get("deadline_ns"))
+            if (decided_ns is None or deadline_ns is None
+                    or not isinstance(proof.get("completed_ns"), str)
+                    or not isinstance(proof.get("deadline_ns"), str)):
+                errors.append("completion_proof_deadline_malformed")
+            elif decided_ns > deadline_ns:
+                errors.append("completion_proof_deadline_exceeded")
+            if proof.get("candidate_receipt_sha256") != sha256_file(receipt_path):
+                errors.append("completion_proof_candidate_digest_mismatch")
+    requested_transport = request.get("transport", {
+        "mode": "deferred", "batch_events": 64, "service_interval_ms": 10,
+        "transport_events": 16_384,
+    })
+    receipt_transport = receipt.get("transport")
+    if receipt_transport is None and requested_transport.get("mode") == "deferred":
+        pass  # Legacy deferred receipts predate transport provenance.
+    elif receipt_transport != requested_transport:
+        errors.append("receipt_mismatch:transport")
+    if requested_transport.get("mode") == "async":
+        spool = Path(str(Path(str(pftrace_path) + ".raw.jsonl")) + ".spool")
+        spool_artifact = receipt.get("raw_spool_artifact")
+        if not isinstance(spool_artifact, dict):
+            errors.append("raw_spool_artifact_receipt_missing")
+        else:
+            if not _safe_artifact_path(spool) or not _same_lexical_path(spool_artifact.get("path"), spool):
+                errors.append("raw_spool_artifact_path_mismatch")
+            try:
+                spool_stat = spool.lstat()
+                spool_size = spool_stat.st_size
+                if not stat.S_ISREG(spool_stat.st_mode):
+                    raise OSError("raw spool artifact is not a regular file")
+                spool_digest = sha256_file(spool)
+            except OSError:
+                errors.append("raw_spool_artifact_missing")
+            else:
+                if (spool_size <= 0 or not _valid_size(spool_artifact.get("bytes"))
+                        or spool_artifact.get("bytes") != spool_size):
+                    errors.append("raw_spool_artifact_size_mismatch_or_empty")
+                if (not _valid_digest(spool_artifact.get("sha256"))
+                        or spool_artifact.get("sha256") != spool_digest):
+                    errors.append("raw_spool_artifact_digest_mismatch")
     required_collectors = request.get("required_collectors")
     if not isinstance(required_collectors, list) or any(
         not isinstance(name, str) for name in required_collectors

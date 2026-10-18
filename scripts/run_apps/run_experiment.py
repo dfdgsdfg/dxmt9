@@ -975,6 +975,10 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         or getattr(args, "trace_delay_ms", 0)
         or getattr(args, "trace_gpu_level", None) is not None
         or getattr(args, "trace_gpu_capacity", None) is not None
+        or getattr(args, "trace_drain_mode", "deferred") != "deferred"
+        or getattr(args, "trace_batch_events", 64) != 64
+        or getattr(args, "trace_service_interval_ms", 10) != 10
+        or getattr(args, "trace_transport_events", 16_384) != 16_384
     ):
         raise ValueError("trace window and source options require overview, timeline or gpu-detail")
     supplemental_bundles = []
@@ -1051,7 +1055,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                                       include_pe=getattr(args, "trace_include_pe", False),
                                       include_metal=getattr(args, "trace_include_metal", False),
                                       include_detail=getattr(args, "trace_detail", False),
-                                      gpu_level=gpu_level, gpu_capacity=gpu_capacity)
+                                      gpu_level=gpu_level, gpu_capacity=gpu_capacity,
+                                      drain_mode=getattr(args, "trace_drain_mode", "deferred"),
+                                      batch_events=getattr(args, "trace_batch_events", 64),
+                                      service_interval_ms=getattr(args, "trace_service_interval_ms", 10),
+                                      transport_events=getattr(args, "trace_transport_events", 16_384))
                    if trace_profile.name != "baseline" and not trace_window_error else None)
         source = source_identity(REPO_ROOT)
         provenance_error = None
@@ -1135,7 +1143,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                                include_pe=getattr(args, "trace_include_pe", False),
                                include_metal=getattr(args, "trace_include_metal", False),
                                include_detail=getattr(args, "trace_detail", False),
-                               gpu_level=gpu_level, gpu_capacity=gpu_capacity)
+                               gpu_level=gpu_level, gpu_capacity=gpu_capacity,
+                               drain_mode=getattr(args, "trace_drain_mode", "deferred"),
+                               batch_events=getattr(args, "trace_batch_events", 64),
+                               service_interval_ms=getattr(args, "trace_service_interval_ms", 10),
+                               transport_events=getattr(args, "trace_transport_events", 16_384))
             if trace_profile.name != "baseline" and not trace_window_error else None
         )
         launch_trace_config = trace_launch_configuration(
@@ -2006,6 +2018,14 @@ def main() -> int:
                             help="GPU timestamp scope for gpu-detail or --trace-include-metal.")
     run_parser.add_argument("--trace-gpu-capacity", type=int, default=None,
                             help="Bounded GPU timing sample capacity (maximum 256).")
+    run_parser.add_argument("--trace-drain-mode", choices=("deferred", "async"), default="deferred",
+                            help="Trace output transport; deferred is the default, async uses the bounded worker.")
+    run_parser.add_argument("--trace-batch-events", type=int, default=64,
+                            help="Maximum events per asynchronous transport batch.")
+    run_parser.add_argument("--trace-service-interval-ms", type=int, default=10,
+                            help="Asynchronous worker partial-batch service interval.")
+    run_parser.add_argument("--trace-transport-events", type=int, default=16_384,
+                            help="Bounded asynchronous transport event capacity.")
     run_parser.add_argument("--wine-root", help="Wine runtime root")
     run_parser.add_argument("--wine-bin", help="Wine executable path")
     run_parser.add_argument(

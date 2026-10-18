@@ -123,11 +123,10 @@ bool shouldLog(LogLevel level) {
   return level >= configuredLogLevel() && configuredLogLevel() != LogLevel::None;
 }
 
-static void logLineImpl(LogLevel level, const char* tag, const std::string& line, bool truncated) {
-  if (!shouldLog(level)) {
-    return;
-  }
-  diagnostics::report(tag ? tag : "dxmt9", line, truncated);
+static void logLineImpl(LogLevel level, const char* tag, const std::string& line,
+                        bool truncated, bool writeLegacy, bool writeDiagnostic) {
+  if (writeDiagnostic) diagnostics::report(tag ? tag : "dxmt9", line, truncated);
+  if (!writeLegacy) return;
   std::lock_guard lock(logMutex());
   std::ostringstream out;
   out << '[' << (tag ? tag : "dxmt9") << "] " << levelPrefix(level) << ": " << line << '\n';
@@ -142,13 +141,16 @@ static void logLineImpl(LogLevel level, const char* tag, const std::string& line
 }
 
 void logLine(LogLevel level, const char* tag, const std::string& line) {
-  logLineImpl(level, tag, line, false);
+  const bool writeLegacy = shouldLog(level);
+  const bool writeDiagnostic = diagnostics::interested(tag ? tag : "dxmt9");
+  if (writeLegacy || writeDiagnostic)
+    logLineImpl(level, tag, line, false, writeLegacy, writeDiagnostic);
 }
 
 void vlogf(LogLevel level, const char* tag, const char* fmt, std::va_list args) {
-  if (!shouldLog(level)) {
-    return;
-  }
+  const bool writeLegacy = shouldLog(level);
+  const bool writeDiagnostic = diagnostics::interested(tag ? tag : "dxmt9");
+  if (!writeLegacy && !writeDiagnostic) return;
   std::array<char, 4096> buffer{};
   const int written = std::vsnprintf(buffer.data(), buffer.size(), fmt, args);
   if (written <= 0) {
@@ -157,13 +159,10 @@ void vlogf(LogLevel level, const char* tag, const char* fmt, std::va_list args) 
   logLineImpl(level, tag,
           std::string(buffer.data(),
                       static_cast<std::size_t>(std::min<int>(written, static_cast<int>(buffer.size() - 1)))),
-          written >= static_cast<int>(buffer.size()));
+          written >= static_cast<int>(buffer.size()), writeLegacy, writeDiagnostic);
 }
 
 void logf(LogLevel level, const char* tag, const char* fmt, ...) {
-  if (!shouldLog(level)) {
-    return;
-  }
   std::va_list args;
   va_start(args, fmt);
   vlogf(level, tag, fmt, args);

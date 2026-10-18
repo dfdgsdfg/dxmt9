@@ -8,6 +8,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   observations, qualify native Perfetto traces, and validate external probe
   evidence. See the [CPU tracing](../../agents/skills/cputrace/SKILL.md) and [GPU tracing](../../agents/skills/gputrace/SKILL.md)
   and [Perfetto rules](../../agents/rules/trace_perfetto.rules.md).
+- `qualify_trace_observer.py` — gate repeated observer-off/deferred/async
+  workload evidence against a separately frozen numeric budget file. It
+  requires three matched repetitions, explicit source references for every
+  metric, complete frame samples, and passing correctness/trace receipts; it
+  consumes run records and does not launch or fabricate workload measurements.
 - `shader_corpus_tool.py` — manage the shader corpus: list passing files,
   drift against upstream, gap reporting (used by the Meson test wiring).
 - `package_app_local.py` — assemble a self-contained `dxmt9-app-local`

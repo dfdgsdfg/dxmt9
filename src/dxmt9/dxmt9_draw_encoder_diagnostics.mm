@@ -512,6 +512,11 @@ const VisibilityScoutConfig& visibilityScoutConfig() {
   static const VisibilityScoutConfig config = [] {
     VisibilityScoutConfig result{};
     result.path = getenvStringLocal("DXMT9_VISIBILITY_SCOUT_PATH");
+    const char* dag = std::getenv("DXMT9_RENDERER_DUMP_DAG");
+    const char* dagTrace = std::getenv("DXMT9_RENDERER_DUMP_DAG_TRACE");
+    const bool structuralTrace =
+        (dag && std::string_view(dag) == "perfetto") ||
+        (dagTrace && std::string_view(dagTrace) == "1");
     result.maxResultsPerEncoder =
         parseEnvU64Auto("DXMT9_VISIBILITY_SCOUT_MAX_RESULTS_PER_ENCODER")
             .value_or(result.maxResultsPerEncoder);
@@ -523,7 +528,7 @@ const VisibilityScoutConfig& visibilityScoutConfig() {
         debug::makeRenderEncoderSelectorList(
             getenvStringLocal("DXMT9_VISIBILITY_SCOUT_ROWS"));
     result.enabled =
-        !result.path.empty() &&
+        (!result.path.empty() || structuralTrace) &&
         (getenvFlagLocal("DXMT9_VISIBILITY_SCOUT") ||
          result.row.enabled ||
          result.rows.enabled);
@@ -665,34 +670,39 @@ void appendVisibilityScoutCsv(const std::string& path,
                               std::vector<VisibilityScoutDrawRecord> records,
                               bool overflow) {
   (void)buffer;
-  if (path.empty() || results == nullptr || records.empty()) {
+  if (results == nullptr || records.empty()) {
     return;
   }
   std::filesystem::path outputPath(path);
-  if (const auto parent = outputPath.parent_path(); !parent.empty()) {
-    std::error_code createError;
-    std::filesystem::create_directories(parent, createError);
+  if (!path.empty()) {
+    if (const auto parent = outputPath.parent_path(); !parent.empty()) {
+      std::error_code createError;
+      std::filesystem::create_directories(parent, createError);
+    }
   }
   static std::mutex outputMutex;
   std::lock_guard lock(outputMutex);
   std::error_code sizeError;
-  const bool needsHeader =
-      !std::filesystem::exists(outputPath, sizeError) ||
-      std::filesystem::file_size(outputPath, sizeError) == 0;
-  dxmt9::diagnostics::OutputFile out(path, std::ios::app);
-  if (!out) {
-    return;
+  bool needsHeader = false;
+  std::optional<dxmt9::diagnostics::OutputFile> out;
+  if (!path.empty()) {
+    needsHeader = !std::filesystem::exists(outputPath, sizeError) ||
+                  std::filesystem::file_size(outputPath, sizeError) == 0;
+    out.emplace(path, std::ios::app);
+    if (!*out) {
+      out.reset();
+    }
   }
-  if (needsHeader) {
-    out << "seq,encoder,command,draw_ordinal,result_index,metal_draw_index,"
+  const char* header = "seq,encoder,command,draw_ordinal,result_index,metal_draw_index,"
            "primitive_type,source_primitive_count,submitted_primitive_count,"
            "submitted_element_count,indexed,expanded_indexed,split_chunk,"
            "visible_samples,rt0,depth,texture_mask,color_write,z_enable,"
            "z_write,z_func,alpha_blend,alpha_test,scissor,cull,fill,overflow\n";
-  }
+  if (out && needsHeader) *out << header;
   for (const auto& record : records) {
     const auto visibleSamples = results[record.resultIndex];
-    out << record.seqId << ','
+    std::ostringstream row;
+    row << record.seqId << ','
         << record.encoderIndex << ','
         << record.commandIndex << ','
         << record.drawOrdinal << ','
@@ -719,6 +729,11 @@ void appendVisibilityScoutCsv(const std::string& path,
         << record.cull << ','
         << record.fill << ','
         << (overflow ? 1u : 0u) << '\n';
+    const std::string rowData = row.str();
+    const std::string reportData = std::string(header) + rowData;
+    dxmt9::diagnostics::report("dxmt9-structural-csv-v1", reportData,
+                               reportData.size() > 191u * 64u);
+    if (out) *out << rowData;
   }
 }
 
@@ -1704,15 +1719,19 @@ void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
   try {
     const std::filesystem::path binaryPath(path);
     if (const auto parent = binaryPath.parent_path(); !parent.empty()) {
-      std::filesystem::create_directories(parent);
+      std::error_code createError;
+      std::filesystem::create_directories(parent, createError);
     }
     {
       dxmt9::diagnostics::OutputFile out(binaryPath, std::ios::binary | std::ios::trunc);
       out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
     }
     {
-      dxmt9::diagnostics::OutputFile meta(path + ".json", std::ios::trunc);
+      dxmt9::diagnostics::StructuredOutputFile meta(
+          path + ".json", std::ios::trunc, "dxmt9-structural-json-v1");
       meta << "{\n"
+           << "  \"structural_kind\": \"depth_attachment\",\n"
+           << "  \"source_identity\": \"seq+enc+handle\",\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
            << "  \"seq\": " << active.seq << ",\n"
            << "  \"enc\": " << active.enc << ",\n"
@@ -1814,11 +1833,13 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
     if (colorAttachmentDumpConfig().captureSourcesOnly && !passSource) return;
     const auto captureSource = passSource.value_or(ColorAttachmentCaptureSource{});
     const std::filesystem::path binaryPath(path);
-    if (hashOnly && std::filesystem::exists(binaryPath)) {
+    std::error_code staleFileError;
+    if (hashOnly && std::filesystem::exists(binaryPath, staleFileError)) {
       throw std::runtime_error("hash-only destination contains stale raw bytes");
     }
     if (const auto parent = binaryPath.parent_path(); !parent.empty()) {
-      std::filesystem::create_directories(parent);
+      std::error_code createError;
+      std::filesystem::create_directories(parent, createError);
     }
     // Hash precisely the completed GPU readback, without channel conversion,
     // alpha normalization or ROI interpretation. Hash-only bounds disk use,
@@ -1843,15 +1864,17 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
     }
     if (!hashOnly) {
       dxmt9::diagnostics::OutputFile out(binaryPath, std::ios::binary | std::ios::trunc);
-      out.exceptions(std::ios::failbit | std::ios::badbit);
       out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
       out.close();
     }
     const auto channelHashes = colorAttachmentChannelHashes(active, rowBytes, byteCount, bytes);
     {
-      dxmt9::diagnostics::OutputFile meta(path + ".json", std::ios::trunc);
+      dxmt9::diagnostics::StructuredOutputFile meta(
+          path + ".json", std::ios::trunc, "dxmt9-structural-json-v1");
       meta.exceptions(std::ios::failbit | std::ios::badbit);
       meta << "{\n"
+           << "  \"structural_kind\": \"color_attachment_hash\",\n"
+           << "  \"source_identity\": \"seq+enc+handle+commandIndex+draw\",\n"
            << "  \"rawBytesRetained\": " << (hashOnly ? "false" : "true") << ",\n"
            << "  \"sha256\": \"" << hex << "\",\n";
       if (channelHashes.order) {
@@ -1954,23 +1977,26 @@ void appendColorAttachmentRoiSummary(
   try {
     const std::filesystem::path csvPath(path);
     if (const auto parent = csvPath.parent_path(); !parent.empty()) {
-      std::filesystem::create_directories(parent);
+      std::error_code createError;
+      std::filesystem::create_directories(parent, createError);
     }
 
     static std::mutex mutex;
     std::lock_guard lock(mutex);
-    const bool writeHeader =
-        !std::filesystem::exists(csvPath) ||
-        std::filesystem::file_size(csvPath) == 0;
+    std::error_code fileError;
+    const bool exists = std::filesystem::exists(csvPath, fileError);
+    const auto fileSize = exists ? std::filesystem::file_size(csvPath, fileError) : 0u;
+    const bool writeHeader = fileError || !exists || fileSize == 0;
     dxmt9::diagnostics::OutputFile out(csvPath, std::ios::app);
+    const char* header = "handle,seq,enc,index,after_draw,draw,command_index,"
+                         "command_draw_index,command_draw_count,texture0,format,"
+                         "format_name,width,height,readback_x,readback_y,readback_width,"
+                         "readback_height,roi,roi_rect,pixels,avg_r,avg_g,avg_b,max_r,"
+                         "max_g,max_b,bright_pixels,white_pixels,warm_pixels,hot_x,hot_y,"
+                         "hot_r,hot_g,hot_b,warm_hot_x,warm_hot_y,warm_hot_r,warm_hot_g,"
+                         "warm_hot_b\n";
     if (writeHeader) {
-      out << "handle,seq,enc,index,after_draw,draw,command_index,"
-             "command_draw_index,command_draw_count,texture0,format,"
-             "format_name,width,height,readback_x,readback_y,readback_width,"
-             "readback_height,roi,roi_rect,pixels,avg_r,avg_g,avg_b,max_r,"
-             "max_g,max_b,bright_pixels,white_pixels,warm_pixels,hot_x,hot_y,"
-             "hot_r,hot_g,hot_b,warm_hot_x,warm_hot_y,warm_hot_r,warm_hot_g,"
-             "warm_hot_b\n";
+      out << header;
     }
 
     for (const auto& roi : rois) {
@@ -2067,7 +2093,8 @@ void appendColorAttachmentRoiSummary(
       }
 
       const double denom = pixels ? static_cast<double>(pixels) : 1.0;
-      out << "0x" << std::hex << active.handle.value << std::dec
+      std::ostringstream row;
+      row << "0x" << std::hex << active.handle.value << std::dec
           << ',' << active.seq
           << ',' << active.enc
           << ',' << active.index
@@ -2108,6 +2135,11 @@ void appendColorAttachmentRoiSummary(
           << ',' << warmHotG
           << ',' << warmHotB
           << '\n';
+      const std::string rowData = row.str();
+      const std::string reportData = std::string(header) + rowData;
+      dxmt9::diagnostics::report("dxmt9-structural-csv-v1", reportData,
+                                 reportData.size() > 191u * 64u);
+      out << rowData;
     }
 
     std::ostringstream trace;
@@ -2139,7 +2171,8 @@ void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
     const std::filesystem::path metadataPath(jsonPath);
     const auto parent = metadataPath.parent_path();
     if (!parent.empty()) {
-      std::filesystem::create_directories(parent);
+      std::error_code createError;
+      std::filesystem::create_directories(parent, createError);
     }
 
     for (const auto& subresource : batch.subresources) {
@@ -2154,8 +2187,11 @@ void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
     }
 
     {
-      dxmt9::diagnostics::OutputFile meta(jsonPath, std::ios::trunc);
+      dxmt9::diagnostics::StructuredOutputFile meta(
+          jsonPath, std::ios::trunc, "dxmt9-structural-json-v1");
       meta << "{\n"
+           << "  \"structural_kind\": \"draw_texture\",\n"
+           << "  \"source_identity\": \"seq+enc+handle+textureIndex+stage\",\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
            << "  \"metalTextureObservationId\": " << active.metalTextureObservationId << ",\n"
            << "  \"seq\": " << active.seq << ",\n"
@@ -2330,8 +2366,10 @@ static void maybeEncodePairedDepthAttachmentDump(
         const std::filesystem::path metadataPath(colorPath + ".depth.json");
         if (std::filesystem::exists(binaryPath) || std::filesystem::exists(metadataPath))
           throw std::runtime_error("paired depth destination already exists");
-        if (const auto parent = binaryPath.parent_path(); !parent.empty())
-          std::filesystem::create_directories(parent);
+        if (const auto parent = binaryPath.parent_path(); !parent.empty()) {
+          std::error_code createError;
+          std::filesystem::create_directories(parent, createError);
+        }
         unsigned char digest[CC_SHA256_DIGEST_LENGTH];
         CC_SHA256(memory, static_cast<CC_LONG>(byteCount), digest);
         char hex[CC_SHA256_DIGEST_LENGTH * 2u + 1u]{};
@@ -2341,13 +2379,15 @@ static void maybeEncodePairedDepthAttachmentDump(
           hex[i * 2u + 1u] = digits[digest[i] & 15u];
         }
         dxmt9::diagnostics::OutputFile raw(binaryPath, std::ios::binary | std::ios::trunc);
-        raw.exceptions(std::ios::failbit | std::ios::badbit);
         raw.write(static_cast<const char*>(memory), static_cast<std::streamsize>(byteCount));
         raw.close();
         const auto capture = source.value_or(ColorAttachmentCaptureSource{});
-        dxmt9::diagnostics::OutputFile meta(metadataPath, std::ios::trunc);
+        dxmt9::diagnostics::StructuredOutputFile meta(
+            metadataPath, std::ios::trunc, "dxmt9-structural-json-v1");
         meta.exceptions(std::ios::failbit | std::ios::badbit);
         meta << "{\n  \"schema\": \"dxmt9.paired_pass_depth.v1\",\n"
+             << "  \"structural_kind\": \"paired_pass_depth\",\n"
+             << "  \"source_identity\": \"seq+enc+handle+pairedColorMetadata\",\n"
              << "  \"diagnosticOnly\": true,\n  \"rawBytesRetained\": true,\n"
              << "  \"sha256\": \"" << hex << "\",\n"
              << "  \"pairedColorMetadata\": \"";

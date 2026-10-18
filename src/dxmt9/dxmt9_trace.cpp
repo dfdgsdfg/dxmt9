@@ -8,6 +8,8 @@
 #include "tracing/perfetto_export.hpp"
 #include "tracing/relations.hpp"
 #include "tracing/session_state.hpp"
+#include "tracing/batch_transport.hpp"
+#include "tracing/diagnostic_record.hpp"
 #include "dxmt9_trace_bindings.hpp"
 #include "dxmt9_trace_gpu_bridge.hpp"
 
@@ -16,6 +18,8 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <cerrno>
 
 #include <algorithm>
 #include <array>
@@ -54,6 +58,7 @@ namespace {
 constexpr uint32_t kMaxThreads = 256;
 [[maybe_unused]] constexpr uint32_t kMaxEvents = 1'000'000;
 [[maybe_unused]] constexpr uint32_t kMaxBytes = 128 * 1024 * 1024;
+constexpr uint32_t kReportScratchEvents = 8192;
 constexpr uint32_t kDeadlineMs = 30'000;
 constexpr char kSdkRevision[] = "33a4fd07897a9a648664926ea27769278a19ff13";
 constexpr char kSdkDigest[] =
@@ -102,7 +107,7 @@ std::atomic<uint32_t> scope_cursor{0};
 struct Session {
   std::atomic<TraceState> state{TraceState::Idle};
   std::atomic<uint64_t> generation{0};
-  // Closed bit, generation and active writer count share one CAS domain so a
+  // Closed bit, generation and active writer count share one atomic word so a
   // delayed emitter cannot increment after close and write into reused data.
   std::atomic<uint64_t> admission_gate{
       makeAdmissionGate(0, 0, true)};
@@ -133,7 +138,7 @@ struct Session {
   bool gpu_attach_attempted = false;
   uint32_t delay_ms = 0;
   uint32_t duration_ms = 5000;
-  uint32_t deadline_ms = kDeadlineMs;
+  std::atomic<uint32_t> deadline_ms{kDeadlineMs};
   uint32_t max_clock_error_ns = 1000;
   uint64_t started_ns = 0;
   uint64_t stopped_ns = 0;
@@ -148,6 +153,26 @@ struct Session {
   std::mutex control;
   std::condition_variable condition;
   std::thread controller;
+  std::atomic<bool> controller_done{true}, stop_requested{false};
+  // 0 pending, 1 completion claimed, 2 caller deadline expired. Only the
+  // controller writes receipts; a timed-out caller never reads live buffers.
+  std::atomic<uint64_t> outcome{0};
+  std::atomic<uint32_t> stop_waiters{0};
+  std::atomic<uint64_t> completion_ns{0};
+  uint64_t decision_deadline_ns = 0;
+  bool asynchronous = false;
+
+  uint32_t transport_events = 0, requested_transport_events = 0;
+  uint32_t batch_events = 0;
+  uint32_t service_interval_ms = 0;
+  BatchTransport<TraceEvent> transport;
+  std::thread drain_worker;
+  std::atomic<bool> drain_ready{false}, drain_done{true};
+  std::atomic<bool> drain_close{false}, drain_failed{false};
+  std::atomic<uint64_t> spool_events{0};
+  std::string spool_path;
+  int spool_fd = -1;
+
 };
 
 Session& session() {
@@ -754,12 +779,15 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       }
       if (e.diagnostic_parts) {
         out << ",\"diagnostic_schema\":\"" << escape_json(e.diagnostic_schema)
-            << "\",\"diagnostic_display\":\"" << escape_json(observations::diagnostic_display(e.diagnostic_payload))
-            << "\",\"diagnostic_payload\":\"" << observations::diagnostic_hex(e.diagnostic_payload)
+            << "\",\"diagnostic_display\":\"" << escape_json(e.observation_mode >= 4 ? "typed-u64-le" : observations::diagnostic_display(e.diagnostic_payload))
+            << "\",\"diagnostic_payload\":\"" << observations::diagnostic_hex(std::string_view(e.diagnostic_payload, e.observation_mode >= 4 ? e.diagnostic_size : std::strlen(e.diagnostic_payload)))
             << "\",\"diagnostic_part\":\"" << e.diagnostic_part
             << "\",\"diagnostic_parts\":\"" << e.diagnostic_parts
             << "\",\"diagnostic_encoding\":\"" << e.observation_mode
             << "\",\"diagnostic_value\":\"" << e.metric_value << "\"";
+        observations::expand_typed_fields(e, [&](const std::string& key, const std::string& value) {
+          out << ",\"" << key << "\":\"" << value << "\"";
+        });
       }
       if (e.phase == static_cast<uint8_t>(Phase::Counter))
         out << ",\"counter_value\":\"" << e.metric_value
@@ -971,6 +999,9 @@ bool publish_receipt(Session& s, const char* status, const char* flush_status,
         << s.config_sha256 << "\",\"status\":\"" << status
         << "\",\"started\":\"" << s.started_ns << "\",\"stopped\":\""
         << s.stopped_ns << "\",\"acquisition_contract\":\"dxmt9.observation.v1\""
+        << ",\"proof_required\":true,\"generation\":\"" << s.generation.load()
+        << "\",\"completion_proof\":{\"path\":\"" << escape_json(s.receipt_path + ".completion.json")
+        << "\",\"required\":true,\"publication\":\"after-decision-outside-budget\"}"
         << ",\"window\":{\"closed\":true,\"mode\":\"duration\"}"
         << ",\"counts\":{\"engine_events\":";
     if (include_buffer_counts) out << '"' << event_count << '"';
@@ -982,7 +1013,36 @@ bool publish_receipt(Session& s, const char* status, const char* flush_status,
     out << ",\"gpu_events\":";
     if (include_buffer_counts) out << '"' << category_counts[static_cast<size_t>(Category::Gpu)] << '"';
     else out << "null";
-    out << "},\"resource_bounds\":{\"event_storage_bytes\":\""
+    struct stat spool_stat{};
+    const bool spool_closed = s.asynchronous && s.drain_done.load(std::memory_order_acquire);
+    const bool spool_exists = spool_closed && stat(s.spool_path.c_str(), &spool_stat) == 0;
+    out << "},\"transport\":{\"mode\":\"" << (s.asynchronous ? "async" : "deferred")
+        << "\",\"batch_events\":" << s.batch_events
+        << ",\"service_interval_ms\":" << s.service_interval_ms
+        << ",\"transport_events\":" << s.requested_transport_events
+        << "},\"raw_spool_artifact\":{\"path\":\""
+        << escape_json(s.asynchronous ? s.spool_path : "")
+        << "\",\"bytes\":" << (spool_exists ? static_cast<uint64_t>(spool_stat.st_size) : 0)
+        << ",\"sha256\":\"" << (spool_exists ? sha256_file(s.spool_path) : "")
+        << "\"},\"drain\":{\"mode\":\"" << (s.asynchronous ? "async" : "deferred")
+        << "\",\"topology\":\"" << (s.asynchronous
+            ? "producer-blocks-worker-binary-spool-canonical-export-after-close"
+            : "retained-events-canonical-export-after-close")
+        << "\",\"batch_events\":" << s.batch_events
+        << ",\"service_interval_ms\":" << s.service_interval_ms
+        << ",\"transport_events\":" << s.transport_events
+        << ",\"report_batch_capacity\":" << (s.asynchronous
+            ? (s.transport_events - s.max_threads * 2 * s.batch_events) / 2 : s.diagnostic_capacity)
+        << ",\"producer_notifications\":0,\"worker_done\":"
+        << (s.drain_done.load(std::memory_order_acquire) ? "true" : "false")
+        << ",\"spool_path\":\"" << escape_json(s.asynchronous ? s.spool_path : "")
+        << "\",\"spool_events\":" << s.spool_events.load(std::memory_order_relaxed)
+        << ",\"spool_failed\":" << (s.drain_failed.load(std::memory_order_acquire) ? "true" : "false")
+        << "},\"resource_bounds\":{\"report_scratch_bytes\":\""
+        << uint64_t(kReportScratchEvents) * sizeof(TraceEvent)
+        << "\",\"transport_storage_bytes\":\""
+        << uint64_t(s.transport_events) * sizeof(TraceEvent)
+        << "\",\"event_storage_bytes\":\""
         << static_cast<uint64_t>(s.max_events) * sizeof(TraceEvent)
         << "\",\"sdk_buffer_bytes\":\"" << s.max_bytes
         << "\",\"cold_event_copy_count\":\"2\",\"events_per_copy_max\":\""
@@ -1053,18 +1113,132 @@ void poll_and_drain_gpu(Session& s) noexcept {
   (void)trace::gpu::drainProcessGpuStageSamples(append_gpu_stage_sample, &s);
 }
 
-bool finalize(Session& s) noexcept {
+// This worker owns the file and every consumer-owned block through a blocked
+// write/fsync. Session itself is process-lifetime storage; timeout never joins
+// or frees it. A subsequent arm requires worker quiescence first.
+[[maybe_unused]] void drain_worker_main(Session& s) noexcept {
+  s.drain_ready.store(true, std::memory_order_release);
+  for (;;) {
+    const bool closing = s.drain_close.load(std::memory_order_acquire) &&
+        admissionWriters(s.admission_gate.load(std::memory_order_acquire)) == 0;
+    if (closing) s.transport.close_partials();
+    s.transport.request_partials();
+    s.transport.drain([&](std::span<const TraceEvent> events, uint64_t generation,
+                         uint64_t) noexcept {
+      const uint64_t count = s.spool_events.load(std::memory_order_relaxed);
+      if (s.drain_failed.load(std::memory_order_relaxed)) {
+        s.total_dropped.fetch_add(events.size(), std::memory_order_relaxed);
+        return;
+      }
+      if (generation != s.generation.load(std::memory_order_relaxed) ||
+          events.size() > s.max_events - std::min<uint64_t>(count, s.max_events)) {
+        s.drain_failed.store(true, std::memory_order_release);
+        s.total_dropped.fetch_add(events.size(), std::memory_order_relaxed);
+        return;
+      }
+      if (!persistBatch(events, count, s.max_events,
+            [&](const char* bytes, size_t size) noexcept {
+              ssize_t written;
+              do {
+                written = ::write(s.spool_fd, bytes, size);
+              } while (written < 0 && errno == EINTR);
+              return written;
+            })) {
+        s.total_dropped.fetch_add(events.size(), std::memory_order_relaxed);
+        s.drain_failed.store(true, std::memory_order_release);
+        return;
+      }
+      s.spool_events.fetch_add(events.size(), std::memory_order_relaxed);
+    });
+    if (closing) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(s.service_interval_ms));
+  }
+  if (::fsync(s.spool_fd) != 0) s.drain_failed.store(true, std::memory_order_release);
+  if (::close(s.spool_fd) != 0) s.drain_failed.store(true, std::memory_order_release);
+  s.spool_fd = -1;
+  s.drain_done.store(true, std::memory_order_release);
+}
+
+bool finish_async_drain(Session& s,
+                        std::chrono::steady_clock::time_point deadline) noexcept {
+  s.drain_close.store(true, std::memory_order_release);
+  while (!s.drain_done.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  if (!s.drain_done.load(std::memory_order_acquire)) return false;
+  if (s.drain_worker.joinable()) s.drain_worker.join();
+  if (s.drain_failed.load(std::memory_order_acquire)) return false;
+  const uint64_t count = s.spool_events.load(std::memory_order_relaxed);
+  if (count > s.max_events) return false;
+  try {
+  std::ifstream spool(s.spool_path, std::ios::binary);
+  spool.read(reinterpret_cast<char*>(s.storage.get()), count * sizeof(TraceEvent));
+  if (!spool || std::chrono::steady_clock::now() >= deadline) return false;
+  for (auto& thread : s.threads) thread.count = 0;
+  s.diagnostic_events = s.storage.get();
+  s.diagnostic_capacity = s.max_events;
+  s.diagnostic_count.store(static_cast<uint32_t>(count), std::memory_order_relaxed);
+  return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+// Candidate receipt durability precedes the finite completion decision. The
+// terminal proof publishes that already-decided result outside the decision
+// budget. Consumers require both artifacts; an uninterruptible receipt commit
+// past deadline can therefore never become qualified successful evidence.
+void publish_completion_proof(Session& s) noexcept {
+  try {
+    const uint64_t completed = s.completion_ns.load(std::memory_order_acquire);
+    const bool complete = (s.outcome.load(std::memory_order_acquire) & 3) == 1;
+    std::ostringstream out;
+    out << "{\"schema\":\"dxmt9.trace.completion.v1\",\"run_id\":\""
+        << escape_json(s.run_id) << "\",\"attempt_id\":\"" << escape_json(s.attempt_id)
+        << "\",\"config_sha256\":\"" << s.config_sha256
+        << "\",\"generation\":\"" << s.generation.load(std::memory_order_acquire)
+        << "\",\"status\":\"" << (complete ? "complete" : "incomplete")
+        << "\",\"completed_ns\":\"" << completed
+        << "\",\"deadline_ns\":\"" << s.decision_deadline_ns
+        << "\",\"candidate_receipt_sha256\":\"" << sha256_file(s.receipt_path)
+        << "\"}\n";
+    const std::string bytes = out.str();
+    detail::AtomicArtifact proof(s.receipt_path + ".completion.json");
+    if (proof.open() && proof.write(bytes.data(), bytes.size())) (void)proof.commit();
+  } catch (...) {
+    // A missing proof is unqualified evidence; never retry as another success.
+  }
+}
+
+[[maybe_unused]] bool finalize(Session& s) noexcept {
+
   bool expected = false;
   if (!s.finalizer_claimed.compare_exchange_strong(expected, true)) return false;
+  struct FinalOwnerGuard {
+    Session& session;
+    ~FinalOwnerGuard() {
+      if (session.asynchronous)
+        session.drain_close.store(true, std::memory_order_release);
+      const uint64_t generation = session.generation.load(std::memory_order_acquire);
+      uint64_t pending = generation << 2;
+      session.outcome.compare_exchange_strong(pending, (generation << 2) | 2,
+                                                std::memory_order_acq_rel);
+      if (!session.completion_ns.load(std::memory_order_acquire))
+        session.completion_ns.store(now_ns(), std::memory_order_release);
+      session.condition.notify_all();
+      publish_completion_proof(session);
+    }
+  } finalOwnerGuard{s};
   disable_owner_registration();
   closeAdmission(s.admission_gate);
   s.state.store(TraceState::Closing, std::memory_order_release);
   g_trace_enabled.store(false, std::memory_order_release);
   g_trace_detail_enabled.store(false, std::memory_order_relaxed);
   s.stopped_ns = now_ns();
+  s.decision_deadline_ns = s.stopped_ns + uint64_t(s.deadline_ms) * 1000000;
   s.state.store(TraceState::Draining, std::memory_order_release);
   const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(s.deadline_ms);
+                        std::chrono::milliseconds(s.deadline_ms.load(std::memory_order_acquire));
   while (admissionWriters(s.admission_gate.load(std::memory_order_acquire)) &&
          std::chrono::steady_clock::now() < deadline)
     std::this_thread::yield();
@@ -1095,7 +1269,13 @@ bool finalize(Session& s) noexcept {
       return false;
     }
   }
+  if (s.asynchronous && !finish_async_drain(s, deadline)) {
+    s.state.store(TraceState::Failed, std::memory_order_release);
+    publish_receipt(s, "incomplete", "incomplete", 0, 0, 0, false);
+    return false;
+  }
   s.storage_sealed.store(true, std::memory_order_release);
+
   try {
   const uint32_t count = std::min(s.next_thread.load(), s.max_threads);
   std::vector<TraceEvent> events;
@@ -1143,18 +1323,23 @@ bool finalize(Session& s) noexcept {
       stage_counters.stale == 0;
   const bool no_sdk_loss = export_result.lost_packets == 0 &&
       export_result.overwritten_bytes == 0 && export_result.discarded_chunks == 0;
-  const bool ok = s.capture_started && raw_ok && trace_ok &&
+  bool ok = s.capture_started && raw_ok && trace_ok &&
       s.total_dropped.load() == 0 &&
       no_gpu_loss && no_sdk_loss;
-  s.state.store(ok ? TraceState::Sealed : TraceState::Failed,
-                std::memory_order_release);
+  // This receipt is a candidate until the independently hashed terminal proof
+  // confirms the completion decision after its durable commit returned.
   const bool receipt_ok = publish_receipt(s, ok ? "complete" : "incomplete",
                   export_result.flush_complete ? "complete" : "incomplete",
                   export_result.lost_packets,
                   export_result.overwritten_bytes,
                   export_result.discarded_chunks);
-  if (!receipt_ok) s.state.store(TraceState::Failed, std::memory_order_release);
-  return ok && receipt_ok;
+  const uint64_t completed = now_ns();
+  s.completion_ns.store(completed, std::memory_order_release);
+  ok = decideDiagnosticCompletion(s.outcome, ok, receipt_ok, completed,
+                                  s.decision_deadline_ns, s.generation.load(std::memory_order_acquire));
+  s.state.store(ok ? TraceState::Sealed : TraceState::Failed, std::memory_order_release);
+  s.condition.notify_all();
+  return ok;
   } catch (...) {
     s.state.store(TraceState::Failed, std::memory_order_release);
     s.stopped_ns = now_ns();
@@ -1204,7 +1389,22 @@ bool append_finalizer_event(Session& s, TraceEvent event) noexcept {
   const uint32_t index = thread_slot(s);
   if (index == UINT32_MAX) return false;
   ThreadBuffer& thread = s.threads[index];
-  if (thread.count == thread.capacity) {
+  if (s.asynchronous) {
+    const bool accepted = s.transport.append(index,
+        std::span<const TraceEvent>(&event, 1), false,
+        s.generation.load(std::memory_order_relaxed), [&](TraceEvent value) {
+          if (!value.source_record)
+            value.source_record = s.source_order.fetch_add(1, std::memory_order_relaxed) + 1;
+          if (!value.thread_id) value.thread_id = thread.native_tid;
+          if (!value.track_id) value.track_id = thread.track_id;
+          if (!value.process_id) value.process_id = s.process_id;
+          return value;
+        }, [](const TraceEvent&) { return true; });
+    if (!accepted) s.total_dropped.fetch_add(1, std::memory_order_relaxed);
+    return accepted;
+  }
+  if (thread.count == thread.capacity)
+ {
     ++thread.dropped;
     s.total_dropped.fetch_add(1, std::memory_order_relaxed);
     return false;
@@ -1341,6 +1541,7 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
   const TraceState state = s.state.load(std::memory_order_acquire);
   if (!tryAcquireWriter(s.admission_gate, state, requestedGeneration)) {
     return false;
+
   }
   WriterLease writer{s.admission_gate};
   if (s.generation.load(std::memory_order_relaxed) != requestedGeneration ||
@@ -1348,6 +1549,13 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
     return false;
   }
   if (lossCount) s.total_dropped.fetch_add(lossCount, std::memory_order_relaxed);
+  if (inputs.size() > s.max_events ||
+      !std::all_of(inputs.begin(), inputs.end(), [](const TraceEvent& event) {
+        return validDiagnosticRecord(event);
+      })) {
+    s.total_dropped.fetch_add(inputs.size(), std::memory_order_relaxed);
+    return false;
+  }
   size_t accepted = 0;
   for (const TraceEvent& input : inputs) {
     if (input.category < static_cast<uint8_t>(Category::Count) &&
@@ -1360,8 +1568,30 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
   ThreadBuffer& thread = s.threads[index];
   const bool diagnostic = s.diagnostic_capacity && std::all_of(inputs.begin(), inputs.end(),
       [](const auto& e) { return e.observation_kind >= 3; });
+  if (s.asynchronous) {
+    const bool appended = s.transport.append(index, inputs, accepted > s.batch_events,
+        requestedGeneration, [&](TraceEvent event) {
+          if (!event.timestamp_ns) event.timestamp_ns = now_ns();
+          if (!event.clock_id) event.clock_id = 3;
+          if (!event.thread_id) event.thread_id = thread.native_tid;
+          if (!event.track_id) event.track_id = thread.track_id;
+          if (!event.process_id) event.process_id = s.process_id;
+          if (!event.source_record)
+            event.source_record = s.source_order.fetch_add(1, std::memory_order_relaxed) + 1;
+          return event;
+        }, [&](const TraceEvent& event) {
+          return event.category < static_cast<uint8_t>(Category::Count) &&
+              (s.category_mask & (uint32_t{1} << event.category));
+        });
+    if (!appended) {
+      ++thread.dropped;
+      s.total_dropped.fetch_add(accepted, std::memory_order_relaxed);
+    }
+    return appended;
+  }
   uint32_t first = 0;
-  if (diagnostic ? !observations::reserve(s.diagnostic_count, s.diagnostic_capacity,
+  if (diagnostic ?
+ !observations::reserve(s.diagnostic_count, s.diagnostic_capacity,
                                           static_cast<uint32_t>(accepted), first)
                  : accepted > thread.capacity - thread.count) {
     ++thread.dropped;
@@ -1414,7 +1644,16 @@ bool prepare_and_start(const TraceConfig& config) noexcept {
     report_start_rejection("session still has admitted writers");
     return false;
   }
+  if (s.stop_waiters.load(std::memory_order_acquire) != 0 ||
+      !mayRearmDiagnostic(s.controller_done.load(std::memory_order_acquire),
+                          s.drain_done.load(std::memory_order_acquire),
+                          admissionWriters(s.admission_gate.load(std::memory_order_acquire)))) {
+    report_start_rejection("previous diagnostic drain still owns session storage");
+    return false;
+  }
+  if (s.drain_worker.joinable()) s.drain_worker.join();
   s.state.store(TraceState::Preparing, std::memory_order_release);
+
   struct PreparationGuard {
     Session& session;
     ~PreparationGuard() {
@@ -1466,12 +1705,26 @@ bool prepare_and_start(const TraceConfig& config) noexcept {
   s.receipt_path = config.receipt_path ? config.receipt_path : parsed.receipt_path;
   s.raw_path = config.raw_path ? config.raw_path : parsed.raw_path;
   s.max_bytes = std::min(parsed.max_bytes, kMaxBytes);
+  s.asynchronous = parsed.drain_mode == "async";
+  s.requested_transport_events = parsed.transport_events;
+  s.transport_events = s.asynchronous ? parsed.transport_events : 0;
+  s.batch_events = parsed.batch_events;
+  s.service_interval_ms = parsed.service_interval_ms;
   s.max_events = std::min(parsed.max_events, kMaxEvents);
+
   s.max_events = std::min(s.max_events,
                           std::max(1u, s.max_bytes /
                               static_cast<uint32_t>(sizeof(TraceEvent))));
   s.max_threads = std::min(kMaxThreads, std::max(1u, s.max_events));
+  const uint64_t available_events = s.max_bytes / sizeof(TraceEvent);
+  if (uint64_t(s.transport_events) + kReportScratchEvents >= available_events) {
+    report_start_rejection("transport leaves no bounded canonical storage");
+    return false;
+  }
+  s.max_events = std::min<uint32_t>(s.max_events,
+      static_cast<uint32_t>(available_events - s.transport_events - kReportScratchEvents));
   s.deadline_ms = std::min(parsed.finalize_timeout_ms, kDeadlineMs);
+
   s.max_clock_error_ns = parsed.max_clock_error_ns;
   s.delay_ms = parsed.delay_ms;
   s.duration_ms = parsed.duration_ms;
@@ -1520,55 +1773,109 @@ bool prepare_and_start(const TraceConfig& config) noexcept {
     return false;
   }
   const uint64_t generation = previousGeneration + 1;
-  s.generation.store(generation, std::memory_order_relaxed);
+  if (s.asynchronous && !s.transport.configure(s.transport_events, s.batch_events, generation)) {
+    report_start_rejection("transport budget must cover four batch blocks");
+    return false;
+  }
+  if (s.asynchronous) s.max_threads = s.transport.producer_count();
+  s.outcome.store(generation << 2, std::memory_order_release);
+  s.generation.store(generation, std::memory_order_release);
+
   s.next_thread.store(0);
   s.source_order.store(0);
   s.total_dropped.store(0);
-  s.admission_gate.store(makeAdmissionGate(generation, 0, true),
-                         std::memory_order_relaxed);
   s.storage_sealed.store(false);
   s.finalizer_claimed.store(false);
+  s.drain_close.store(false, std::memory_order_relaxed);
+  s.drain_failed.store(false, std::memory_order_relaxed);
+  s.drain_ready.store(false, std::memory_order_relaxed);
+  s.spool_events.store(0, std::memory_order_relaxed);
+  if (s.asynchronous) {
+    s.spool_path = s.raw_path + ".spool";
+    s.spool_fd = ::open(s.spool_path.c_str(), O_WRONLY | O_CREAT | O_EXCL |
+        O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+    if (s.spool_fd < 0) {
+      report_start_rejection("exclusive binary spool creation failed");
+      return false;
+    }
+    s.drain_done.store(false, std::memory_order_release);
+    try {
+      s.drain_worker = std::thread([&s] { drain_worker_main(s); });
+    } catch (...) {
+      ::close(s.spool_fd);
+      s.spool_fd = -1;
+      s.drain_done.store(true, std::memory_order_release);
+      throw;
+    }
+    const auto ready_deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(s.deadline_ms.load(std::memory_order_acquire));
+    while (!s.drain_ready.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < ready_deadline)
+      std::this_thread::yield();
+    if (!s.drain_ready.load(std::memory_order_acquire)) {
+      s.drain_close.store(true, std::memory_order_release);
+      report_start_rejection("diagnostic worker readiness timed out");
+      return false;
+    }
+  }
   enable_owner_registration(generation);
+
   s.state.store(TraceState::Armed, std::memory_order_release);
   g_trace_detail_enabled.store(false, std::memory_order_relaxed);
   const bool detail_enabled = std::find(parsed.categories.begin(),
                                         parsed.categories.end(), "detail") !=
                               parsed.categories.end();
+  s.controller_done.store(false, std::memory_order_release);
+  s.stop_requested.store(false, std::memory_order_relaxed);
+  s.completion_ns.store(0, std::memory_order_relaxed);
+  s.decision_deadline_ns = 0;
   try {
     s.controller = std::thread([&s, generation, detail_enabled] {
+      struct Completion {
+        Session& session;
+        ~Completion() {
+          session.controller_done.store(true, std::memory_order_release);
+          session.condition.notify_all();
+        }
+      } completion{s};
       std::unique_lock<std::mutex> lock(s.control);
-      if (s.condition.wait_for(lock, std::chrono::milliseconds(s.delay_ms), [&] {
-            return s.generation.load() != generation ||
-                   s.state.load() != TraceState::Armed;
-          }))
-        return;
+      s.condition.wait_for(lock, std::chrono::milliseconds(s.delay_ms), [&] {
+        return s.stop_requested.load(std::memory_order_acquire);
+      });
       s.started_ns = now_ns();
-      s.capture_started = true;
-      s.state.store(TraceState::Collecting, std::memory_order_release);
-      openAdmission(s.admission_gate, generation);
-      g_trace_detail_enabled.store(detail_enabled, std::memory_order_relaxed);
-      g_trace_enabled.store(true, std::memory_order_release);
-      const auto collectionEnd = std::chrono::steady_clock::now() +
-          std::chrono::milliseconds(s.duration_ms);
-      for (;;) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= collectionEnd) break;
-        const auto pollInterval = std::chrono::milliseconds(10);
-        const auto remaining = collectionEnd - now;
-        const auto interval = std::min(
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(pollInterval),
-            remaining);
-        if (s.condition.wait_for(lock, interval, [&] {
-              return s.generation.load() != generation ||
-                     s.state.load() != TraceState::Collecting;
-            }))
+      if (!s.stop_requested.load(std::memory_order_acquire)) {
+        s.capture_started = true;
+        s.state.store(TraceState::Collecting, std::memory_order_release);
+        if (!openAdmission(s.admission_gate, generation)) {
+          s.capture_started = false;
+          lock.unlock();
+          (void)finalize(s);
           return;
-        poll_and_drain_gpu(s);
+        }
+
+        g_trace_detail_enabled.store(detail_enabled, std::memory_order_relaxed);
+        g_trace_enabled.store(true, std::memory_order_release);
+        const auto collectionEnd = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(s.duration_ms);
+        while (!s.stop_requested.load(std::memory_order_acquire)) {
+          const auto now = std::chrono::steady_clock::now();
+          if (now >= collectionEnd) break;
+          const auto interval = std::min(collectionEnd - now,
+              std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                  std::chrono::milliseconds(10)));
+          if (s.condition.wait_for(lock, interval, [&] {
+                return s.stop_requested.load(std::memory_order_acquire);
+              })) break;
+          poll_and_drain_gpu(s);
+        }
       }
+      lock.unlock();
       (void)finalize(s);
     });
   } catch (...) {
     disable_owner_registration();
+    s.drain_close.store(true, std::memory_order_release);
+    s.controller_done.store(true, std::memory_order_release);
     report_start_rejection("controller thread creation failed");
     s.state.store(TraceState::Failed, std::memory_order_release);
     return false;
@@ -1576,6 +1883,7 @@ bool prepare_and_start(const TraceConfig& config) noexcept {
   return true;
   } catch (...) {
     disable_owner_registration();
+    s.drain_close.store(true, std::memory_order_release);
     report_start_rejection("exception while preparing trace session");
     g_trace_enabled.store(false, std::memory_order_release);
     g_trace_detail_enabled.store(false, std::memory_order_relaxed);
@@ -1820,29 +2128,44 @@ bool stop_and_finalize() noexcept {
 
 bool stop_and_finalize(uint64_t expectedGeneration) noexcept {
   Session& s = session();
-  s.condition.notify_all();
-  bool result = false;
-  std::thread controller;
-  {
-    std::lock_guard<std::mutex> lock(s.control);
-    if (expectedGeneration &&
-        s.generation.load(std::memory_order_acquire) != expectedGeneration)
-      return false;
-    const TraceState state = s.state.load(std::memory_order_acquire);
-    if (state != TraceState::Armed && state != TraceState::Collecting)
-      return state == TraceState::Sealed;
-    if (state == TraceState::Armed) {
-      s.started_ns = now_ns();
-      s.capture_started = false;
-    }
-    result = finalize(s);
-    if (s.controller.joinable() &&
-        s.controller.get_id() != std::this_thread::get_id())
-      controller = std::move(s.controller);
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(s.deadline_ms.load(std::memory_order_acquire));
+  const uint64_t requested_generation = expectedGeneration ? expectedGeneration :
+      s.generation.load(std::memory_order_acquire);
+  std::unique_lock<std::mutex> lock(s.control, std::defer_lock);
+  if (!lockDiagnosticBefore(lock, deadline)) {
+    uint64_t pending = requested_generation << 2;
+    s.outcome.compare_exchange_strong(pending, (requested_generation << 2) | 2,
+                                      std::memory_order_acq_rel);
+    return s.outcome.load(std::memory_order_acquire) == ((requested_generation << 2) | 1);
   }
+  if (s.generation.load(std::memory_order_acquire) != requested_generation) return false;
+
+  if (expectedGeneration &&
+      s.generation.load(std::memory_order_acquire) != expectedGeneration)
+    return false;
+  if (s.controller_done.load(std::memory_order_acquire))
+    return s.state.load(std::memory_order_acquire) == TraceState::Sealed;
+  const uint64_t stop_generation = s.generation.load(std::memory_order_acquire);
+  // Registration under control prevents generation reuse while this caller
+  // observes the outcome without reacquiring a potentially blocked mutex.
+  s.stop_waiters.fetch_add(1, std::memory_order_acq_rel);
+  struct StopWaiter {
+    Session& session;
+    ~StopWaiter() { session.stop_waiters.fetch_sub(1, std::memory_order_release); }
+  } waiter{s};
+  s.stop_requested.store(true, std::memory_order_release);
+  lock.unlock();
   s.condition.notify_all();
-  if (controller.joinable()) controller.join();
-  return result;
+  while ((s.outcome.load(std::memory_order_acquire) & 3) != 2 &&
+         !s.controller_done.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  if (s.generation.load(std::memory_order_acquire) != stop_generation) return false;
+  uint64_t pending = stop_generation << 2;
+  s.outcome.compare_exchange_strong(pending, (stop_generation << 2) | 2,
+                                    std::memory_order_acq_rel);
+  return (s.outcome.load(std::memory_order_acquire) & 3) == 1;
 }
 
 }  // namespace dxmt9::tracing
