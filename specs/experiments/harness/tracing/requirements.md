@@ -523,3 +523,32 @@ buffer occupancy, notification/bridge counts and source/SDK/output loss, with
 budgets frozen before collection. Deterministic ownership/failure fixtures,
 lifecycle model/code evidence and pinned native/SQLite parity are required;
 moving work to another thread alone does not establish lower overhead.
+
+## 17. Independent Collectors and Raw Observation Sharing
+
+**R-HARN-TRACE-17.1** Explicitly selected CPU/wait detail acquisition must support
+legacy-only, trace-only and dual consumers. Legacy file failure must not disable
+trace acquisition. Existing windows and expensive-collector gates remain explicit.
+
+**R-HARN-TRACE-17.2** CPU/wait producers must publish owned typed rows without
+trace-only string formatting or output under production locks. Both consumers
+must derive fields from the same acquired values and endpoint qualification.
+
+**R-HARN-TRACE-17.3** PE sampling must share individual versioned PC observations,
+original source clocks, target incarnations, outcomes and sample populations
+through generated bounded POD transport. Resume the sampled target before output;
+native receipt time must not replace unqualified source sample time.
+
+**R-HARN-TRACE-17.4** Query/queue semantic observations must be available independently
+of legacy log delivery. Already-required formatted reports may be shared, but
+their observation time and aggregation must not imply original execution timing.
+
+**R-HARN-TRACE-17.5** Structured renderer diagnostics must support direct bounded
+observation-to-SQL storage without requiring intermediate JSON/CSV artifacts.
+Optional compatibility exports share acquired data; opaque artifacts retain their
+own completion and digest provenance. Deferred mutable renderer reads are forbidden.
+
+**R-HARN-TRACE-17.6** Consumer selection, modes, budgets, failures and populations
+must survive experiment/test provenance and native/SQLite round trips. Verification
+must cover consumer independence, unwritable files, mutation after publication,
+transport loss and raw sample clocks; live overhead qualification remains explicit.

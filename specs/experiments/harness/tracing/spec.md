@@ -308,6 +308,10 @@ are outside this initial contract. The optional
 handoff, worker ownership, streaming loss and the separate cost/lifecycle proof
 required by R-HARN-TRACE-16.1–16.6. Deferred output remains the default.
 
+[Collector independence](collector-independence.md) defines R-HARN-TRACE-17:
+file-independent detail acquisition, typed rows, individual PE samples and direct
+structural SQL consumers. Existing report adapters alone do not satisfy it.
+
 Thread buffers stop accepting records at capacity; they do not overwrite old
 events or stall the workload. Per-thread loss counts and an out-of-band session
 failure latch survive event-buffer exhaustion. Record count, thread count,
