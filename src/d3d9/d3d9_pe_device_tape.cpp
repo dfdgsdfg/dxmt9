@@ -9,10 +9,160 @@
 #include "d3d9_pe_tape_support.hpp"
 #include "d3d9_pe_tape_bootstrap.hpp"
 #include "device_c_render_tape_identity_transfer_v4.hpp"
+#include "d3d9_pe_render_tape_arm_request_win32.hpp"
 
 #include <exception>
 #include <new>
 #include <stdexcept>
+
+namespace {
+
+bool admitExternalRenderTapeArmRequest(PeCaptureState& capture) noexcept {
+    using namespace dxmt9::d3d9;
+    auto& selector = capture.renderTapeArmRequest;
+    if (!selector.initialized) {
+        selector.initialized = true;
+        std::array<char, 260> path{};
+        std::array<char, 33> nonce{};
+        const auto pathSize = GetEnvironmentVariableA(
+            "DXMT9_RENDER_TAPE_ARM_REQUEST_PATH", path.data(), path.size());
+        const auto nonceSize = GetEnvironmentVariableA(
+            "DXMT9_RENDER_TAPE_ARM_REQUEST_ID", nonce.data(), nonce.size());
+        if (!pathSize && !nonceSize) return true;
+        // Process-scoped ownership is never released, even if this device dies.
+        static std::atomic_flag owner = ATOMIC_FLAG_INIT;
+        const bool owns = !owner.test_and_set(std::memory_order_relaxed);
+        const bool ready = initializeRenderTapeArmRequestSelector(selector,
+            pathSize < path.size() ? std::string_view(path.data(), pathSize) : "",
+            nonceSize < nonce.size() ? std::string_view(nonce.data(), nonceSize) : "",
+            capture.renderTapeArmPresentSkipRemaining, owns);
+        dxmt9DeviceInfoLog(
+            "render_tape_capture request_ready ready=%d pid=%u creation=%llu "
+            "request=%016llx%016llx ready_ms=%llu",
+            ready ? 1 : 0, selector.gate.processId,
+            static_cast<unsigned long long>(selector.gate.processCreation),
+            static_cast<unsigned long long>(selector.gate.nonce[0]),
+            static_cast<unsigned long long>(selector.gate.nonce[1]),
+            static_cast<unsigned long long>(selector.gate.readyMs));
+        // Ready is observable before the supervisor may publish its request.
+        return false;
+    }
+    if (!selector.enabled) return true;
+    const auto decision = pollRenderTapeArmRequest(selector);
+    if (decision == RenderTapeArmRequestDecision::Accept ||
+        decision == RenderTapeArmRequestDecision::Reject) {
+        dxmt9DeviceInfoLog(
+            "render_tape_capture request_admission accepted=%d pid=%u "
+            "request=%016llx%016llx accepted_ms=%llu expires_ms=%llu",
+            decision == RenderTapeArmRequestDecision::Accept ? 1 : 0,
+            selector.gate.processId,
+            static_cast<unsigned long long>(selector.gate.nonce[0]),
+            static_cast<unsigned long long>(selector.gate.nonce[1]),
+            static_cast<unsigned long long>(selector.gate.acceptedMs),
+            static_cast<unsigned long long>(selector.gate.expiresMs));
+    }
+    return decision == RenderTapeArmRequestDecision::Accept;
+}
+
+void logExternalRenderTapeArmReceipt(const PeCaptureState& capture,
+                                    const char* stage, bool success) noexcept {
+    const auto& selector = capture.renderTapeArmRequest;
+    if (!selector.enabled) return;
+    dxmt9DeviceInfoLog(
+        "render_tape_capture request_receipt stage=%s success=%d pid=%u "
+        "creation=%llu request=%016llx%016llx token=%llu epoch=%llu queue=%llu tick_ms=%llu",
+        stage, success ? 1 : 0, selector.gate.processId,
+        static_cast<unsigned long long>(selector.gate.processCreation),
+        static_cast<unsigned long long>(selector.gate.nonce[0]),
+        static_cast<unsigned long long>(selector.gate.nonce[1]),
+        static_cast<unsigned long long>(capture.renderTapeActiveCaptureToken),
+        static_cast<unsigned long long>(capture.renderTapeActiveCaptureEpoch),
+        static_cast<unsigned long long>(capture.renderTapeActiveCaptureQueue),
+        static_cast<unsigned long long>(GetTickCount64()));
+}
+
+// Failure-only, bounded value witness. No new draw/replay instrumentation and
+// no rejected bytes are promoted to an authenticated tape publication.
+void logRenderTapeCoordinatorFailure(
+    const dxmt9::d3d9::TapeCoordinatorFailure& failure,
+    const dxmt9::d3d9::RenderTapeIdentityV4View& identity) noexcept {
+    using namespace dxmt9::d3d9;
+    if (failure.reason == TapeCoordinatorFailureReason::None) return;
+    const auto wide = [](std::uint64_t value) { return static_cast<unsigned long long>(value); };
+    const auto& fact = failure.fact;
+    const auto& h = identity.header;
+    dxmt9DeviceInfoLog(
+        "render_tape_capture coordinator_failure reason=%u index=%u token=%llu epoch=%llu queue=%llu "
+        "event=%llu record=%u type=%u action=%u flags=%u query_type=%u query_kind=%u "
+        "query_generation=%u query_object=%llu cycle=%llu ordinal=%llu "
+        "baseline_sequence=%llu baseline_initializer=%llu baseline_completed=%llu "
+        "initializer_epoch=%llu completed_initializer=%llu baseline_edge=%llu baseline_kind=%u domain=%u",
+        static_cast<unsigned>(failure.reason), failure.coordinatorIndex,
+        wide(h.captureToken), wide(h.captureEpoch), wide(h.queue), wide(fact.eventOrdinal),
+        fact.recordIndex, fact.recordType, fact.requiredReleaseAction, fact.queryFlags, fact.queryType,
+        fact.queryIdentity.kind, fact.queryIdentity.generation, wide(fact.queryIdentity.objectId),
+        wide(fact.issueCycle), wide(fact.issueOrdinal), wide(h.baselineSequence), wide(h.baselineInitializer),
+        wide(h.baselineCompletedSequence), wide(h.initializerEpoch), wide(h.baselineCompletedInitializer),
+        wide(h.baselineCompletionEdge), h.baselineKind, h.coordinatorDomain);
+    if (failure.coordinatorIndex >= identity.coordinators.size()) return;
+    const auto& entry = identity.coordinators[failure.coordinatorIndex];
+    const auto& c = entry.provenance;
+    dxmt9DeviceInfoLog(
+        "render_tape_capture coordinator_row index=%u event=%llu raw=%llu generation=%llu dispatch=%llu "
+        "admission=%llu authority=%u release_ordinal=%llu release_generation=%llu record=%u type=%u "
+        "flags=%u query_type=%u query_kind=%u query_generation=%u query_object=%llu cycle=%llu ordinal=%llu "
+        "device_epoch=%llu writer=%llu writer_generation=%llu storage_generation=%llu prefix_sequence=%llu "
+        "prefix_initializer=%llu prefix_initializer_epoch=%llu result=%d action=%u release_writer=%u "
+        "prefix_kind=%u source=%u initializer=%u command_end=%u observation=%u reserved=%u/%u/%u",
+        failure.coordinatorIndex, wide(c.eventOrdinal), wide(c.rawOrdinal), wide(c.buildGeneration),
+        wide(c.dispatchEdge), wide(entry.admissionEdge), entry.authority, wide(c.releaseOrdinal),
+        wide(c.releaseGeneration), c.recordIndex, c.recordType, c.flags, c.queryType,
+        c.queryIdentity.kind, c.queryIdentity.generation, wide(c.queryIdentity.objectId),
+        wide(c.issueCycle), wide(c.issueOrdinal), wide(c.deviceEpoch), wide(c.writerCaptureId),
+        wide(c.writerGeneration), wide(c.storageGeneration), wide(c.prefixSequence),
+        wide(c.prefixInitializer), wide(c.prefixInitializerEpoch), c.dispatchResult,
+        c.releaseAction, c.releaseWriter, c.prefixKind, c.sourceIndex, c.initializerIndex,
+        c.commandEnd, c.observation, c.reserved0, c.reserved1, entry.reserved0);
+    std::uint32_t candidates = 0u;
+    for (const auto& a : identity.attempts) {
+        if (a.eventOrdinal != c.eventOrdinal || a.rawOrdinal != c.rawOrdinal ||
+            (a.attemptGeneration != c.buildGeneration &&
+             !(c.recordIndex >= a.firstRecord &&
+               std::uint64_t{c.recordIndex} < std::uint64_t{a.firstRecord} + a.recordCount))) continue;
+        if (++candidates > 4u) continue;
+        dxmt9DeviceInfoLog(
+            "render_tape_capture coordinator_attempt candidate=%u event=%llu raw=%llu generation=%llu "
+            "begin=%llu effect=%llu terminal=%llu first=%u count=%u outcome=%u",
+            candidates, wide(a.eventOrdinal), wide(a.rawOrdinal), wide(a.attemptGeneration),
+            wide(a.beginEdge), wide(a.effectEdge), wide(a.terminalEdge),
+            a.firstRecord, a.recordCount, a.outcome);
+    }
+    dxmt9DeviceInfoLog("render_tape_capture coordinator_attempts candidates=%u truncated=%u",
+        candidates, candidates > 4u ? 1u : 0u);
+    if (c.sourceIndex < identity.sources.size()) {
+        const auto& s = identity.sources[c.sourceIndex].lifecycle;
+        dxmt9DeviceInfoLog(
+            "render_tape_capture coordinator_source index=%u ordinal=%llu sequence=%llu writer=%llu "
+            "writer_generation=%llu storage_generation=%llu publication=%llu submission=%llu "
+            "completion=%llu completed_sequence=%llu commands=%u cut_event=%llu cut_kind=%u cut_record=%u",
+            c.sourceIndex, wide(s.sourceOrdinal), wide(s.seqId), wide(s.writerCaptureId),
+            wide(s.writerGeneration), wide(s.storageGeneration), wide(s.publicationEdge),
+            wide(s.submissionEdge), wide(s.completionEdge), wide(s.completedSequence),
+            s.commandCount, wide(s.cutEventOrdinal), s.cutKind, s.cutRecord);
+    }
+    if (c.initializerIndex < identity.initializers.size()) {
+        const auto& i = identity.initializers[c.initializerIndex];
+        dxmt9DeviceInfoLog(
+            "render_tape_capture coordinator_initializer index=%u sequence=%llu epoch=%llu "
+            "publication=%llu submission=%llu completion=%llu completed_sequence=%llu "
+            "cut_event=%llu cut_kind=%u cut_record=%u",
+            c.initializerIndex, wide(i.sequence), wide(i.epoch), wide(i.publicationEdge),
+            wide(i.submissionEdge), wide(i.completionEdge), wide(i.completedSequence),
+            wide(i.cutEventOrdinal), i.cutKind, i.cutRecord);
+    }
+}
+
+} // namespace
 
 static_assert(dxmt9::d3d9::render_tape_d3d_format::A16B16G16R16F ==
               D3DFMT_A16B16G16R16F);
@@ -198,8 +348,13 @@ bool D3D9DeviceImpl::finishRenderTapeIdentityCaptureV4(
             expected, queue, presentOrdinal, identity, topology, actionWitness, attachmentHistory);
         if (attached != dxmt9::d3d9::RenderTapeCaptureStatus::Complete) {
             dxmt9DeviceInfoLog(
-                "render_tape_capture identity_v4_finish_rejected phase=attach status=%u",
-                static_cast<unsigned>(attached));
+                "render_tape_capture identity_v4_finish_rejected phase=attach status=%u "
+                "identity_status=%u topology_status=%u",
+                static_cast<unsigned>(attached),
+                static_cast<unsigned>(peCaptureState_->renderTapeCapture.identityV4ValidationStatus()),
+                static_cast<unsigned>(peCaptureState_->renderTapeCapture.topologyV1ValidationStatus()));
+            logRenderTapeCoordinatorFailure(
+                peCaptureState_->renderTapeCapture.identityV4CoordinatorFailure(), identity);
             return false;
         }
         return true;
@@ -217,6 +372,7 @@ void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
         peCaptureState_->renderTapeAbortReason = reason;
         dxmt9DeviceInfoLog("render_tape_capture first_abort reason=%s",
                            reason);
+        logExternalRenderTapeArmReceipt(*peCaptureState_, reason, false);
     }
     cancelRenderTapeIdentityCaptureV4();
     peCaptureState_->renderTapeCapture.abort();
@@ -1557,6 +1713,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
              dxmt9::d3d9::RenderTapeCaptureState::Aborted)) {
         return false;
     }
+    if (!admitExternalRenderTapeArmRequest(*peCaptureState_)) return false;
     if (peCaptureState_->renderTapeArmPresentSkipRemaining != 0u) {
         --peCaptureState_->renderTapeArmPresentSkipRemaining;
         return false;
@@ -1804,6 +1961,11 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         }
     }
     peCaptureState_->renderTapeCaptureOracle = std::move(seed.oracleAttachments);
+    if (peCaptureState_->renderTapeArmRequest.enabled &&
+        !peCaptureState_->renderTapeArmRequest.gate.mayFinishBootstrap(GetTickCount64())) {
+        abortRenderTapeCapture("external_request_expired_during_bootstrap");
+        return false;
+    }
     if (!advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::Armed)) {
         abortRenderTapeCapture("arm_boundary_order");
@@ -1820,6 +1982,12 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         abortRenderTapeCapture("identity_v4_arm");
         return false;
     }
+    if (peCaptureState_->renderTapeArmRequest.enabled &&
+        !peCaptureState_->renderTapeArmRequest.gate.mayFinishBootstrap(GetTickCount64())) {
+        abortRenderTapeCapture("external_request_expired_during_identity_arm");
+        return false;
+    }
+    logExternalRenderTapeArmReceipt(*peCaptureState_, "armed", true);
     dxmt9DeviceInfoLog(
         "render_tape_capture arm_complete token=%llu objects=%zu "
         "mutations=%zu blobs=%zu",
@@ -1956,6 +2124,7 @@ void D3D9DeviceImpl::finishRenderTapeCaptureAtPresentBoundary() noexcept {
         publisher && publisher(peCaptureState_->renderTapeCapture.publicationBundle());
     dxmt9DeviceInfoLog("render_tape_capture publication published=%d",
                        published ? 1 : 0);
+    logExternalRenderTapeArmReceipt(*peCaptureState_, "publication", published);
     if (!published) {
         abortRenderTapeCapture("publication");
     }

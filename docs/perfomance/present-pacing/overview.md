@@ -4,12 +4,915 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-10-11
+updated: 2026-10-17
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
+
+[H656](present-pacing-scheduler-full.656.md) prevents an unconditional Replay
+ranking: its OFF arm has Encode29.53–29.82 > Replay28.83–29.03ms/frame, while
+the ON arm reverses this order. Full-template trace stop times out despite disk
+headroom; the fixed population stops, without replacing the failed run.
+[H657](present-pacing-scheduler-minimal.657.md) qualifies minimal scheduler plus
+signpost instruments on a native fixture, not yet the game. Default transfer
+and the current global maximum remain open.
+
+[H655](present-pacing-scheduler-live.655.md) retains original-game Replay CPU
+42.470–42.774ms/frame, above all observed composed owners. Raw trace recovery
+succeeds, but only2.79s and no exported clock markers survive, so full6.87s
+scheduler attribution is rejected. No default/global ranking or new saving is
+claimed; the next separate capture must preserve the full non-rolling trace.
+
+[H654](present-pacing-external-clock.654.md) connects external marker clocks
+to a separate Rosetta target without modifying its binary. The helper-only
+mapped CPU upper contains target self CPU; native qualification does not yet
+close actual-game coverage or default-owner transfer.
+
+[H653](present-pacing-scheduler-clock.653.md) qualifies short attached-process
+clock mapping in ARM64/Rosetta, with offset apertures1.708/9.958µs. Both busy
+self-CPU deltas fit Running+Interrupted+Unknown over outward-mapped windows;
+Running alone undercounts. This enables same-window native attribution but is
+not original-game coverage, losslessness, or observer-OFF transfer.
+
+[H651](present-pacing-owner-coverage.651.md) checks the12 exports/326 known
+slots and conditional launch selectors against frozen evidence; it does not
+invent an in-process configuration receipt. [H652](present-pacing-scheduler-preflight.652.md)
+successfully exports System Trace scheduler intervals in ARM64/Rosetta fixtures.
+Running-only is an observed undercount; Interrupted/Unknown must remain in a
+conservative upper. Same-camera clock mapping and live coverage are the next
+gate for otherwise-unobserved native threads, not another per-draw observer.
+
+[H650](present-pacing-retirement-live.650.md) qualifies actual live archive
+retirement in four fixed original-game arms. Replay is34.48–38.92ms/frame and
+Encode32.20–33.78 across the four episodes; each episode separately has
+Replay lower above Encode upper. In both observed arms Replay also exceeds
+all observed composed thread uppers, with archive uncertainty below0.118ms/frame
+per worker. Effective-policy/entry/platform coverage and default transfer still
+gate global completion. H641 alone supplies the separate qualified removal
+screen; no new FPS or saving claim is made.
+
+[H649](present-pacing-retirement-owner.649.md) adds terminal-qualified owner
+envelopes in a coherent private binary. Four original-capture arms preserve
+pixels/query diagnostics/lifetimes; native tests close six threads before join
+and reject reinitialization. H650 supplies its live archive application, without
+a production promotion.
+
+[H646](present-pacing-owner-lifecycle-live.646.md) completes the original-game
+owner population. Replay lower exceeds Encode upper in all six O/I/R arms;
+same-episode Primary-root uppers19.42–22.95ms/frame in R are below Replay33.51–40.36.
+Finish/Completion are small. [H647](present-pacing-owner-composition.647.md)
+closes the sparse/lifecycle postprocessing omission; the archive workers still
+lack actual retirement witnesses. C0 does not reverse worker ordering and
+O0→O1 drifts substantially, so this population adds no new removal/FPS claim.
+[H648](present-pacing-thread-retirement.648.md) qualifies a native retained-port
+mechanism, not yet a product terminal authority. H641's separate removal screen
+remains the strongest removable-cost evidence; the global goal is still open.
+
+[H645](present-pacing-owner-lifecycle-live.645.md) finds close baseline worker
+costs (Replay32.34–32.68, Encode31.68–32.17ms/frame across two controls), then
+rejects combined attribution because the original EXE cannot locate the clock
+service. PE32/PE64 loader controls confirm the app-local deployment omission.
+Correct deployment before a new population; H645 does not close global ranking.
+
+[H644](present-pacing-foreign-disposal.644.md) closes the original-block disposal
+observation gap in a private provider. Actual API OFF/ON controls and original
+capture controls pass. It does not bound all platform post-release work or
+establish new live CPU savings; combine it with PE-root and H643 lifecycles next.
+
+[H643](present-pacing-worker-lifecycle.643.md) connects H642 to actual native
+worker creation and successful joins, with original-capture OFF/ON/candidate
+controls passing. All22 observed Encode/Finish/Completion/compile lifecycles
+close. Replay-offload/WSI/archive live paths and foreign callbacks remain
+unqualified here; this does not alter H641's live result or close global ranking.
+
+[H642](present-pacing-thread-envelope.642.md) closes a measurement-design gap:
+worker-body return does not cover callable or TLS destruction. A conservative
+launch/self-sample/join envelope passes finite-model and native controls; it
+retains unknown teardown rather than assuming zero. This is preflight only,
+not evidence that teardown is a live bottleneck or that global ranking is closed.
+
+[H641](present-pacing-snapshot-performance.641.md) passes a fixed audit-off
+live screen: two order-reversed blocks reduce Replay by5.645–6.029 and
+6.295–6.670 CPU ms/frame. Median lower5.970 exceeds sham5.153; the margin is
+only0.818, and these are finite enclosures, not statistical confidence bounds.
+Reference Replay is above Encode in8/8 episodes; candidates reverse it in4/4.
+The four treatment-pair means are36.900→30.740ms/frame, not an FPS guarantee.
+Same-episode app/auxiliary accounting remains necessary for global attribution.
+
+[H640](present-pacing-snapshot-live.640.md) carries the candidate into original
+live game execution with an actual hot/layout/uniform equality audit. Q1 has
+5,609,053 clean checks, all seven camera knots and natural exit; capture
+controls still match original pixels/query/lifetimes. Q0's log-level gate
+failure is retained. Diagnostic Replay42.428–42.671ms/frame includes audit
+work and cannot establish a default bottleneck or improvement. The next gate
+is the same binary with audit off and matched reference/candidate controls.
+
+[H639](present-pacing-snapshot-consumer.639.md) advances snapshot sharing from
+shadow to actual borrowed queue delivery and final SoA ownership. Original
+pixels/query transcript/lifetimes pass, including all42 fixed timing runs.
+Same-input Replay CPU point means are63.918→59.587ms; the median paired
+reduction is4.1775ms. Its lower-bound screen clears sham by only0.1593ms.
+The denominator is260 provider roots including bootstrap, not a live frame.
+Live transfer and generation-writer/Arena coverage remain open; H636 still
+does not identify a unique original-path Replay/Encode winner.
+
+[H638](present-pacing-snapshot-owner.638.md) advances that candidate to a
+private owned-storage refinement and actual-input shadow: 726 base owners
+preserve 2,343 run-specific debug/binding/range descriptors. Foreign-owner
+tokens reject after an independently found epoch-only counterexample is fixed.
+The original renderer still emits commands; GPU equality does not qualify an
+unconnected candidate consumer. Borrowed-view queue integration, measured CPU
+removal and default-live attribution remain required.
+
+[H637](present-pacing-run-sharing.637.md) supplies a concrete removal target
+without repeating a failed micro-copy screen. Same-batch binding churn creates
+1,617 additional runs whose generation/stride key and actual hot/layout/uniform
+values match the predecessor, among 2,343 total runs. All four original-input
+controls pass. Snapshot owners and per-run binding/debug descriptors could be
+separated, but ownership/view refinement, CPU savings and live transfer are
+not yet implemented or proved.
+
+[H636](present-pacing-minimal-owner.636.md) completes original/inert/active
+minimal controls in both order directions. Original O1 Replay31.551–31.697 and
+Encode31.420–31.802ms/frame overlap, as do O0's wider bounds. Active PE-root
+uppers21.844/17.838 are below both workers, but outside-root Primary CPU is
+not automatically game-only work. Finite contrasts include workload/layout
+variation, not calibrated observer taxes. Both workers remain candidates;
+same-input semantic-work elimination and live transfer are still required.
+
+[H635](present-pacing-guest-live.635.md) reaches actual live collection:
+528 identity-qualified rows cover 132 complete late-scene render paths.
+Dispatch dominates the coarse Primary samples at 43.347ms CPU/path; Begin and
+End are small. This includes game/Wine/PE/synchronous Unix, so it cannot be
+called a dxmt9 bottleneck or compared by subtraction with H629. Next qualify
+marker controls and compose minimal PE-root/worker-self observations; default
+ownership and removable CPU are still unproved.
+
+[H634](present-pacing-guest-install.634.md) passes original/inert/armed
+synthetic cold-install controls and prepares a private game image without
+altering original files. All 2,048 machine snapshots per arm match; 1,408 armed
+CPU rows validate. The catalogue launcher override bug is corrected. This is
+installation preparation, not live-game qualification: loaded-image, screen,
+closure and observer-cost controls still precede default-path attribution.
+
+[H633](present-pacing-guest-observer.633.md) qualifies the integrated synthetic
+observer: guest markers → native CPU service → identity/phase checks → fixed
+storage. Wine passes 512 state comparisons and all 1,408 raw packet checks.
+Its bridge-call median of 1.541µs is not total marker overhead or a transferable
+live correction. The game remains unmodified; safe cold installation, live
+unmodified/inert/armed controls and actual CPU removal evidence remain open.
+
+[H632](present-pacing-guest-phases.632.md) closes bounded continuation and
+event-pairing checks, not live attribution. The real caller can bypass Begin
+when inactive; its continuation must not manufacture a completed frame. Wine
+passes 1,152 paired state cases; both native architectures pass 87,381 event
+words and detect order/identity mutants. The callbacks and reducer are not yet
+integrated with the game or CPU clock service. Default owner and removable
+budget remain unproved.
+
+[H631](present-pacing-guest-marker.631.md) advances guest instrumentation only
+to synthetic ABI qualification. A before-call marker recreates the exact
+original CALL return address; 256 paired cases and three preservation-omission
+controls pass under Wine. No game image is changed. Final continuation,
+bounded event storage, safe installation and live perturbation controls remain
+required; no new default-owner ranking or removable CPU estimate follows.
+
+[H630](present-pacing-guest-boundaries.630.md) makes game-side logging concrete
+without claiming a new CPU result. Three authenticated caller sites delimit
+Begin, callback dispatch and End; End's tail call and the dispatcher's EAX ABI
+rule out naive epilogue/C++ wrappers. This coarse observer could explain supply
+phases but includes game/Wine work and is not complete D3D9-root coverage.
+Runtime shim qualification is still required; no target patch was made.
+
+[H629](present-pacing-owner-union-live.629.md) closes the observed Primary
+overlap: Encode draw-loop lower bounds exceed the new PE union uppers in both
+ON episodes by 0.173/0.800ms/frame. This is an individual-partition ranking,
+not a whole-thread default bottleneck or saving. All four fixed runs and raw,
+identity, image and restoration checks pass. OFF Replay/Encode still overlap;
+the combined observer's Replay contrast is +2.39–4.43ms/frame. Next reduce
+observation for default transfer and retain lifecycle-tail exclusions; only
+a separate correctness-qualified intervention can establish removable CPU.
+
+[H628](present-pacing-root-union.628.md) advances the unresolved Primary
+exclusion with uncertainty-preserving interval union. Both native architectures
+and real PE fixtures pass, including 16 corrupt-map rejections and complete
+staging restoration. Tight-loop bounds improve without reduced endpoint
+allowance or removed CPU work. H629 adds live same-camera composition;
+do not re-price old H621 episodes from the fixture or claim the global default
+maximum/removable budget is closed.
+
+[H627](present-pacing-override-projection.627.md) closes lexical binding-override
+projection without promotion. Full context copies fall 81.0%, native reset
+counterexamples and original GPU/query/lifetime checks pass, but the 42-run
+CPU screen fails: median +0.722ms, sham bound 0.937ms, two negative blocks.
+Do not assign the caller-loop budget to copying. Prioritize the remaining
+maximum-owner comparison: H621 Primary's upper bound contains 3.1ms/frame of
+endpoint allowance. A tighter bound requires new qualified evidence, not a
+smaller assumed allowance. Live removable CPU remains unproved.
+
+[H626](present-pacing-layout-reuse.626.md) closes the declaration-decoder reuse
+candidate without promotion. Actual calls fall 3,982→757 and original GPU,
+query and lifetime effects remain exact. The 42-run frozen root-CPU screen
+fails: median OFF-minus-ON +0.172ms is below the 1.814ms sham bound, and only
+four of eight block lower bounds are positive. This is not a live saving or
+proof of zero decoder cost. Investigate larger caller/preparation and pass
+work only after identifying a concrete redundant operation; global ownership
+and the removable budget remain open.
+
+[H623](present-pacing-encode-setup-live.623.md) rejects assuming per-draw
+PSO lookup: the conditional base block is already skipped on about 82% of
+live draws. Its observed CPU upper bound is 1.94ms/frame; actual recorded
+draw wrappers are below 1.79. Common setup remains 1.76–3.27, without a
+separated ranking or removal proof. Four fixed runs and raw/restoration
+checks pass; Encode detail contrast is +0.15–1.18ms/frame. Next screen a
+concrete DrawRun-local declaration decoder reuse candidate, not another broad
+breakdown. Its prior secondary cost and stride dependencies remain binding.
+
+[H622](present-pacing-encode-live-detail.622.md) decomposes the actual-live
+Encode loop. Setup, index/issue and caller preparation have overlapping
+substantial bounds; setup/index each exceed argument/uniform and stream-prep
+upper bounds, but not each other or pass management. Four fixed runs pass
+raw and restoration checks. Fine observation adds a +2.08–4.13ms/frame Encode
+contrast, so observed subphase cost is not removable default cost. Next split
+per-draw setup from conditional base-state lookup/binding; existing DrawRun
+reuse must be counted before introducing a second cache. Global default
+dominance and an experimentally demonstrated removal remain open.
+
+[H621](present-pacing-owner-composition.621.md) closes the cross-episode gap:
+simultaneous observation places Encode's draw loop at 18.15–19.78ms/frame,
+above every individual Replay partition and its unassigned budget. Primary
+renderer-root upper bounds still overlap; wrapper/closure tails and default
+transfer remain open. Four fixed runs and independent raw/restoration checks
+pass. Replay's finite observation contrast is +2.42–3.79ms/frame, while OFF
+whole-thread rankings are not stably separated. No removable CPU is proved.
+Next investigate a concrete redundant operation inside the actual-live draw
+loop, retaining the separate obligation to tighten the Primary exclusion.
+
+[H620](present-pacing-uniform-owner.620.md) prices the real cache paths on the
+original input: 190 full builds versus 1,112 settlements, with fixed projection
+only 0.187–0.189ms observed wall. Hash processing leads exclusive wall, not a
+separated CPU ranking. Four exact controls and independent raw/parent checks
+pass. No new copy candidate or live saving is qualified. The remaining global
+comparison needs large Replay/Encode regions in one episode and current
+Primary/other-owner exclusions, rather than combining different populations.
+
+[H619](present-pacing-uniform-fixed.619.md) confirms fixed-payload stack
+gathering and a second cache copy survive compilation. A private direct writer
+removes the final 2,468-byte memcpy at both sites and passes native/original
+GPU checks. The frozen captured-body CPU screen fails advancement: median
+OFF-minus-ON +2.941ms, two reversed blocks, OFF/OFF envelope 8.155ms. This
+does not establish zero intrinsic cost, but does not justify live promotion
+or assigning H618's whole uniform budget to projection. No product changes.
+
+[H618](present-pacing-replay-cache-live.618.md) establishes uniform build/refresh
+above the other individual cache components in both observed live intervals.
+Whole queue batch remains 7.08–9.71ms/frame and owned-run 4.29–6.10; these are
+cost envelopes, not savings. The finer partition does not contradict H615's
+larger aggregate outside-queue loop. Four fixed runs and independent raw/file
+verification pass, but observer burden and OFF drift block an exact default
+budget. Distinguish actual uniform changes from fixed-projection materialization
+before choosing a new candidate; global dominance/removal remain open.
+
+[H617](present-pacing-replay-cache.617.md) narrows cache reconstruction on the
+original capture without selecting a new optimization: shader-layout, uniform
+and hot-state CPU bounds overlap. Owned-run construction is larger in this
+capture, but H597–H600's removal verdict remains closed. Four exact controls,
+1,040 raw rows and 3,988 hash checks pass. Different cold/live route mixes and
+detail overhead prevent live-budget extrapolation. Next qualify actual-live
+layout/uniform/hot-state costs inside compatibility preparation, retaining
+owned-run construction as a competing region.
+
+[H615](present-pacing-replay-owner-live.615.md) localizes Replay outside-queue
+work: the record-loop lower CPU bound exceeds every individual competitor's
+upper bound, including uncovered CPU, in both observed late windows. Its
+camera-adjusted14.58–17.71ms/frame is not removable time; observation itself
+adds CPU and OFF Replay/Encode still overlap. Four fixed runs, exact captured
+controls and56 restoration hashes pass. Next distinguish draw preparation,
+sparse state application and loop bookkeeping before selecting a removal.
+
+[H613](present-pacing-encode-census.613.md) replaces sparse live attribution
+with complete roots: about97% Encode CPU coverage, zero boundary straddlers,
+and a60–65% draw-loop CPU share in both ON windows. Four fixed runs qualify
+identity, natural exit, screen and56-file restoration. The observer adds
+0.220–1.531ms/frame Encode CPU in finite contrasts; no exact tax subtraction
+or removal claim. Encode's largest region is localized, but comparable OFF
+Replay CPU and its outside-queue work still block a global-largest conclusion.
+
+[H612](present-pacing-encode-issue.612.md) shows that actual recorded draw-call
+scopes occupy only42–43% of index/issue wall on the original input. Index
+preparation and volatile push are smaller; the remaining policy/control path
+is about1.06–1.07ms. Four exact controls and36 raw root checks pass, but detailed
+observation adds CPU. No removal or live rank is proved. The next gate is
+complete late-episode root/loop coverage with a qualified coarse observer,
+not another micro-optimization selected from intrusive captured timings.
+
+[H611](present-pacing-encode-setup.611.md) completes the two setup questions:
+declaration decode and PSO naming total about0.969ms, approximately7% of the
+captured loop wall. All four original oracles pass. Their CPU lower bounds
+remain zero and detail overhead overlaps variation; these are secondary owners,
+not established savings. Next divide index/issue into actual recorded draw
+emission and surrounding preparation. No product or live-policy change.
+
+[H610](present-pacing-encode-phases.610.md) narrows H609's loop on the original
+capture: outer preparation, setup and index/issue have similar costs, not one
+dominant texture-binding phase. Four original oracles and36 raw root checks
+pass. Detail increases loop wall by1.342–2.056ms versus coarse controls;
+do not transfer phase percentages into unobserved live savings. Declaration
+decoding and base-rebind PSO naming are bounded next setup questions; prior
+scratch/raster/VS-shadow candidate verdicts remain closed.
+
+[H609](present-pacing-encode-owner.609.md) closes two sparse live Encode
+attribution runs. Whole-loop CPU bounds exceed every other individual phase
+in both sampled source populations; pass preparation is the next larger
+component. Exact captured effects and identity/conservation/restoration checks
+pass. Replay leads one whole-window comparison and overlaps Encode in the other.
+The small sample CPU coverage forbids ms/frame extrapolation: pursue in-loop
+work ownership, not a claimed removable60% budget or another small queue trial.
+
+[H608](present-pacing-pair-live.608.md) fails the fixed live-removal screen despite
+[H607](present-pacing-pair-production.607.md)'s actual-call-site correctness.
+Replay contrast is mixed and smaller than baseline variation; CPU nonregression
+passes, pacing nonregression does not. Encode leads four windows, with one near
+tie, so detailed Replay diagnostics must not define the permanent bottleneck.
+All five runs, independent raw arithmetic and 70 restoration hashes pass. Keep
+the candidate private and move to source-qualified live Encode whole-loop
+attribution; global largest operation and removable CPU remain unproved.
+
+[H606](present-pacing-pair-shortcut.606.md) qualifies a private exact-prefix
+shortcut locally: 52–64ns/entry reduction, roughly one tenth of warmed batch
+preparation, exceeds aggregate sham 5.52ns in both orders/processes. Exhaustive
+short-state and seeded differential tests pass on both architectures; candidate
+scratch outputs match. Rendering remains reference-only. Production-call-site
+GPU exact verification and default-live CPU transfer are next; this does not
+close the global CPU-owner/removal objective or justify broad FPS repetitions.
+
+[H605](present-pacing-prepare-deferred.605.md) narrows preparation to state/layout
+pair work in warmed actual-input scratch (about 550ns/entry). Disabled counter
+clocks add 50–61ns/entry; four order/process lower bounds exceed aggregate sham
+5.77ns. Exact controls and independent raw verification pass. Test an equivalent
+exact-state shortcut next; live transfer and the global removable CPU budget
+remain unproved. [H604](present-pacing-prepare-local.604.md) is excluded after
+original-pixel mismatch, not reused as timing evidence.
+
+[H603](present-pacing-queue-partition.603.md) narrows ordinary queue candidates
+to append, immutable preparation and marking. O1 CPU bounds are1.284–3.615,
+0.539–2.870 and0–1.921ms/frame respectively; they do not establish unique rank.
+Reservation/planning are small. Process-exit closure corrects an overstrict
+destructor-only observer contract; original rejections and O0's large start
+allowance remain visible. At least21.969ms/frame Replay CPU lies outside this
+queue envelope. No global maximum, removable budget or promotion is claimed.
+
+[H602](present-pacing-generation-cpu.602.md) repairs the diagnostic identity gap:
+Replay samples and phase aggregates carry lifecycle domain, with explicit
+Bind/Retire validation. Native reuse/failure controls and exact capture effects
+pass; no product policy changes. Next combine the repair with queue-body cost
+partitioning rather than repeating coarse FPS trials. No H601 result is rescued
+retroactively and no removable CPU amount is certified.
+
+[H601](present-pacing-queue-cpu-owner.601.md) advances one-episode attribution:
+ordinary queue CPU 6.888–8.483ms/frame exceeds cache/run individual ceilings.
+The queue scope includes marking, unlike H596's exclusive group. O1's normal
+exit is not a qualification pass: address reuse across lifecycle domains fails
+the frozen parser. Preserve rejection, fix observer generation composition,
+then split the queue body. Global maximum and removable CPU remain unproved.
+
+[H600](present-pacing-owned-run-local.600.md) separates actual-input constructor
+CPU: 67 selected state/layout/uniform inputs, warmed reserved scratch, both
+orders, same original capture. Mean reduction bounds are 0.36–0.66us/run;
+four original pixel/query/lifetime controls and independent raw verification
+pass. Worst-individual-sham screening fails; this is not a default-live
+ms/frame estimate. Keep this mechanism priced locally and resolve H596's
+larger cache-miss/final-queue ownership overlap next.
+
+[H599](present-pacing-owned-run-live.599.md) completes the owned-run live contrast.
+All four Replay comparisons favor the candidate, but conservative reductions
+1.262/0.860ms/frame remain below OFF variation 1.389ms/frame. Whole-window pacing
+passes 3% nonregression, not repeated improvement; Encode CPU fails nonregression.
+Five valid exits, eight effect controls, independent raw arithmetic and seventy
+restoration hashes pass. No production promotion or removable amount is certified.
+Use operation-local construction costs next, not an extension of these five runs.
+
+[H598](present-pacing-owned-run-warm-replay.598.md) records reference iteration1
+output mismatch in same-Device repeated capture before candidate execution.
+It supplies no warmed CPU estimate; H599 is a separately frozen live experiment.
+
+[H597](present-pacing-owned-run-construction.597.md) qualifies a private
+final-location owned-run constructor with exhaustive native traces and eight
+effect controls. It avoids shared-header ODR drift and keeps resource ownership.
+Generated hot-state copies fall from three to one, but default-initialization
+zero-fill remains. Measure net CPU before live transfer; no removal amount or
+production promotion is established.
+
+[H596](present-pacing-replay-cpu-owner.596.md) completes two fixed live sampled
+CPU diagnostics and independent raw verification. Cache miss and owned-run
+construction dominate compatibility preparation; final queue batch remains
+large and overlaps cache's bounds. These are sampled totals, not extrapolated
+per-frame savings. The canonical binary copies the 8,112-byte hot state three
+times through constructor/local-run/vector storage. Test final-location owned
+construction next; no product change or removal amount is yet certified.
+
+[H595](present-pacing-cache-clock.595.md) closes the fixed cache-clock contrast.
+Both ON Replay CPU bounds are below adjacent OFFs, but conservative reductions
+0.590/0.888ms/frame do not exceed OFF variation 1.210ms/frame. All five runs,
+eight effect controls and 70 restoration hash checks pass. Pacing worsens in
+run order, including OFFs; no causal FPS gain/regression or removable CPU amount
+is certified. Attribute the large cache/rebuild/owned-run body locally next.
+
+[H594](present-pacing-replay-operations.594.md) splits H593's resolved envelope:
+compatibility draw preparation is the largest exclusive elapsed operation at
+11.819/12.700ms/frame; sparse dispatch is 1.450/1.592ms and binding attachment
+0.762/0.832ms. Two fixed live runs and independent conservation/restoration
+checks pass. The measured cache function retains clocks before the disabled
+counter gate. Price that diagnostic cost, then split cache rebuilding from
+owned-run construction; elapsed is not yet removable CPU or an FPS benefit.
+
+[H593](present-pacing-replay-partition.593.md) locates the largest exclusive
+late Replay elapsed phase: compatibility resolved-record execution, excluding
+queue batch, is 15.901/17.290ms/frame. Planning is 1.110/1.192ms and cleanup
+0.194/0.210ms. Live Direct resolved calls are below 1%, unlike cold capture's
+199/260; do not transfer that route mix. Both fixed live episodes and independent
+raw/restoration checks pass. Next split sparse state versus draw preparation;
+exclusive elapsed is not yet pure CPU or removable work.
+
+[H592](present-pacing-live-batch.592.md) measures two default-live episodes.
+O1's ordinary compatibility CPU upper is 9.620ms/frame versus Replay
+29.410–29.539ms/frame; at least 19.790ms/frame lies outside that envelope.
+Actual append upper is 3.610ms/frame; Tape calls are zero in both episodes.
+Exact controls, raw verification and restoration pass. Attribute the Replay
+complement next; these are instrumented bounds, not removable CPU or FPS gain.
+
+[H591](present-pacing-append-tail.591.md) identifies the approximately6ms
+append residual as Tape verification, not default rendering. Actual append is
+3.09–4.12ms CPU per fixed captured input; ordinary route has zero verifier calls.
+Four exact controls and independent raw checks pass. Together with H588's tiny
+warmed reserve, this rejects the two apparent large compatibility-removal
+budgets. Production live operation attribution remains open.
+
+[H590](present-pacing-append-nesting.590.md) corrects
+[H589](present-pacing-batch-residual.589.md)'s scope: its9.26–10.33ms includes
+post-callback `mutateWritingPayload` settlement and observation, not just the
+append loop. Initial queue acquisition and scratch cleanup remain small.
+
+[H588](present-pacing-reserve-recurrence.588.md) rejects recurring ordinary
+reserve as the major late CPU owner. Two fixed live episodes pass with complete
+restoration; independent raw verification reproduces CPU/storage arithmetic.
+O1's conservative full-scene reserve upper is 0.146ms/frame against near-peer
+Replay/Encode at about30ms/frame. O0's slow start remains explicitly bounded.
+Next attribute H585's compatibility-batch residual to CPU versus wait; no
+headroom policy, FPS saving or unique Encode bottleneck follows.
+
+[H587](present-pacing-reserve-live-failure.587.md) is a rejected diagnostic run,
+not a product slowdown: the inline observer reached abort and lost destructor-
+exported rows. Cleanup/restoration are verified; the second run was not started.
+H588 replaces fatal/full-detail collection with durable counters and bounded
+growth rows; native fault tests pass. H588 subsequently closes the warmed
+ordinary-reserve recurrence question with exact-image and live controls.
+
+[H586](present-pacing-reserve-owner.586.md) identifies storage growth as the
+fixed-input reserve CPU owner. Two largest events relocate large state/layout
+arrays; uniform reservation is not their cause. All four original controls
+pass. Because these are fresh-process replays and normal clear preserves vector
+capacity, the next gate is recurrence in warmed live late Slots, not a new
+headroom policy or claimed 5ms/frame saving. H585's batch residual stays open.
+
+[H585](present-pacing-replay-census.585.md) qualifies the actual fixed STALKER
+Replay route: 1,154 Direct and 2,828 compatibility draws; 51 capacity fallbacks,
+no rotations or unbatched compatibility draws. Reserve exceeds append in both
+parent-only runs; the approximately 9.4ms batch residual remains unattributed.
+GT2's uniform-dominant fraction does not transfer. Next separate actual storage
+growth/rehash from no-growth reserve and batch preparation/wait; no CPU-saving
+or policy-promotion claim follows from observer-inclusive elapsed scopes.
+
+[H584](present-pacing-sparse-cpu.584.md) closes the sparse whole-policy CPU
+comparison with amended selected-queue identity qualification. Encode falls
+against both adjacent OFFs, but worst-adjacent lower reductions 0.179/0.349
+ms/frame fail the 1.446ms/frame variation screen. Default Replay/Encode are
+near peers; both ONs have larger Replay CPU. Whole-window pacing nonregression
+passes, not repeated improvement. No promotion or global-owner completion.
+Review existing fixed-input Replay-to-Slot/Encode attribution next, rather
+than extending broad FPS populations or assuming a permanent Encode bottleneck.
+
+[H583](present-pacing-unobserved-transfer.583.md) completes same-image,
+observer-free whole-policy transfer: both ON runs meet finite 3% nonregression,
+not repeated FPS improvement. H582's local CPU contrast is not an all-ON CPU
+estimate. H584 supplies the subsequent sparse whole-thread comparison; neither
+result supports a permanent Encode-only bottleneck or more broad FPS sampling.
+
+[H582](present-pacing-paired-source.582.md) closes the bounded paired experiment:
+58/56 treatment pairs give 1.333/1.266 ms/source CPU contrasts and pass both
+predeclared sham/endpoint screens. Four live runs and raw verification pass.
+Whole-run pacing does not demonstrate improvement; Replay and Encode remain
+near peers. Next gate is observer-free all-OFF/all-ON transfer, not another
+unstratified test for a local effect. No default promotion or global-owner claim.
+
+[H581](present-pacing-source-shape.581.md) narrows the comparison unit:
+Draw-plus-Clear sources account for 73.1% of observed source CPU, with 120
+eligible sources in 121 frames. Encode/Replay bounds overlap, so a fixed global
+ordering remains unproved. Pairing consecutive eligible sources gives a much
+smaller baseline sharp-null assignment variance; execute that bounded design
+before claiming live removal. The 73.1% cost itself is not removable work.
+
+[H580](present-pacing-foreign-owner-live.580.md) now covers actual foreign
+invocations: no main-dispatch or shared-event body overlaps the selected live
+window. Encode narrowly leads Replay (29.697–29.944 vs 29.074–29.472 ms/frame)
+over 116 frames, with four of five component bounds overlapping. Do not repeat
+foreign-body absence as an open question for this episode. Observer-free
+transfer, lifecycle tails and live removable cost remain unproved.
+
+[H579](present-pacing-foreign-owner-preflight.579.md) prepares missing
+foreign-owner observations: actual main dispatch and shared-event callbacks
+retain request identity; native negative tests and original GPU/query/lifetime
+OFF/ON pass. Zero requests in standalone replay do not bound the live scene.
+Compiler per-job destruction is already inside the worker scope; thread-wrapper
+and archive capture tails remain distinct coverage gaps. No new timing claim.
+
+[H575/H576](present-pacing-clear-crossover-preflight.576.md) add seven exact
+original-input controls and a private immutable source-policy image. OFF/ON
+and even/odd policies pass, but all 65 opportunities occur in source5; parity
+CPU averages would be biased. No new timing claim.
+[H578](present-pacing-clear-default-route.578.md) verifies both Tape and DCE
+are OFF on the real default Device; four ordinary-queue controls pass. The
+failed forced-DCE H577 fixture is not a default-path measurement gate.
+Content-independent timing and foreign callback coverage remain open;
+H574 is not extended.
+
+[H574](present-pacing-current-clear-live.574.md) closes the twelve-run live
+comparison with valid exits/restoration and 108 self/72 scene raw checks,
+not a qualified saving. Both Encode reduction lower bounds remain below
+2.605 ms/frame A/A noise; OFF forward improvement is not repeated in reverse.
+Only 3/6 whole-window observer controls meet ±3% pacing equivalence. Encode
+leads Replay in all four observed canonical whole windows and trails it in
+both candidates, but global/default ownership and removable budget remain
+open. Preserve H573's local result; do not promote or extend this population.
+
+[H573](present-pacing-current-clear-self.573.md) confirms current-image local
+Clear-fusion savings without product supply tracing: 2.291 ms paired-median
+source-5 full Encode iteration reduction, all eight pairs positive versus
+0.249 ms maximum A/A. Seven-source reduction is 2.5885 ms versus 0.321 ms A/A.
+All 28 original-input oracles and 252 raw Encode-pair calculations pass.
+This replaces the rejected H572 supply-trace population, not H571's live
+owner evidence. Current live ms/frame, observer-free transfer and global
+ownership scope remain open; do not import H559's old live savings.
+
+[H571](present-pacing-default-owner.571.md) provides same-episode default-policy
+diagnostic ownership without the dormant Clear candidate or failure logging.
+Across 128 completed frames, Encode is 29.390–29.727 and Replay 28.144–28.522
+ms/frame; renderer roots are bounded by 17.502 and every other observed body
+by 0.6945. Encode separates in the full window and two of five components.
+All 15 bodies have finite bounds, original-capture checks pass, and live exit
+and restoration pass. Observer-free transfer, foreign callbacks/closure scope
+and current-image removable cost are still unqualified; no FPS claim follows.
+
+[H570](present-pacing-shader-count-repair.570.md) identifies the observed
+`font2` failure as a Unix ps_1_1 operand-count bug: TEX consumes the following
+MAD opcode and skips END. The narrow creation-scanner repair passes actual
+cached-bytecode, native regression and original-capture GPU exact checks.
+The new live episode exits 0 and closes all 15 observed worker-body bounds,
+including the eight formerly missing compiler endpoints. This is correctness
+and coverage evidence; it does not qualify a new CPU maximum or FPS.
+
+[H566](present-pacing-owned-worker-preflight.566.md) adds qualified private
+self checkpoints for remaining worker bodies; original-input GPU/readback
+OFF/ON passes. [H567](present-pacing-owned-worker-live.567.md) reaches all
+seven knots but exits 1 after a `font2` shader-create error. Its 15-instance
+trace exposes eight unclosed compile-worker bounds. The run remains rejected,
+shared staging is restored, and no new default-owner/FPS conclusion follows.
+
+[H564](present-pacing-owner-live.564.md) restores current live root attribution:
+the Primary renderer upper is 17.866 ms/frame, below Replay 28.473–28.880 and
+Encode 29.030–29.261 throughout the full window and its components. Encode's
+small full-window lead is not a universal ordering. The attempted aggregate
+residual bound is **rejected** by [H565](present-pacing-process-freshness.565.md):
+getrusage inside its own process also delivers delayed active-thread CPU.
+Remaining owned-worker self endpoints, default transfer and a qualified
+global maximum remain open; no process-derived savings budget is admitted.
+
+[H562](present-pacing-clock-bridge.562.md) closes the current PE32/PE64
+clock-domain prerequisite without enlarging the 100 ns allowance.
+[H563](present-pacing-owner-domains.563.md) privately integrates explicit clock
+mapping and process CPU into the root observer. Both actual-object/epoch
+fixtures and 17 negative cases pass. Current renderer Primary and residual
+worker bounds still require a new live ownership episode; no new removal or
+FPS verdict follows from these infrastructure tests.
+
+[H560](present-pacing-owner-clock-rejection.560.md) supplies no valid current
+Primary renderer bound: the first root checkpoint rejects a mixed
+continuous/absolute clock-domain contract. The failed run remains preserved.
+[H561](present-pacing-process-accounting.561.md) validates finite process-CPU
+accounting on ARM64/Rosetta using self `proc_pidinfo` (16 cases / 160 samples).
+H565 later rejects the aggregate endpoint premise, so use qualified worker
+self/lifecycle evidence rather than deriving a residual upper from H561 totals.
+
+[H559](present-pacing-clear-live.559.md) supplies positive matched live Encode
+economy: 1.579–2.010 ms/frame AB and 1.614–2.072 ms/frame BA, both lower bounds
+above 1.189 ms A/A. The baseline Replay/Encode costs are close; Replay exceeds
+Encode in both candidate runs. Mixed Primary remains larger but includes game
+and Wine. Current renderer-only Primary/other-worker bounds and common-observer
+transfer remain open. Drift/host activity excludes an FPS or promotion claim.
+
+[H557](present-pacing-clear-net-economy.557.md) confirms positive local net
+economy after private failure repair: whole source-5 Encode saves 1.9955 ms
+paired median (8/8 positive; A/A maximum 0.402 ms). All 28 original oracles pass.
+[H556](present-pacing-clear-failure-drain.556.md) retains session ownership
+through an already-submitted prefix's drain.
+[H558](present-pacing-clear-failure-boundary.558.md) closes both deferred-entry
+bypasses in private images, with 32 coordinator cases and two original captures.
+Price live transfer next; neither default maximum nor live removable ms/frame
+is closed. H557's timing does not automatically apply to H558's changed image.
+
+[H554](present-pacing-clear-failure-relay.554.md) fixes H553's finite failure
+population in private images: explicit terminal status replaces inline success,
+including after prior unsubmitted Clear work. All 16 coordinator fixtures and
+two original-capture oracles pass. Already-submitted effects, live wake/reset,
+success-path cost and default-live CPU removal remain unqualified.
+
+[H553](present-pacing-clear-queue-failure.553.md) turns the candidate failure
+concern into a real-coordinator counterexample: failed Clear opening yields
+successful source completion without GPU work. H552's non-failing local CPU
+result stands, but the private candidate cannot be promoted unchanged. An
+explicit failed-versus-inline outcome and prior-carrier settlement are next.
+
+[H552](present-pacing-clear-economy.552.md) establishes a local Clear-fusion
+Encode saving: paired median 1.8055 ms/source 5, all eight pairs positive,
+versus maximum A/A difference 0.482 ms. [H551](present-pacing-clear-backed-null.551.md)
+closes the backed-NullRt projection gap and witnesses 65/65 fusions. All 28
+timing executions preserve original pixels/source/query/lifetime checks.
+This does not price default-live removal or FPS; queue terminal settlement,
+ordinary query qualification and live ownership/transfer remain open.
+
+[H549/H550](present-pacing-clear-caller.549.md) validates a private actual
+Clear-fusion caller, including independent attachment readbacks and original
+STALKER capture. Its useful coverage is only 2/65: 63 depth Clears encounter
+texture-backed NullRt excluded by the initial adapter. Resolve that semantic
+distinction before claiming the measured standalone-Clear cost is removable.
+
+[H548](present-pacing-clear-adapter.548.md) adds real-resource fact projection
+and closes vertex-sampler/physical-extent coverage gaps. Native tests pass;
+the encoder still uses its original policy. Caller failure handling, independent
+attachment pixels and removal economics remain unproven.
+
+[H547](present-pacing-clear-model.547.md) supplies a shared Clear-fusion
+candidate predicate and bounded aspect/load/store refinement, passing native
+arm64 and x86_64 tests. It excludes unsupported first-use and pending-discard
+cases rather than weakening the serial reference. No runtime binding, GPU
+promotion or removal-budget claim follows yet.
+
+[H546](present-pacing-clear-feasibility.546.md) confirms the pending-Clear
+owner directly: 65 calls cost 2.071–2.243 ms/captured source. All 65 satisfy
+the observed necessary fusion-shape conditions in an independent unpriced run.
+This selects a concrete Clear/Draw fusion refinement; it does not certify
+safety, saved CPU or the largest default-live owner.
+
+[H545](present-pacing-pass-outer.545.md) narrows the outer-pass residual to
+the pre-close gap after 63 depth-only and two color-only Clears (about 2.0 ms
+per captured source). Strict full attachment-key equality is a concrete
+fusion limitation to test, not yet safely removable CPU. Encoder close,
+labels and argbuf-open are smaller; the 13.2–13.6 ms whole draw loop and
+canonical live attribution remain open.
+
+[H544](present-pacing-pass-owner.544.md) narrows the pass owner: nested
+store-proof traversal is only 0.476–0.542 ms per observed source 5; encoder
+creation is 2.501–2.571 ms and outer transition work remains 3.167–3.239 ms.
+Same-run identity/endpoint joins and all five original oracles pass. These
+observer-inclusive scopes select further investigation, not removable CPU.
+
+[H543](present-pacing-run-milestones.543.md) separates source 5's whole draw
+loop (14.268–14.943 ms) from pass entry (6.600–6.816 ms), with no nested draw
+clocks. Both remain observer-inclusive captured-source CPU. Pass-start indices
+are the next preparation/driver discriminator, not a proven removable budget;
+canonical live ownership remains open.
+
+[H542](present-pacing-encode-command-owner.542.md) places approximately 94%
+of source 5's command-observed body in 526 DrawRuns, with no single dominant
+command. An independent unpriced transcript confirms 3,125 draws, including
+2,774 in 175 multi-draw runs. This selects run preparation versus draw-loop
+work; it does not price removal or close canonical live attribution.
+
+[H541](present-pacing-encode-source-selection.541.md) separates existing fresh-
+device Encode evidence: median 29.358 ms cold-inclusive prefetch, 1.695 ms
+planning/setup and 27.173 ms command body per captured interval. Source 5 owns
+74.16% of body CPU across the 18 baseline traces. These are not default-frame
+or removable costs. A same-device probe violates the documented V4 precondition
+and fails original readbacks; both planned warm timing traces remain unrun.
+
+[H540](present-pacing-prefix-live-result.540.md) closes H538's live attempt:
+six fixed runs complete, with authenticated delayed-server restoration and
+108 independently recomputed thread intervals. Prefix removal does not pass
+the amended live Replay economy screen. Encode is roughly 29.4–31.7 ms/frame
+and exceeds Replay in all six diagnostic intervals; residual-observer and
+exclusive Primary attribution still prevent a largest-default-owner claim.
+No positive canonical removal budget or default promotion is established.
+
+[H539](present-pacing-stalker-query-consumers.539.md) verifies installed-game
+result-dependent work: five occlusion consumers test unsigned >4, two test
+nonzero, through a shared cooperative FLUSH polling helper. The default
+primitive-count mismatch is already known; H408 did not establish visibility
+ON alone as the FPS fix. Next evidence needs the helper's caller identity,
+not just GetData's shared call site. No default CPU/removal claim follows.
+
+[H538](present-pacing-prefix-live-preflight.538.md) closes the post-reboot
+offline preflight: both matched images pass original pixel/source/query checks;
+199 suffix prepares skip 75,300 old commands and inspect 392 new commands.
+The launch symptom is resolved, not causally diagnosed. H540 later completes
+the live comparison with a negative economy screen; default transfer remains open.
+
+[H537](present-pacing-prefix-economy.537.md) measures a net same-input suffix-
+prepare effect: 3.379 ms paired-median planned Replay CPU reduction, all eight
+pairs positive and all 30 original oracles exact. Native/TLA evidence and this
+offline screen do not establish live removal or the largest default CPU owner.
+Supplemental execution witnessing later passes in H538 after reboot.
+
+[H536](present-pacing-prefix-prepare.536.md) advances prepare-prefix removal to
+a private capability-gated candidate with native and bounded-model evidence.
+Normal builds retain full validation. H537 subsequently qualifies same-input
+replay and the offline CPU screen; canonical live transfer remains open.
+
+[H535](present-pacing-removal-scope.535.md) selects ordinary chunk replay over
+StateBlock call count and identifies repeated prepare-prefix scans. Native
+counterexamples rule out topology-only reuse; current-TU assembler tests support
+a bounded transaction-local prefix hypothesis. Build ownership is thread-pinned,
+not an uninterrupted queue lock, so capability/refinement and CPU removal
+evidence remain required. No runtime optimization or default saving yet.
+
+[H534](present-pacing-boundary-comparison.534.md) passes the predeclared finite
+boundary-control/all-root screen in four fixed-order runs. Primary's diagnostic
+D3D9-root upper CPU is 19.85/20.28 ms/frame, below both approximately 32–33 ms
+workers in both episodes and all components. A2/B2 Primary still differs by
+1.79 ms/frame; a passed screen is not zero observer cost. Common instrumentation,
+host load, canonical/global ownership and actual removable CPU remain unresolved.
+
+[H532–H533](present-pacing-boundary-control.533.md) close the proposed native
+suspension route with a counterexample, not a live promotion: a sleeper's held
+counter exceeds the frozen 2 us allowance. A boundary-only PE self-report
+control passes PE32/PE64 fixtures while leaving Draw/Set/getter entries intact.
+Matched all-root-observer interference, canonical transfer and actual removable
+CPU remain open; the earlier suspension fixture results below do not waive them.
+
+[H530–H531](present-pacing-native-endpoint.531.md) reach actual Wine targets
+with a native-thread endpoint observer while preserving canonical renderer
+images. Guest-only suspension cannot cover production native Replay/Encode.
+Native and attached console fixtures pass; multi-worker safety and matched
+live interference remain gates. No default-owner or removal result follows.
+
+[H526–H529](present-pacing-quiescent-counter.529.md) test a canonical-binary
+endpoint route with no per-call hooks. External Wine suspension passes PE32/
+PE64 fixture consistency checks after Mach access is denied. This is not
+freshness proof or default attribution: matched scene coherence and pause
+disturbance remain unresolved. H525's CPU/removal limitations still apply.
+
+[H525](present-pacing-root-wall-live.525.md) bounds inclusive Primary renderer
+CPU below both dedicated workers in one same-window diagnostic episode:
+≤19.69 versus Replay 31.46–31.84 / Encode 31.77–32.00 ms/observed completed
+frame. The bound includes waits, callbacks and 200 ns per root uncertainty;
+all five components agree. This qualifies the method's utility, not default
+ownership or removable cost. Next run a matched default-interference gate;
+do not convert whole-thread CPU into a savings budget.
+
+[H523–H524](present-pacing-root-wall-abi.524.md) close actual-object ingress and
+activation prerequisites for the root-wall diagnostic. Twenty thousand getters
+add no self-CPU queries; nested callback Present is not double-counted. This is
+not a largest-owner or removal result. Next test whether a wait-inclusive
+whole-root envelope is tight enough in the same late scene as the workers.
+
+[H522](present-pacing-root-wall-preflight.522.md) finds an inexpensive elapsed
+clock candidate and tests disjoint outer-root accounting. Its proposed CPU
+upper envelope includes waits and callbacks; it is not exact CPU pricing.
+Rosetta/PE console clock checks and 20 reducer cases per native architecture
+pass, but runtime coverage, short-interval uncertainty and default-transfer
+remain unqualified. No largest-owner or removable-cost conclusion follows.
+
+[H521](present-pacing-primary-gap-live.521.md) completes the combined diagnostic
+episode after [H520](present-pacing-primary-activation.520.md) qualifies current
+epoch activation. App Primary totals 56.75–57.85 ms/observed completed frame;
+Replay and Encode overlap around 32 ms. Post-Present gaps contribute only
+0.28 ms/frame and cannot isolate renderer ownership. Close this narrow subset
+route; default transfer, interleaved app-thread attribution and actual removable
+work remain unresolved. No production optimization or FPS claim follows.
+
+[H519](present-pacing-primary-gap-epoch.519.md) rejects the first combined live
+episode before Primary arming: observed image epoch 2 violates its fixed epoch
+1 prerequisite. No gap/CPU result. Preserve the failed contract; implement and
+test an epoch-qualified activation receipt rather than merely accepting any
+reload. Mixed Primary and default-qualified removal remain unresolved.
+
+[H518](present-pacing-primary-gap-abi.518.md) closes actual PE32/PE64 observer
+integration: canonical-identical baseline relinks, four object runs and
+16 parser tests pass. Nested application callback Present is not misclassified
+as non-root work. No live STALKER run or default attribution occurs; the next
+gate is same-episode Primary/worker coverage and observer interference.
+
+[H517](present-pacing-primary-gap-preflight.517.md) adds a tested, isolated
+post-Present root-gap prototype; it is not yet a live observer. Existing cadence
+markers precede remaining PE work. The new envelope would still contain hook
+cost and only a subset of non-root work, so it cannot yet exclude Primary as
+the largest dxmt9 owner. Runtime coverage and default transfer remain open.
+
+[H516](present-pacing-source-self-thin.516.md) thins Replay reporting 256-fold
+without extrapolating sampled duration. Whole-worker cursor bounds overlap at
+roughly 32 ms/observed frame in the late window and all five subintervals.
+H515's small ordering is not robust; stop chasing that rank. Mixed Primary,
+default OFF/ON transfer and a semantic-preserving removal mechanism remain.
+
+[H515](present-pacing-source-self-live.515.md) obtains valid live self-counter
+brackets: diagnostic Replay 32.1147--32.1453 versus Encode 31.4408--31.5835 ms
+per observed completed frame. This is not a default ranking: Replay emits
+126,065 pairs, nearly half StateBlock, so reporting is not low frequency.
+Next reduce endpoint frequency while retaining whole-thread cumulative bounds.
+Primary, default transfer and removable amount remain unresolved.
+
+[H514](present-pacing-source-self-report.514.md) passes the original late-input
+OFF/ON observer oracle and bounded endpoint/parser tests. Exact publication
+receipts cover seven captured Encode sources, but raw-zero compatibility
+metadata and the synchronous provider do not establish a live Replay join.
+Temporary product hooks and canonical images are restored. No default CPU
+ranking, removal amount or performance promotion follows.
+
+[H513](present-pacing-self-counter-boundary.513.md) passes bounded current-host
+self-query qualification on ARM64/Rosetta. H512 applies to external snapshots,
+not automatically to the supply trace's calling-thread queries. Use coarse
+identity-qualified self reports for the next accounting boundary; neither
+Primary root attribution nor default-qualified removal is established yet.
+
+[H512](present-pacing-cpu-counter-freshness.512.md) corrects the premise behind
+H509--H511 CPU bounds: external thread counters can report 10 ms of CPU increase
+inside 0.34 ms of wall time. Three counterexamples also exist in H509 B1.
+Reported differences remain descriptive, but narrow true-CPU enclosures,
+the Encode/Replay ordering and Primary exclusion threshold are not qualified.
+The current gate is accounting freshness, not another long ownership run.
+
+[H511](present-pacing-guest-attribution-feasibility.511.md) closes the immediate
+observer feasibility check without another live run: a recovered game-module
+PC and truncated raw stack do not establish non-renderer CPU. Frozen PE code
+contains private-IUnknown callback calls; the existing sampler measures PC
+residency, not running-CPU ancestry. The required >20.775 ms/frame Primary
+exclusion bound and default-qualified removal amount remain unproved.
+
+[H510](present-pacing-current-thread-owner.510.md) closes current-process
+identity for the two large unnamed workers with fresh guest/TEB/native joins:
+xrCPU_Pipe and WinMM start provenance, not dedicated dxmt9 workers. This narrows
+the ownership gap without proving all their CPU is outside renderer callbacks.
+Primary's renderer share still needs separation; the leading dedicated
+workers differ by only 0.206--0.223 ms/frame in this one interval.
+
+[H509](present-pacing-validation-live.509.md) does not establish H508's live
+economy. Four fixed A/B/B/A episodes pass spatial/worker enclosure checks,
+but 0.505 ms/frame mean Replay saving is smaller than 1.090 ms baseline
+variation. Tail FPS reverses direction between pairs; Primary/unnamed-worker
+ownership remains unresolved. Product sources and shared images stay restored.
+The catalogue's administrative `missing_capture` failures remain disclosed.
+
+[H508](present-pacing-validation-authority.508.md) establishes a local removal
+candidate rather than another rejected cache: transaction-local admission
+authority eliminates 197 reserve scans, with 60 original oracles passing.
+Validator-timer-OFF planned replay saves 2.839 ms versus a 1.165 ms A/A gate,
+7/8 positive pairs. Runtime is restored pending live default transfer; this
+does not resolve mixed Primary/native ownership or rank the global bottleneck.
+
+[H507](present-pacing-validation-callers.507.md) separates product checks from
+V4 qualification: all 646 observed full-Slot scans come from Direct admission,
+assembler reserve and prepare. 197 adjacent admission/reserve pairs repeat
+75,300 command visits. Reusing only that uninterrupted admission authority is
+a narrower next candidate than cross-transaction prefix caching. No runtime
+change or time saving is accepted; live-default owner ranking remains open.
+
+[H506](present-pacing-production-query-diagnostic.506.md) closes H505's private
+same-backend replay gate. All seven source cuts, nine Issues, five polls, four
+query results and both original images match in four fresh processes. Hardware
+occlusion qualification remains false. Two bounded CPU traces show 29–30 ms
+Encode body and 9.5–9.8 ms full-Slot validation, but replay includes V4 hooks
+and prefetch includes cold-cache work. Separate those costs before a product
+removal comparison; this does not establish the largest live default-tail owner.
+
+[H505](present-pacing-closed-query-history.505.md) closes the ordinal-loss capture
+failure without relaxing identity checks. The late-camera input authenticates
+7 sources / 3,982 draws, but same-backend replay rejects `query-oracle-unsupported`:
+capture uses the production occlusion counter while the provider requires
+hardware visibility. Enabling Metal occlusion instead breaks exact source
+publication at the first occlusion-bearing raw. Separate a source-bound default
+query diagnostic from GPU-query qualification before collecting CPU timings.
+Original-image replay and default-tail ownership/removal remain open.
+
+[H504](present-pacing-closed-query-ordinal.504.md) isolates a concrete capture
+schema gap: the closed V2 query descriptor loses the pre-cut absolute Issue
+ordinal. The same BEGIN has cycle 509 on both sides but canonical ordinal 1
+against real Unix ordinal 1017. A native counterexample reproduces the failure;
+neither provenance equality nor scene selection was relaxed. H505 preserves
+explicit closed-query history and maps it to a fresh local owner. Its published
+input supersedes this capture blocker, not the default-tail CPU ownership gap.
+
+[H502](present-pacing-scene-request-preflight.502.md) exercises the late
+camera-envelope request twice. Request/arm succeeds; final V4 identity
+attachment rejects `InvalidCoordinator`. Runtime restoration passes, but no
+bundle is published. Isolate coordinator/attempt provenance before another live
+retry; source/image joins and original replay remain required for the CPU goal.
+
+[H501](present-pacing-arm-request.501.md) implements the external one-shot
+capture request and passes native refinement plus x86/x64 controlled Wine
+transport. No game/FPS/GPU run occurred. Next join a real scene envelope to
+accepted request, armed token/epoch/queue, published sources and original images;
+the selector alone does not close the default-tail ownership or transfer gap.
 
 [H500](present-pacing-tail-input-scope.500.md) closes a scope question, not the
 CPU goal: H481's complete input predates its 102–110-second target window,

@@ -194,14 +194,15 @@ RenderTapeIdentityV4Status validateRenderTapeIdentityV4Rows(
     const RenderTapeIdentityV4View& identity,
     std::span<const RenderTapeIdentityV3EventFact> events,
     std::span<const RenderTapeIdentityV3RecordFact> records,
-    bool requireComplete = true) noexcept;
+    bool requireComplete = true, TapeCoordinatorFailure* failure = nullptr) noexcept;
 RenderTapeIdentityV4Status validateRenderTapeIdentityV4(
     std::span<const std::byte> tape, const RenderTapeBlobCatalogue& catalogue,
     std::span<const std::byte> sidecar, RenderTapeIdentityV4View* out = nullptr,
-    bool requireComplete = true) noexcept;
+    bool requireComplete = true, TapeCoordinatorFailure* failure = nullptr) noexcept;
 std::vector<std::byte> buildRenderTapeIdentityV4(
     std::span<const std::byte> tape, const RenderTapeBlobCatalogue& catalogue,
     const RenderTapeIdentityV4View& identity,
-    RenderTapeIdentityV4Status* status = nullptr);
+    RenderTapeIdentityV4Status* status = nullptr,
+    TapeCoordinatorFailure* failure = nullptr);
 
 } // namespace dxmt9::d3d9

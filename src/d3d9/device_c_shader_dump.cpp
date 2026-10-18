@@ -239,6 +239,10 @@ bool computeShaderBytecodeWordCount(const uint32_t* bytecode, size_t* outWords) 
   if (!bytecode || !outWords) {
     return false;
   }
+  const uint32_t version = bytecode[0];
+  const bool legacyPixel = (version >> 16) == 0xffffu &&
+                           ((version >> 8) & 0xffu) == 1u;
+  const uint32_t minor = version & 0xffu;
   size_t words = 1;
   while (words < kMaxShaderDwords) {
     const uint32_t token = bytecode[words++];
@@ -260,6 +264,14 @@ bool computeShaderBytecodeWordCount(const uint32_t* bytecode, size_t* outWords) 
     }
     bool known = false;
     size_t operandCount = shaderFixedOperandCount(opcode, &known);
+    // SM1 texture instructions do not encode their length. TEX/TEXCOORD
+    // gained a source in ps_1_4; TEXKILL still has only a destination.
+    if (legacyPixel) {
+      if (opcode == kD3DSIO_TEX || opcode == kD3DSIO_TEXCOORD)
+        operandCount = minor >= 4u ? 2u : 1u;
+      else if (opcode == kD3DSIO_TEXKILL)
+        operandCount = 1u;
+    }
     if (!known) {
       operandCount = static_cast<size_t>((token >> 24) & 0x0fu);
     }

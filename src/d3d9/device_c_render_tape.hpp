@@ -283,6 +283,7 @@ struct RenderTapeQueryGetDataControl {
 
 inline constexpr std::uint32_t kRenderTapeQueryTranscriptVersion2 = 2u;
 inline constexpr std::uint32_t kRenderTapeQueryDescriptorVersion3 = 3u;
+inline constexpr std::uint32_t kRenderTapeQueryDescriptorVersion4 = 4u;
 inline constexpr std::uint32_t kRenderTapeQueryMaxResultBytes = 8u;
 
 enum class RenderTapeQueryInitialState : std::uint32_t {
@@ -299,6 +300,17 @@ struct RenderTapeQueryDescriptorV2 {
   std::uint32_t dataBytes = 0u;
   std::uint32_t initialState = 0u;
   std::uint64_t initialIssueCycle = 0u;
+};
+
+// Closed history only: neither a result checkpoint nor an END fence. The
+// absolute Issue ordinal cannot be derived from the BEGIN/END cycle count.
+struct RenderTapeQueryDescriptorV4 {
+  std::uint32_t schemaVersion = kRenderTapeQueryDescriptorVersion4;
+  std::uint32_t type = 0u;
+  std::uint32_t dataBytes = 0u;
+  std::uint32_t initialState = 0u;
+  std::uint64_t initialIssueCycle = 0u;
+  std::uint64_t initialIssueOrdinal = 0u;
 };
 
 // Explicit V3 EVENT-only checkpoint. The POD provenance is validated against
@@ -321,6 +333,7 @@ struct RenderTapeQueryDescriptorDecoded {
   std::uint32_t dataBytes = 0u;
   std::uint32_t initialState = 0u;
   std::uint64_t initialIssueCycle = 0u;
+  std::uint64_t initialIssueOrdinal = 0u;
   D9CRenderTapeEventQueryCheckpointResult checkpoint{};
 };
 
@@ -448,6 +461,7 @@ static_assert(alignof(RenderTapeCommandChunkHeader) == 4u);
 static_assert(sizeof(RenderTapeOrderedControlHeader) == 48u);
 static_assert(alignof(RenderTapeOrderedControlHeader) == 8u);
 static_assert(sizeof(RenderTapeQueryDescriptorV2) == 24u);
+static_assert(sizeof(RenderTapeQueryDescriptorV4) == 32u);
 static_assert(sizeof(RenderTapeQueryGetDataControlV2) == 40u);
 static_assert(sizeof(RenderTapePresentCompleteHeader) == 64u);
 static_assert(alignof(RenderTapePresentCompleteHeader) == 8u);

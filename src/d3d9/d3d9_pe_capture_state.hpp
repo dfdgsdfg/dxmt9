@@ -6,6 +6,7 @@
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_snapshot_budget.hpp"
 #include "d3d9_pe_render_tape_commit_receipt.hpp"
+#include "d3d9_pe_render_tape_arm_request.hpp"
 #include "dxmt9/device_c.h"
 
 #include <cstddef>
@@ -198,6 +199,7 @@ struct PeCaptureState {
   // Preparatory materialization must finish before this ordinal is installed.
   std::uint64_t renderTapeExternalEventOrdinal = 0u;
   std::uint32_t renderTapeArmPresentSkipRemaining = 0u;
+  dxmt9::d3d9::RenderTapeArmRequestSelector renderTapeArmRequest{};
   std::vector<RenderTapeArmObjectSnapshot> renderTapeArmSnapshots{};
   std::vector<D9CWireObjectIdentity> renderTapeAdmittedIdentities{};
   dxmt9::d3d9::RenderTapeFirstAccessLedger renderTapeFirstAccessLedger{};

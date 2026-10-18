@@ -1,5 +1,15 @@
 # Wine/PE bridge chunk-record, ops-dispatch, and setBytes wiring specs.
 
+shader_bytecode_word_count_spec = executable(
+  'dxmt9-shader-bytecode-word-count-spec',
+  'shader_bytecode_word_count_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-shader-bytecode-word-count-spec', shader_bytecode_word_count_spec,
+     env: dxmt9_native_test_env)
+
 render_tape_event_checkpoint_authority_spec = executable(
   'dxmt9-render-tape-event-checkpoint-authority-spec',
   'render_tape_event_checkpoint_authority_spec.cpp',
@@ -418,6 +428,7 @@ foreach spec : [
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
+  ['render-tape-arm-request', 'render_tape_arm_request_spec.cpp'],
   ['render-tape-identity-v3', 'render_tape_identity_v3_spec.cpp'],
   ['render-tape-identity-v4', 'render_tape_identity_v4_spec.cpp'],
   ['render-tape-identity-v4-query', 'render_tape_identity_v4_query_spec.cpp'],

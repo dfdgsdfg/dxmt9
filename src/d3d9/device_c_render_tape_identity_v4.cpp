@@ -196,7 +196,7 @@ bool rawSettlementCoordinatorAdmitted(const void* rows, std::size_t,
 
 Status validateReplayAttempts(const RenderTapeIdentityV4View& identity,
     std::span<const RenderTapeIdentityV3EventFact> events,
-    std::vector<std::uint64_t>& edges, bool requireComplete) {
+    std::vector<std::uint64_t>& edges, bool requireComplete, TapeCoordinatorFailure* failure) {
   if (identity.attempts.size() > kRenderTapeIdentityV4MaxRows) return Status::CapacityExceeded;
   edges.reserve(identity.attempts.size() * 3u);
   std::uint64_t priorGeneration = 0u, priorTerminal = identity.header.baselineCompletionEdge;
@@ -271,7 +271,9 @@ Status validateReplayAttempts(const RenderTapeIdentityV4View& identity,
         })) return Status::InvalidTransaction;
   for (std::size_t index = 0u; index < identity.coordinators.size(); ++index)
     if (!coordinatorAttemptAdmitted(identity, identity.coordinators[index].provenance,
-        coordinatorAdmissionAt(identity.coordinators.data(), index))) return Status::InvalidCoordinator;
+        coordinatorAdmissionAt(identity.coordinators.data(), index)))
+      return provenanceStatus(rejectTapeCoordinator(failure, TapeCoordinatorFailureReason::AttemptJoin,
+          static_cast<std::uint32_t>(index)));
   return Status::Valid;
 }
 
@@ -309,7 +311,9 @@ void storeTable(std::vector<std::byte>& bytes, RenderTapeIdentityV3Table descrip
 
 Status validateRenderTapeIdentityV4Rows(const RenderTapeIdentityV4View& identity,
     std::span<const RenderTapeIdentityV3EventFact> events,
-    std::span<const RenderTapeIdentityV3RecordFact> records, bool requireComplete) noexcept {
+    std::span<const RenderTapeIdentityV3RecordFact> records, bool requireComplete,
+    TapeCoordinatorFailure* failure) noexcept {
+  if (failure) *failure = {};
   if (!headerAdmitted(identity.header)) return Status::InvalidHeader;
   for (const auto count : {identity.sources.size(), identity.initializers.size(),
           identity.commands.size(), identity.dispositions.size(), identity.coordinators.size(),
@@ -317,7 +321,7 @@ Status validateRenderTapeIdentityV4Rows(const RenderTapeIdentityV4View& identity
     if (count > kRenderTapeIdentityV4MaxRows) return Status::CapacityExceeded;
   try {
     std::vector<std::uint64_t> edges;
-    const auto status = validateReplayAttempts(identity, events, edges, requireComplete);
+    const auto status = validateReplayAttempts(identity, events, edges, requireComplete, failure);
     if (status != Status::Valid) return status;
     const TapeProvenanceRows rows{
         {identity.sources.data(), identity.sources.size(), sourceAt, sourceVersionFieldsAdmitted},
@@ -330,13 +334,14 @@ Status validateRenderTapeIdentityV4Rows(const RenderTapeIdentityV4View& identity
          rawSettlementVersionFieldsAdmitted, rawSettlementCoordinatorAdmitted}, edges};
     return provenanceStatus(validateTapeProvenanceRows(
         provenanceContext(identity.header), rows, events, records,
-        kRenderTapeIdentityV4MaxRows, requireComplete));
+        kRenderTapeIdentityV4MaxRows, requireComplete, failure));
   } catch (...) { return Status::AllocationFailed; }
 }
 
 Status validateRenderTapeIdentityV4(std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue& catalogue, std::span<const std::byte> sidecar,
-    RenderTapeIdentityV4View* out, bool requireComplete) noexcept {
+    RenderTapeIdentityV4View* out, bool requireComplete, TapeCoordinatorFailure* failure) noexcept {
+  if (failure) *failure = {};
   if (out) *out = {};
   RenderTapeIdentityV4View identity;
   if (!load(sidecar, 0u, identity.header) || !headerAdmitted(identity.header)) return Status::InvalidHeader;
@@ -359,15 +364,17 @@ Status validateRenderTapeIdentityV4(std::span<const std::byte> tape,
     std::vector<RenderTapeIdentityV3EventFact> events;
     std::vector<RenderTapeIdentityV3RecordFact> records;
     auto status = provenanceStatus(buildTapeCanonicalFacts(
-        tape, catalogue, h.presentOrdinal, kRenderTapeIdentityV4MaxRows, events, records));
-    if (status == Status::Valid) status = validateRenderTapeIdentityV4Rows(identity, events, records, requireComplete);
+        tape, catalogue, h.presentOrdinal, kRenderTapeIdentityV4MaxRows, events, records, failure));
+    if (status == Status::Valid) status = validateRenderTapeIdentityV4Rows(identity, events, records, requireComplete, failure);
     if (status == Status::Valid && out) *out = std::move(identity);
     return status;
   } catch (...) { return Status::AllocationFailed; }
 }
 
 std::vector<std::byte> buildRenderTapeIdentityV4(std::span<const std::byte> tape,
-    const RenderTapeBlobCatalogue& catalogue, const RenderTapeIdentityV4View& identity, Status* outStatus) {
+    const RenderTapeBlobCatalogue& catalogue, const RenderTapeIdentityV4View& identity, Status* outStatus,
+    TapeCoordinatorFailure* failure) {
+  if (failure) *failure = {};
   auto finish = [&](Status status) { if (outStatus) *outStatus = status; };
   try {
     auto header = identity.header;
@@ -386,7 +393,7 @@ std::vector<std::byte> buildRenderTapeIdentityV4(std::span<const std::byte> tape
     storeTable(bytes, header.commands, identity.commands); storeTable(bytes, header.dispositions, identity.dispositions);
     storeTable(bytes, header.coordinators, identity.coordinators); storeTable(bytes, header.settlements, identity.settlements);
     storeTable(bytes, header.attempts, identity.attempts);
-    const auto status = validateRenderTapeIdentityV4(tape, catalogue, bytes);
+    const auto status = validateRenderTapeIdentityV4(tape, catalogue, bytes, nullptr, true, failure);
     finish(status);
     return status == Status::Valid ? std::move(bytes) : std::vector<std::byte>{};
   } catch (...) { finish(Status::AllocationFailed); return {}; }

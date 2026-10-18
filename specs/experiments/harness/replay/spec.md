@@ -43,6 +43,10 @@ citations.
 
 ## 0. Unified Replay Profiles
 
+The optional external Present-boundary selector is specified in
+[capture-arm-request.md](capture-arm-request.md). It adds a one-shot request
+receipt, not a new replay profile or a scene/timing qualification.
+
 The replay domain has one evidence vocabulary and three scopes:
 
 | Profile | Status | Captured scope | Reference execution |
@@ -1500,6 +1504,22 @@ owner reducer. No Exact toggle or seed-derived touch restoration runs on this
 path. Result evidence reports requested/admitted/restored and unchanged Normal
 separately; none is a content or performance qualification.
 
+The private Normal exact-source provider may additionally consume
+`RenderTapeProductionQueryDiagnosticV1` (R-HARN-REPLAY-9.25). Its source-plan
+digest binds the same immutable input; its external receipt digest names caller-
+verified capture configuration evidence, not provider-authenticated JSON or
+GPU-result authority. Version 1 admits only primitive-count occlusion with
+asynchronous fences. Immutable preparation owns a value copy, and admission
+requires both Normal history and exact-source mode. The execution gate checks
+the actual local Metal backend before setup. Query Issue/GetData, source
+publication, result comparison and completion are unchanged. The result carries
+the receipt digest and a distinct production-counter diagnostic flag, and
+`gpuResultOracle` remains false even if all bytes match. Public providers have
+no implicit opt-in; no environment variable selects this contract. Pure
+admission/runtime truth tables bind the gates. This adds no scheduling or
+lifetime transition; existing query/TLA regressions remain required, followed
+by original-input query/pixel validation.
+
 `RenderTapeNormalSetup.tla` composes retained alias preparation, seed effects,
 checkpoint, history restoration, arm, activation and cleanup. `Prepare` and
 `Activate` bind the provider's hidden-to-active transfer and
@@ -1944,6 +1964,24 @@ than treating a zero clock as proof. Bounded predicate and actual-owner negative
 tests precede original-input GPU/query qualification.
 
 #### Immutable V4 preparation boundary
+
+Query descriptor V4 is a 32-byte history-only POD: version/type/result size/
+initial state, then independent 64-bit initial cycle and absolute Issue ordinal.
+It admits only Unissued (both zero) or ClosedWithoutReplayResult (both nonzero,
+ordinal at least cycle). It grants no completion or pre-cut result authority.
+The capture-only PE registry updates both counters before materializing its
+descriptor. Open occlusion arm rejection remains mandatory. V2 decoding retains
+its historical zero ordinal and V3 remains an EVENT-only completed checkpoint.
+
+V4 execution preparation advances immutable captured facts from the explicit
+history, but advances fresh-local facts from zero. Local object binding verifies
+the new query's actual zero ordinal, identity and generation. Unlike a V3 EVENT
+checkpoint, closed history issues no setup END and registers no baseline fence.
+Existing captured-cycle validation rejects old polls and missing occlusion
+BEGIN; strict runtime/local-fact equality remains unchanged. Decoder/cycle
+counterexamples, authenticated provenance comparison, and actual local-query
+execution tests bind this pure history projection; it introduces no new queue
+or completion transition. Original-input GPU qualification remains separate.
 
 Cross-iteration reuse must use an explicitly prepared immutable owner, not a
 lazy mutation of a const input or a process-global cache keyed by a digest or

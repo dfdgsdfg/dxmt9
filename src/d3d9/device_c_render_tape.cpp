@@ -763,6 +763,24 @@ bool renderTapeLoadQueryDescriptor(
     std::span<const std::byte> bytes,
     RenderTapeQueryDescriptorDecoded& out) noexcept {
   out = {};
+  if (bytes.size() == sizeof(RenderTapeQueryDescriptorV4)) {
+    RenderTapeQueryDescriptorV4 value{};
+    if (!load(bytes, 0u, value) ||
+        value.schemaVersion != kRenderTapeQueryDescriptorVersion4 ||
+        !renderTapeQueryDataBytes(value.type) ||
+        value.dataBytes != renderTapeQueryDataBytes(value.type) ||
+        value.initialState > static_cast<std::uint32_t>(
+            RenderTapeQueryInitialState::ClosedWithoutReplayResult) ||
+        (value.initialState == static_cast<std::uint32_t>(RenderTapeQueryInitialState::Unissued)) !=
+            (value.initialIssueCycle == 0u) ||
+        (value.initialIssueCycle == 0u) != (value.initialIssueOrdinal == 0u) ||
+        value.initialIssueOrdinal < value.initialIssueCycle) return false;
+    out = {.schemaVersion = value.schemaVersion, .type = value.type,
+        .dataBytes = value.dataBytes, .initialState = value.initialState,
+        .initialIssueCycle = value.initialIssueCycle,
+        .initialIssueOrdinal = value.initialIssueOrdinal};
+    return true;
+  }
   if (bytes.size() == sizeof(RenderTapeQueryDescriptorV2)) {
     RenderTapeQueryDescriptorV2 value{};
     if (!renderTapeLoadQueryDescriptorV2(bytes, value)) return false;
@@ -794,6 +812,7 @@ bool renderTapeQueryDescriptorIdentityMatches(
     const RenderTapeQueryDescriptorDecoded& descriptor,
     const D9CWireObjectIdentity& identity) noexcept {
   return descriptor.schemaVersion == kRenderTapeQueryTranscriptVersion2 ||
+         descriptor.schemaVersion == kRenderTapeQueryDescriptorVersion4 ||
          (descriptor.schemaVersion == kRenderTapeQueryDescriptorVersion3 &&
           sameIdentity(descriptor.checkpoint.identity, identity));
 }
@@ -805,7 +824,8 @@ RenderTapeQueryCycleState renderTapeInitialQueryCycle(
       descriptor.initialState == static_cast<std::uint32_t>(
           RenderTapeQueryInitialState::CompletedEventCheckpoint);
   return {.type = descriptor.type, .issueCycle = descriptor.initialIssueCycle,
-          .issueOrdinal = checkpoint ? descriptor.checkpoint.issueOrdinal : 0u,
+          .issueOrdinal = checkpoint ? descriptor.checkpoint.issueOrdinal
+              : descriptor.initialIssueOrdinal,
           .completedEventCheckpoint = checkpoint};
 }
 
@@ -1058,8 +1078,10 @@ validateRenderTape(std::span<const std::byte> blob,
         (void)load(descriptor, 0u, queryDescriptorVersion);
       if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY &&
           (descriptor.size() == sizeof(RenderTapeQueryDescriptorV2) ||
+           descriptor.size() == sizeof(RenderTapeQueryDescriptorV4) ||
            descriptor.size() == sizeof(RenderTapeQueryDescriptorV3) ||
-           queryDescriptorVersion == kRenderTapeQueryDescriptorVersion3)) {
+           queryDescriptorVersion == kRenderTapeQueryDescriptorVersion3 ||
+           queryDescriptorVersion == kRenderTapeQueryDescriptorVersion4)) {
         RenderTapeQueryDescriptorDecoded query{};
         if (!renderTapeLoadQueryDescriptor(descriptor, query) ||
             !renderTapeQueryDescriptorIdentityMatches(query, fixed.identity)) {

@@ -24,6 +24,163 @@ are starting points, not evidence that the expanded contracts are complete.
 
 ## Backend Layer
 
+`R-BACK-15.19` aspect-qualified pending Clear fusion: **candidate model and
+native fact adapter; not a runtime optimization**. H546 directly measures 65
+standalone Clear calls and records necessary geometry/hazard coverage.
+`dxmt9_pending_clear_fusion.hpp::classify` adds source/command identity,
+subresource, geometry, single-sample, alias, conversion/discard and serial-load
+guards. The native bounded refinement covers abstract independent aspect
+contents, including unrequested DontCare loads. H548 adds `projectFacts`
+with real Pool/Metal-resource tests, all 20 fragment/vertex texture slots,
+physical extent validation and the shared serial color-load predicate.
+Actual encoder caller binding, failed-open settlement, color/depth/stencil GPU readbacks, original
+capture comparison, observer-thin CPU savings and live default-owner transfer
+remain open. No renderer call site or runtime selector is added yet.
+
+H549 adds a **private** actual-caller extension: seven aspect-mask GPU
+load/store fixtures, four null-open ownership failures and original STALKER
+serial/candidate source/query/image checks pass. This does not change the
+shared runtime. H550 proves only 2/65 candidates admit; all 63 depth-only
+cases reject the projection's blanket NullRt exclusion despite a real
+same-extent backing texture. Backed alias versus storage-free NullRt semantics,
+ordinary-policy stores, live terminal settlement and economics remain open.
+See [H549/H550](../../docs/perfomance/present-pacing/present-pacing-clear-caller.549.md).
+
+H551 closes that projection gap: texture-backed NullRt aliases participate,
+storage-free surfaces reject, and all 65 captured candidates fuse. Twenty-one
+attachment fixtures per arm and twelve candidate failed-open cases pass.
+H552's finite 28-execution comparison preserves original oracles and saves
+1.8055 ms paired-median source Encode CPU (8/8 positive; A/A maximum 0.482 ms).
+This supersedes the local coverage/economy gaps above, not live terminal/query
+settlement, broader store suffixes or default-live ownership/FPS transfer.
+The shared runtime remains unchanged. See
+[H551](../../docs/perfomance/present-pacing/present-pacing-clear-backed-null.551.md)
+and [H552](../../docs/perfomance/present-pacing/present-pacing-clear-economy.552.md).
+
+Promotion blocker: the session coordinator's `encodeWithBorrows` collapses
+exceptions to a missing submission, and its ordinary loop can then call
+`completeInlineSnapshot`. The direct H551 fixture bypasses this coordinator.
+Before integrating the candidate, bind failed-open status through the actual
+queue and test that it cannot become successful inline completion or retry
+after effects. The 242-configuration TLA regression passes but does not close
+this implementation boundary.
+
+[H553](../../docs/perfomance/present-pacing/present-pacing-clear-queue-failure.553.md)
+now reproduces the boundary failure in the actual coordinator: four private
+candidate cases (one/two sources, ordinary/exact stores) complete and reclaim
+without GPU submission while requested depth remains unchanged. Four OFF
+controls submit normally. This is a passing counterexample, not safety closure.
+Explicit failure disposition, prior-carrier settlement and live wake/reset
+coverage remain required before candidate promotion.
+
+[H554](../../docs/perfomance/present-pacing/present-pacing-clear-failure-relay.554.md)
+privately repairs explicit failed-open propagation across the three borrowed
+callbacks. Eight terminal cases and eight OFF controls pass, including prior
+encoded/unsubmitted Clear work; two original-capture oracles preserve all 65
+fusions and exact pixels. This closes only those finite failure populations.
+Already-submitted sub-CB retention/drain, active-encoder failure, hardware
+queries, live wake/reset and repair success-path cost remain unqualified.
+Canonical runtime and default-live ownership/removal status are unchanged.
+
+[H555](../../docs/perfomance/present-pacing/present-pacing-clear-submitted-failure.555.md)
+shows H554 releasing session completion ownership while an earlier committed
+sub-CB is held incomplete. This is a synthetic lifetime witness, not an
+established game-resource UAF. The private
+[H556](../../docs/perfomance/present-pacing/present-pacing-clear-failure-drain.556.md)
+repair drains that prefix with an empty same-queue fence before session unwind,
+without submitting the failed tail or reporting success. Model mutations,
+16 coordinator cases and original-capture oracles qualify this finite boundary.
+Graceful fence-allocation/GPU-loss recovery, resource-specific query cancellation,
+live wake/reset and default-live CPU transfer are not established.
+The deferred-terminal-suffix prefix/natural-drain calls bypass H556's local
+`encodeWithBorrows` drain; common failure-boundary coverage is still required.
+[H557](../../docs/perfomance/present-pacing/present-pacing-clear-net-economy.557.md)
+reprices the full private candidate against H551 serial: 1.9955 ms paired
+median source-5 Encode saving, 8/8 positive against 0.402 ms A/A, all 28
+original oracles passing. This closes the local net-cost question for those
+images, not deferred-suffix failure coverage or default-live transfer.
+
+[H558](../../docs/perfomance/present-pacing/present-pacing-clear-failure-boundary.558.md)
+closes those two deferred-entry bypasses in private images using a shared
+failure-only drain. Fresh/submitted matrices (16 cases), actual deferred
+prefix/suffix matrices (16 cases), and original OFF/ON captures pass. The
+prefix fixture injects typed failure; the suffix uses actual fused null-open.
+A frozen-source call-site audit binds both wrappers, not a new route-level
+TLA+ refinement. H557 timing is not transferred to this changed image.
+Live ownership/economy, reset/wake and hardware-query cancellation remain open.
+
+[H559](../../docs/perfomance/present-pacing/present-pacing-clear-live.559.md)
+closes a matched-observer live net-CPU screen for the private full candidate:
+Encode savings are 1.579–2.010 ms/frame AB and 1.614–2.072 ms/frame BA against
+1.189 ms A/A. All six fixed runs complete and restore shared files; 108 raw
+thread intervals are independently checked. Replay/Primary improvement and
+all five component Encode screens do not pass. Host activity/run-order drift,
+current renderer-only Primary/other-worker coverage and common-observer
+transfer prevent global default-owner, clean FPS or promotion claims.
+
+[H564](../../docs/perfomance/present-pacing/present-pacing-owner-live.564.md)
+adds a qualified current self/root episode: renderer Primary upper 17.866
+ms/frame is below Replay 28.473–28.880 and Encode 29.030–29.261. Explicit PE
+clock domains close the prior root-checkpoint rejection. Remaining-worker
+coverage is still open: [H565](../../docs/perfomance/present-pacing/present-pacing-process-freshness.565.md)
+falsifies the own-process getrusage endpoint premise, invalidating the
+aggregate residual upper bound rather than certifying a global maximum.
+Use qualified self-thread lifecycle/work boundaries for remaining owned
+workers; no product optimization or default promotion follows from this check.
+
+[H566](../../docs/perfomance/present-pacing/present-pacing-owned-worker-preflight.566.md)
+qualifies cooperative private worker-body observations and original-input
+GPU/readback OFF/ON. [H567](../../docs/perfomance/present-pacing/present-pacing-owned-worker-live.567.md)
+reaches all seven scene knots but fails the predeclared game-exit gate with a
+post-episode `font2` shader-create error. Its eight compile workers lack
+post-window/exit endpoints. Shared staging is restored; failure attribution,
+worker lifecycle coverage and common-observer/default transfer remain open.
+[H570](../../docs/perfomance/present-pacing/present-pacing-shader-count-repair.570.md)
+subsequently isolates the observed provider rejection to legacy pixel-shader
+operand counting. The scoped scanner repair passes failing-before native and
+original-capture GPU exact OFF/ON checks. Its new live episode exits 0 and
+closes all 15 observed worker-body bounds, including the eight compiler
+endpoints. Whole-thread/driver coverage and default-owner/timing transfer
+remain open; this correctness episode does not establish a CPU maximum.
+
+[H571](../../docs/perfomance/present-pacing/present-pacing-default-owner.571.md)
+then composes a new default-policy diagnostic episode with all 15 observed
+worker bodies bounded. Encode 29.390–29.727 ms/frame exceeds Replay
+28.144–28.522 in the full window; renderer root upper is 17.502 and other
+body maximum upper is 0.6945. Original-capture checks, live exit/restoration
+and independent raw arithmetic pass. This closes same-episode observed-body
+composition, not foreign dispatch/closure coverage, observer-free transfer
+or current-image removable CPU. No product default promotion follows.
+
+[H573](../../docs/perfomance/present-pacing/present-pacing-current-clear-self.573.md)
+subsequently qualifies current-image local removal for the three-member H558
+Clear candidate: 2.291 ms paired-median source-5 full Encode iteration saving,
+8/8 positive pairs against 0.249 ms maximum A/A. Original-input oracles and
+independent raw checks pass for all 28 executions, with product supply trace
+OFF and only source-boundary self clocks. This closes local repricing, not
+current live per-frame savings, observer-free transfer, global owner coverage
+or remaining reset/wake/hardware-query safety. No default promotion follows.
+
+[H574](../../docs/perfomance/present-pacing/present-pacing-current-clear-live.574.md)
+completes twelve matched-image live episodes, clean restoration and independent
+108 self/72 scene interval checks. Encode reductions 1.088–1.433 and
+2.116–2.690 ms/frame fail the 2.605 ms/frame A/A screen; OFF pacing improvement
+does not repeat, and only 3/6 full-window observer controls fit the declared
+±3% margin. This closes execution/measurement validation, not live saving or
+observer-free transfer. H573 remains local evidence; foreign dispatch/closure
+coverage and the global default-owner/removable-budget goal remain open.
+
+[H575/H576](../../docs/perfomance/present-pacing/present-pacing-clear-crossover-preflight.576.md)
+add one-image serial/candidate and immutable source-policy controls: seven
+original GPU/query/lifetime runs and 2,560 policy-law rows pass. All 65 fusion
+opportunities are in one source and no carried frontier occurs in the fixture;
+actual prefix/suffix switching remains untested. Parity must not be used to
+infer CPU savings. [H578](../../docs/perfomance/present-pacing/present-pacing-clear-default-route.578.md)
+corrects the route: Tape and DCE are both default-OFF. Four actual-Device
+ordinary-queue controls pass two-source policy/completion/readback checks;
+the forced-DCE H577 abort is preserved outside the default-path gate.
+No live/default saving or global ownership closure follows from this preflight.
+
 R-VERIF-1.5–1.8 / R-BACK-15 attachment actions: **publication-cut repair**.
 H446's L64 missing geometry exposed the default depth/stencil no-touch/no-Present
 fallthrough: chunk/session exhaustion was incorrectly treated as attachment

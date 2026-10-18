@@ -8,6 +8,93 @@ tags: [specs, gap, verification]
 
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup.
 
+## Aspect-qualified pending Clear fusion (`R-BACK-15.19`)
+
+The shared candidate predicate and `pending_clear_fusion_spec.cpp` provide
+bounded value refinement for independent color/depth/stencil memory, draw
+coverage/writes and store masks. They do not change a production transition.
+The abstract model excludes Metal value conversion, API failure settlement
+and GPU behavior. H548 separately tests the actual candidate fact adapter
+against real Pool records and textures, including 20 sampled slots and mip
+aliases. It does not exercise a changed encode transition. Caller/failure
+binding, independent attachment GPU readbacks and promotion/economy evidence
+remain in the [backend gap](../backend/gap.md). This is not a new TLA+ liveness
+proof or closure of the default live CPU/removal objective.
+
+H549 privately binds admission to the actual encodeChunk caller and verifies
+successful settlement plus four injected null-encoder failures retaining the
+pending identity. Independent attachment load/store readbacks and the original
+capture pass. H550 bounds actual coverage to two color-only fusions; 63
+backed-NullRt depth cases remain excluded. This is not live-queue terminal
+settlement or ordinary-policy store proof; the shared runtime is unchanged.
+
+H551 subsequently qualifies physical backed-NullRt participation, all 65
+captured fusions, 21 serial/candidate attachment cases per arm (including
+ordinary stores), and 12 failed-open cases. H552 passes a finite local CPU
+screen with independently recomputed raw same-thread endpoints and original
+oracles in all 28 executions. Live queue failure settlement, hardware query
+visibility, broader store suffixes and default-live transfer remain open;
+these local checks do not establish those contracts. See
+[H552](../../docs/perfomance/present-pacing/present-pacing-clear-economy.552.md).
+
+The subsequent full TLA regression exits zero (242 configurations, including
+167 expected counterexamples). No new proof of the candidate's queue failure
+binding follows: the coordinator can map encode exceptions to `nullopt` and
+then inline completion, whereas H551 injects failure through a direct encoder
+call. A real-coordinator failure test remains a promotion gate.
+
+H553 supplies that real-coordinator counterexample: null-open failures become
+inline success/reclaim in all four fresh-session cases, with four serial OFF
+controls. The failure is no longer merely a static concern. No fix or bounded
+failure-to-terminal refinement is established yet; prior-carrier and live wake
+cases remain untested. See
+[H553](../../docs/perfomance/present-pacing/present-pacing-clear-queue-failure.553.md).
+
+[H554](../../docs/perfomance/present-pacing/present-pacing-clear-failure-relay.554.md)
+adds a private identity-preserving failure relay, bounded safety model with an
+erase-failure counterexample, and native arm64/x86_64 relay checks. Sixteen
+actual-coordinator fixtures cover fresh failure and prior encoded/unsubmitted
+Clear work; two original-capture GPU/query/wrapper oracles pass. The model
+abstracts cleanup and wake delivery. Already-submitted sub-CB lifetime,
+active-encoder failure, live reset/wakeup and hardware-query settlement remain
+open; this is not production integration or default CPU-removal authority.
+
+[H555/H556](../../docs/perfomance/present-pacing/present-pacing-clear-failure-drain.556.md)
+extends the private failure boundary to a committed prefix blocked by a real
+Metal SharedEvent. The failing-before/passing-after ownership sentinel is held
+through GPU completion by a failure-only fence, with no failed-tail submission
+or inline completion. `Drain` checks retention-before-release and rejects two
+mutations. This is bounded safety, not GPU-progress liveness or comprehensive
+query/allocator cancellation proof; no canonical integration follows.
+
+[H558](../../docs/perfomance/present-pacing/present-pacing-clear-failure-boundary.558.md)
+shares that private drain with both direct deferred-fragment entries. All 32
+coordinator cases and two original-capture oracles pass. The new 16-case matrix
+binds actual registered prefix/suffix routes, ordinary/exact stores and both
+default and forced-prefix-split policies. Frozen call-site checks supplement
+the native fixtures; no new TLA+ route-refinement or live-reset proof is claimed.
+
+## Transaction-local prefix preparation (2026-10-14)
+
+`DirectPrefixPrepare` (`R-BACK-2.107`) has bounded safety and four independent
+expected counterexamples, a shared C++ gate, actual full/suffix predicate and
+append/rollback fixtures, and a private-factory source-binding audit. The model
+assumes the existing queue single-writer contract; it does not prove arbitrary
+C++ aliases, memory ordering, GPU pixels or CPU savings. The candidate remains
+compile-time-only. H537 completes private linked replay, 30 original
+source/production-counter-query/pixel checks and a fixed offline CPU screen.
+H538 closes fresh mechanism witnessing after reboot; common-observer
+qualification and live economics remain open in the
+[owner gap](../backend/encode-scheduling/gap.md#transaction-local-prepare-suffix-candidate-r-back-2107).
+See [H536](../../docs/perfomance/present-pacing/present-pacing-prefix-prepare.536.md).
+The offline scope and launch failure are retained in
+[H537](../../docs/perfomance/present-pacing/present-pacing-prefix-economy.537.md).
+H538 adds private matched-worker-observer build parity checks and post-reboot
+runtime preflight: 199 prepares skip 75,300 prefix commands and inspect 392 new
+commands; both matched images reproduce original pixels/source/query checks.
+This closes the missing mechanism witness, not live CPU/default transfer. See
+[H538](../../docs/perfomance/present-pacing/present-pacing-prefix-live-preflight.538.md).
+
 ## Read-mostly backend query polling (2026-09-19)
 
 [Design review](../d3d9/queries/read-mostly-polling.md) maps the experimental

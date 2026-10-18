@@ -3282,7 +3282,8 @@ FrameTapeReplayResult& replayGeneralPlan(
         RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic,
     RenderTapePreparedObserverV4* observerV4 = nullptr,
     RenderTapeExecutionV4* admittedExecutionV4 = nullptr,
-    const NormalHistorySetup* normalHistory = nullptr) {
+    const NormalHistorySetup* normalHistory = nullptr,
+    const RenderTapeProductionQueryDiagnosticV1* productionQueryDiagnostic = nullptr) {
   if (!device) {
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     if (exactDiagnosticV4)
@@ -3353,6 +3354,21 @@ FrameTapeReplayResult& replayGeneralPlan(
     result.normalDiagnostic.admitted = true;
     result.normalDiagnostic.requiredSurfaces = normalHistory->surfaces.size();
   }
+  if (productionQueryDiagnostic) {
+    const auto upper = device->dev().upperDevice();
+    if (!exactDiagnosticV4 || !renderTapeProductionQueryDiagnosticAdmitted(
+            *productionQueryDiagnostic, exactDiagnosticV4->digest(), normalHistory != nullptr,
+            publicationModeV4) ||
+        !renderTapeProductionQueryBackendMatches(upper && upper->pool(),
+            upper && upper->usesMetalOcclusion(), upper && upper->usesAsyncQueryFences())) {
+      result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
+      result.status = FrameTapeReplayStatus::QueryOracleUnsupported;
+      result.exactDiagnosticV4.failure = "v4-production-query-backend-mismatch";
+      return result;
+    }
+    result.queryReplay.productionCounterDiagnostic = true;
+    result.queryReplay.productionCounterReceiptDigest = productionQueryDiagnostic->captureReceiptDigest;
+  }
   if (result.queryReplay.present) {
     const auto upper = device->dev().upperDevice();
     if (!upper || !upper->pool()) {
@@ -3364,7 +3380,8 @@ FrameTapeReplayResult& replayGeneralPlan(
       if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
       RenderTapeQueryDescriptorDecoded query{};
       if (!renderTapeLoadQueryDescriptor(definition.descriptor, query) ||
-          (query.type == 9u && !upper->usesMetalOcclusion())) {
+          (query.type == 9u && !upper->usesMetalOcclusion() &&
+           !result.queryReplay.productionCounterDiagnostic)) {
         result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
         result.status = FrameTapeReplayStatus::QueryOracleUnsupported;
         return result;
@@ -5331,6 +5348,7 @@ FrameTapeReplayResult& replayGeneralPlan(
         result.queryReplay.readinessSatisfied == result.queryReplay.readinessRequired &&
         result.queryReplay.matchedResults == result.queryReplay.requiredResults;
     result.queryReplay.gpuResultOracle = result.queryReplay.actualMetal &&
+        !result.queryReplay.productionCounterDiagnostic &&
         result.queryReplay.oracleComplete && result.queryReplay.capturedReady != 0u;
     if (!result.queryReplay.oracleComplete)
       return fail(FrameTapeReplayStatus::QueryOracleFailed, 0xffffffffu);
@@ -5388,6 +5406,7 @@ struct PreparedRenderTape::Impl {
     RenderTapeExecutionV4Preparation execution{};
     RenderTapeInitialSetupV4Plan initialSetup{};
     std::unique_ptr<NormalHistorySetup> normalHistory;
+    std::optional<RenderTapeProductionQueryDiagnosticV1> productionQueryDiagnostic;
     RenderTapeExecutionV4PublicationMode publicationMode =
         RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic;
     RenderTapeExecutionV4ProducerContract producerContract =
@@ -5749,6 +5768,22 @@ PreparedRenderTape prepareRenderTapeIdentity(
   return prepared;
 }
 
+bool renderTapeProductionQueryDiagnosticAdmitted(
+    const RenderTapeProductionQueryDiagnosticV1& declared,
+    const RenderTapeDigest& sourcePlanDigest, bool normalHistory,
+    RenderTapeExecutionV4PublicationMode mode) noexcept {
+  return declared.version == 1u && declared.primitiveCountOcclusion == 1u &&
+      declared.asynchronousFences == 1u && declared.reserved == 0u && normalHistory &&
+      mode == RenderTapeExecutionV4PublicationMode::ExactSourceDiagnostic &&
+      nonZeroDigest(declared.captureReceiptDigest) && nonZeroDigest(sourcePlanDigest) &&
+      sameDigest(declared.sourcePlanDigest, sourcePlanDigest);
+}
+
+bool renderTapeProductionQueryBackendMatches(
+    bool hasMetalBackend, bool hardwareOcclusion, bool asynchronousFences) noexcept {
+  return hasMetalBackend && !hardwareOcclusion && asynchronousFences;
+}
+
 PreparedRenderTape prepareRenderTapeIdentityV4(
     std::span<const std::byte> tape, std::span<const RenderTapeProviderBlob> blobs,
     RenderTapePreparedV4PreparationOptions options) noexcept {
@@ -5785,6 +5820,14 @@ PreparedRenderTape prepareRenderTapeIdentityV4(
         prepared.impl_.reset();
         return prepared;
       }
+    }
+    if (options.productionQueryDiagnostic) {
+      if (!renderTapeProductionQueryDiagnosticAdmitted(*options.productionQueryDiagnostic,
+              v4->sourcePlan.digest(), v4->normalHistory != nullptr, options.publicationMode)) {
+        prepared.impl_.reset();
+        return prepared;
+      }
+      v4->productionQueryDiagnostic = options.productionQueryDiagnostic;
     }
     if (!RenderTapeExecutionV4PreparedReplayAccess::prepare(v4->execution,
             v4->sourcePlan, impl.generalPlan, impl.tape, options.publicationMode,
@@ -6654,7 +6697,8 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentityV4(
   replayGeneralPlan(device, impl.generalPlan, result, impl.blobs, policy, &phases,
       nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
       nullptr, {}, &v4.sourcePlan, impl.tape, &v4.initialSetup,
-      v4.producerContract, v4.publicationMode, observer, &execution, v4.normalHistory.get());
+      v4.producerContract, v4.publicationMode, observer, &execution, v4.normalHistory.get(),
+      v4.productionQueryDiagnostic ? &*v4.productionQueryDiagnostic : nullptr);
   if (!result.exactDiagnosticV4.execution.complete &&
       std::strcmp(result.exactDiagnosticV4.failure, "none") == 0)
     result.exactDiagnosticV4.failure = frameTapeReplayStatusName(result.status);

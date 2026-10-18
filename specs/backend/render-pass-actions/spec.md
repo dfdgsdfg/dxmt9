@@ -379,6 +379,67 @@ implementation, not the spec.
 
 ---
 
+## Aspect-qualified pending Clear fusion
+
+`R-BACK-15.19` is an extension of the encode-thread pending-Clear decision,
+not a PE/Unix ABI or resource-lifetime change. The serial reference opens and
+ends a Clear encoder before the following Draw encoder. The candidate uses
+the same physical Draw attachments, Clear load actions only for requested
+aspects and the serial load actions for all other aspects. Final stores are
+selected by the existing Draw pass policy, with their equivalence validated
+separately from admission geometry.
+
+`dxmt9_pending_clear_fusion.hpp::classify` is the shared pure candidate
+predicate. Its flat `Facts` describe immutable call-local source identities,
+attachment metadata, sampled aliases and following load actions. It does not
+resolve handles, retain resources, allocate, call Metal or grant ownership.
+The runtime adapter must construct facts from the actual pending Clear,
+current Draw and retained Pool records; guessed/unknown evidence is rejection.
+No witness may outlive the encode call or authorize another Draw.
+
+The candidate adapter `dxmt9_pending_clear_projection.hpp::projectFacts`
+projects `PublishedCommandRef`, `ClearDesc`, `FlatDrawStateRecord` and retained
+Pool surfaces. It checks every bound texture slot, including all four vertex
+samplers. Physical texture dimensions must agree with the surface descriptor;
+a failed mip-view allocation leaving the parent texture is not evidence of the
+requested extent. Matching Clear/Draw bindings reuse the same projected
+attachment. This adapter does not itself consume pending Clear or open an
+encoder and is not yet called by production encoding.
+
+Physical participation follows the serial descriptor's texture-presence
+policy. A texture-backed `Format::NullRt` alias is a real color attachment,
+not an absent attachment inferred from its format. Its physical extent and
+unrequested load/store actions require the same proof as any other color
+attachment. A storage-free NullRt record remains outside the initial fusion
+envelope. This does not change NullRt allocation or D3D9 format semantics.
+
+The following load actions must be resolved using the serial no-Clear policy,
+not assumed to be Load. A requested color followed by DontCare is excluded
+from exact-reference admission. An unrequested color may retain its existing
+DontCare action. Pending backbuffer discard is excluded because the current
+`clear.has_value()` branch changes that selection. Query/order boundaries
+continue flushing pending work before any candidate evaluation.
+
+The pending command is not settled on a boolean admission result. Descriptor
+preparation and successful Metal encoder creation precede settlement; rejection
+or a failed open retains the serial obligation until a qualified fallback or
+terminal failure policy handles it. Failure must remain distinguishable from
+successful no-submission/inline work through backend and borrowed-callback
+wrappers. An exception converted to an empty optional is not terminal settlement.
+The queue must not publish successful completion or reclaim the failed source
+as inline work, and must not retry after effects. Native coordinator tests must
+cover both a fresh session and a previously encoded pending carrier before
+enabling the extension; direct encoder-call tests alone are insufficient.
+
+`pending_clear_fusion_spec.cpp` exhaustively compares the admitted abstract
+memory semantics for independent color/depth/stencil values, requested aspect
+sets, following color load modes, draw coverage/writes and final store masks.
+It also rejects stale source/attachment identities, extent/sample/alias
+mismatches and unsupported scopes through the shared predicate. This bounded
+value refinement does not prove Metal conversion, driver behavior, real Pool
+fact extraction, failure settlement or GPU pixels. Current gaps remain in
+`specs/backend/gap.md`; no production call site is implied by the header.
+
 ## 8. Out of Scope
 
 - **Unknown-future look-ahead.** `R-BACK-15.9` forbids waiting for unpublished

@@ -5552,7 +5552,33 @@ CommandQueue::commitDirectChunkSlotReplay(
   if (context->assembler->commandCount() != 0u) {
     noteCurrentSlotCommandAppendStartedUnlocked(*this);
   }
-  if (!context->assembler->prepare()) {
+  // Private experimental build only. The default still executes the full
+  // reference validator. The earlier commit gate proves active-context,
+  // owning-thread, exact ticket and writing-destination identity; no writer
+  // or unlock intervenes between this capability and its consumption.
+#if defined(DXMT9_EXPERIMENT_PREFIX_PREPARE) && DXMT9_EXPERIMENT_PREFIX_PREPARE
+  if (!context->assembler->outerBinding()) return failStop();
+  auto prefixBinding = *context->assembler->outerBinding();
+  // Derive live identity from the queue ticket, not from the claimant's
+  // stored binding. Planning-only fields remain the immutable admission plan.
+  prefixBinding.rawOrdinal = ticket.rawOrdinal;
+  prefixBinding.sourceOrdinal = ticket.sourceOrdinal;
+  prefixBinding.seqId = ticket.seqId;
+  prefixBinding.buildGeneration = ticket.buildGeneration;
+  prefixBinding.sourceGeneration = ticket.id.generation;
+  prefixBinding.storageGeneration = ticket.storage.generation;
+  prefixBinding.controlIndex = static_cast<std::uint32_t>(controlIndex);
+  prefixBinding.firstPage = ticket.storage.firstPage;
+  prefixBinding.pageCount = ticket.storage.pageCount;
+  prefixBinding.segmentIndex = 0;
+  prefixBinding.segmentCount = 1;
+  const bool prepared = context->assembler->prepareOwnedSuffix(
+      core::TransactionalChunkSlotAssembler::PrefixPrepareCapability(
+          *context->assembler, *payload, prefixBinding));
+#else
+  const bool prepared = context->assembler->prepare();
+#endif
+  if (!prepared) {
     return failStop();
   }
   if (testOnlyForceNextDirectChunkSlotCommitFailure_) {

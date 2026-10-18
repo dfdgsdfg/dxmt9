@@ -25,6 +25,7 @@ normal_models=(
   CpuReadySessionProgress
   DceChunkLookahead
   DirectChunkSlotContinuation
+  DirectPrefixPrepare
   DirectSlotAggregateCapacityLease
   DirectSlotCapacityProvisioning
   DirectSlotDeniedOwnership
@@ -82,10 +83,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=70
+expected_normal_count=71
 expected_progress_count=8
-expected_counterexample_count=174
-expected_cfg_count=252
+expected_counterexample_count=178
+expected_cfg_count=257
 progress_configs=(
   TracingGpuRetirement.progress
   TracingSessionLifecycle.progress
@@ -107,6 +108,7 @@ progress_configs=(
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/check_pe_scalar_projection_model.py"
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/check_direct_prefix_prepare.py"
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_mutation_composition_table.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pipeline_lifecycle_table.py" --check
 
@@ -135,6 +137,10 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "DirectPrefixPrepare|.foreign.counterexample|Invariant ReferenceSound is violated"
+  "DirectPrefixPrepare|.generation.counterexample|Invariant IdentityFresh is violated"
+  "DirectPrefixPrepare|.repeat.counterexample|Invariant ConsumeOnce is violated"
+  "DirectPrefixPrepare|.terminal.counterexample|Invariant TerminalStable is violated"
   "TracingGpuRetirement|.early-publication.counterexample|Invariant NoCompletionBeforePublication is violated"
   "TracingGpuRetirement|.stale-ticket.counterexample|Invariant NoStaleCompletion is violated"
   "TracingGpuRetirement|.early-reuse.counterexample|Invariant NoReuseBeforeConsumption is violated"

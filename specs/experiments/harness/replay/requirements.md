@@ -1773,6 +1773,16 @@ double restoration. Actual Metal tests must cover checkpoint polling followed
 by reissue and warm recovery, and the original captured query/pixel oracles
 remain required for workload qualification.
 
+A versioned closed-history descriptor must preserve both independently tracked
+pre-cut cycle and absolute Issue ordinal. The ordinal must not be inferred from
+cycle or rebased in captured runtime evidence. Such history grants neither an
+old result nor an END/publication fence; open occlusion prefixes remain rejected.
+Replay must bind a fresh identity-qualified local query, project each captured
+Issue transition to its actual local cycle/ordinal, and leave authenticated
+captured facts immutable. No synthetic setup Issue is permitted for closed
+history. Missing captured occlusion BEGIN, old-cycle polling, stale identity or
+ordinal, and counter overflow must fail closed.
+
 **R-HARN-REPLAY-9.10** A single-level, single-sample DEFAULT-pool 2D
 A16B16G16R16F render-target texture may carry an exact arm-boundary initial
 checkpoint. Its explicit version-2 color encoding must preserve the raw
@@ -2030,3 +2040,30 @@ once. The bounded lane must reject post-prefix backbuffer mutations before any
 device effects rather than invoke Exact-only settlement. History restoration,
 successful replay and even output equality grant no initial-content, timing or
 policy qualification. The stable-Exact launcher gate must remain unchanged.
+
+**R-HARN-REPLAY-9.24** An external capture-arm selector must be opt-in, bounded
+and one-shot. It must validate process incarnation, fresh request identity,
+schema and expiry at an existing successful Present boundary before bootstrap,
+and check expiry again after bootstrap before arming identity capture. Explicit
+invalid configuration or stale/malformed requests must not revert to skip-count
+selection. Consumed/rejected requests must never be retried on a later frame,
+including after capture abort/reset. Receipts must join the request to actual
+capture token/epoch/queue and publication. External engine/camera observations,
+source identity and original image checks remain independent requirements for
+scene qualification; request acceptance alone grants none of them. See
+[capture-arm-request.md](capture-arm-request.md).
+
+**R-HARN-REPLAY-9.25** A private Normal exact-source diagnostic may reproduce
+the production primitive-count occlusion backend only with an explicit,
+versioned caller attestation bound to the admitted source-plan digest and an
+independently retained capture-runtime receipt digest. The caller must verify
+that receipt's actual capture images, backend configuration and bundle join;
+a nonzero digest alone is not proof of its contents. Preparation must reject
+foreign input, unsupported versions/profiles and non-Normal/non-exact use.
+Before any resource effects, replay must verify an actual Metal device with
+primitive-count occlusion and asynchronous fences, matching the attestation.
+It must execute production queries and real local completion, preserve all
+polls and compare all defined results, source boundaries and original pixels.
+No captured result may be substituted. This diagnostic must never claim a
+hardware occlusion-result oracle or public policy/timing qualification. The
+default provider contract must continue to require hardware occlusion.

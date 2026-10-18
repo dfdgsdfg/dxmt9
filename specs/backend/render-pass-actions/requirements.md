@@ -16,7 +16,7 @@ These requirements describe the contract owned by the backend encode path
 per-command-buffer tracking state. The design that satisfies them lives in
 `spec.md`.
 
-Traceability: `R-BACK-15.1` through `R-BACK-15.18`. Cross-references:
+Traceability: `R-BACK-15.1` through `R-BACK-15.19`. Cross-references:
 `specs/backend/requirements.md` `R-BACK-2.5` (clear-as-load-action),
 `R-BACK-2.6` (RT-change encoder split — amended below), `R-BACK-6.3`
 (post-present back-buffer DontCare-load), and
@@ -314,6 +314,36 @@ the long-term goal but not gated on this spec alone — texture/shader
 optimizations are tracked separately.
 
 ---
+
+## Aspect-qualified pending Clear fusion (`R-BACK-15.19`)
+
+An extension of the existing full-key Clear/Draw merge may replace an adjacent
+full-surface `Clear(C); Draw(A)` with load-action Clear on C within the Draw
+pass only when a call-local witness proves the following:
+
+- Source owner, generation, sequence and command adjacency match. The witness
+  must not be cached across source/state mutations or query/order boundaries.
+- Every requested aspect has the same resource and subresource identity in
+  the Draw. All participating physical attachments have matching positive
+  extents; effective render area must cover the entire original Clear.
+- The admitted initial envelope is single-sample, no resolve target, no sRGB
+  write conversion, no sampled requested alias or exact read hazard, no active
+  encoder/query scope and no pending backbuffer-discard transition.
+- Unrequested aspects retain their serial load semantics. Requested color
+  contents must survive the serial following load; a first-use DontCare-load
+  sequence is not an exact-reference proof. Clear color/depth/stencil value
+  conversion and final store/resolve semantics must match independently.
+- Admission and descriptor preparation do not consume pending Clear ownership.
+  Only successful encoder opening may consume it. Rejection must use the serial
+  path before visible effects; failed opening must not silently drop the Clear
+  or encode it twice. Failure behavior needs its own runtime binding evidence.
+
+The original full-equality path remains unchanged by this extension. Partial
+rectangles, unqualified MSAA/resolve, unknown identities and unsupported
+conversion/failure cases must fail closed to the original path. A predicate
+test alone does not authorize runtime promotion: `R-VERIF-1.5`–`1.8` require
+adapter/code binding, independent attachment GPU readbacks and supervised
+integration evidence. CPU savings require a separate observer-thin comparison.
 
 ## 7. Amendment to `R-BACK-2.6`
 

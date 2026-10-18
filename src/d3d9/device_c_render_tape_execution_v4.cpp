@@ -234,7 +234,8 @@ bool RenderTapeExecutionV4::prepareTemplates(RenderTapeExecutionV4Preparation& o
           !renderTapeQueryDescriptorIdentityMatches(descriptor, definition.fixed.identity))
         return reject("v4-query-descriptor-binding");
       const bool checkpoint = descriptor.schemaVersion == kRenderTapeQueryDescriptorVersion3;
-      if (!checkpoint && (descriptor.initialState != static_cast<std::uint32_t>(
+      const bool explicitHistory = descriptor.schemaVersion == kRenderTapeQueryDescriptorVersion4;
+      if (!checkpoint && !explicitHistory && (descriptor.initialState != static_cast<std::uint32_t>(
               RenderTapeQueryInitialState::Unissued) || descriptor.initialIssueCycle))
         return reject("v4-query-initial-state-unsupported");
       if (staged.queryTemplates_.size() >= limits.provenance.maxCoordinators)

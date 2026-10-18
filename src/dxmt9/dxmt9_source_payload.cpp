@@ -1290,9 +1290,51 @@ bool TransactionalChunkSlotAssembler::bindOuter(OuterBinding binding) noexcept {
 }
 
 bool TransactionalChunkSlotAssembler::prepare() noexcept {
+  return prepareImpl(decidePrefixPrepare(
+      state_ == State::Reserved || state_ == State::Building,
+      false, false, false));
+}
+
+bool TransactionalChunkSlotAssembler::prepareOwnedSuffix(
+    PrefixPrepareCapability&& capability) noexcept {
+  auto* issuerTarget = std::exchange(capability.assembler_, nullptr);
+  const bool matches = issuerTarget == this && directSlot_ &&
+      capability.destination_ == directSlot_ && outerBinding_.has_value() &&
+      capability.binding_.valid() && capability.binding_ == *outerBinding_;
+  bool extentsPreserved = matches;
+  if (matches) {
+    const auto& slot = *directSlot_;
+#define DXMT9_PREFIX_EXTENT_Vector(plan, storage) \
+    extentsPreserved = extentsPreserved && slot.storage.size() >= directCheckpoint_.plan;
+#define DXMT9_PREFIX_EXTENT_SemanticOnly(plan, storage) \
+    extentsPreserved = extentsPreserved && directClearRectCount_ >= directCheckpoint_.plan;
+#define DXMT9_PREFIX_EXTENT(region, plan, storage, element, physical, provision, allocation, lookup, owner) \
+    DXMT9_PREFIX_EXTENT_##physical(plan, storage)
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_PREFIX_EXTENT)
+#undef DXMT9_PREFIX_EXTENT
+#undef DXMT9_PREFIX_EXTENT_SemanticOnly
+#undef DXMT9_PREFIX_EXTENT_Vector
+  }
+  return prepareImpl(decidePrefixPrepare(
+      state_ == State::Reserved || state_ == State::Building,
+      true, matches, extentsPreserved));
+}
+
+bool TransactionalChunkSlotAssembler::prepareImpl(
+    PrefixPrepareDecision decision) noexcept {
+  if (decision == PrefixPrepareDecision::Reject) {
+    // Never turn an already committed/retired transaction back into a state
+    // whose destructor rolls its payload back.
+    if (state_ != State::Committed && state_ != State::RolledBack &&
+        state_ != State::AbandonedFailStop) state_ = State::Failed;
+    return false;
+  }
   const bool destinationReady = directSlot_
       ? directSlot_->drawStateStorageConsistent() &&
-            directSlot_->commandPayloadsInRange()
+            (decision == PrefixPrepareDecision::Suffix
+                 ? directSlot_->commandPayloadSuffixInRange(
+                       directCheckpoint_.commandHeaders)
+                 : directSlot_->commandPayloadsInRange())
       : builder_ && builder_->publish();
   bool rangeCountsReady = true;
   if (directSlot_ && directRangeBuild_) {

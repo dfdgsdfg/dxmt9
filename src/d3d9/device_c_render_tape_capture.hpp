@@ -415,6 +415,9 @@ public:
   RenderTapeIdentityV4Status identityV4ValidationStatus() const noexcept {
     return identityV4ValidationStatus_;
   }
+  const TapeCoordinatorFailure& identityV4CoordinatorFailure() const noexcept {
+    return identityV4CoordinatorFailure_;
+  }
   RenderTapeExecutionTopologyV1Status topologyV1ValidationStatus() const noexcept {
     return topologyV1ValidationStatus_;
   }
@@ -529,6 +532,7 @@ private:
       RenderTapeIdentityV3Status::InvalidHeader;
   RenderTapeIdentityV4Status identityV4ValidationStatus_ =
       RenderTapeIdentityV4Status::InvalidHeader;
+  TapeCoordinatorFailure identityV4CoordinatorFailure_{};
   RenderTapeExecutionTopologyV1Status topologyV1ValidationStatus_ =
       RenderTapeExecutionTopologyV1Status::InvalidHeader;
   RenderTapeBlobCatalogue catalogue_{};

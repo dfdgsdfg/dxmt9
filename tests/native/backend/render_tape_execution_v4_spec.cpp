@@ -245,7 +245,7 @@ struct AdmissionFixture {
   D9CWireObjectIdentity queryIdentity{D9C_CHUNK_HANDLE_KIND_QUERY, 77u, 901u};
 };
 
-enum class QueryFixture { None, CheckpointPrefix, CheckpointLazy, Fresh, ClosedUnsupported,
+enum class QueryFixture { None, CheckpointPrefix, CheckpointLazy, Fresh, ClosedHistory, ClosedOcclusion, ClosedUnsupported,
   LateFreshMissingPrefix };
 
 // General admission needs genuine indexed draws, shader/resource closure and
@@ -268,6 +268,10 @@ AdmissionFixture makeFixture(bool capturedRollback = false, bool seeded = false,
   bool inserted = false;
   const bool queryCheckpoint = queryShape == QueryFixture::CheckpointPrefix ||
       queryShape == QueryFixture::CheckpointLazy;
+  const bool explicitHistory = queryShape == QueryFixture::ClosedHistory ||
+      queryShape == QueryFixture::ClosedOcclusion;
+  const std::uint32_t queryType = queryShape == QueryFixture::ClosedOcclusion ? 9u : 8u;
+  const std::uint32_t queryFlags = queryShape == QueryFixture::ClosedOcclusion ? 2u : 1u;
   const auto appendQueryDefinition = [&] {
     out.queryDefinitionEvent = eventIndex++;
     if (queryCheckpoint) {
@@ -277,6 +281,13 @@ AdmissionFixture makeFixture(bool capturedRollback = false, bool seeded = false,
               .identity = out.queryIdentity, .issueCycle = 31u, .coreQueryIdentity = 902u,
               .deviceEpoch = 903u, .issueOrdinal = 47u, .rawOrdinal = 904u,
               .queueIdentity = 905u}};
+      builder.appendObjectDefine(out.queryIdentity,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+          std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+    } else if (explicitHistory) {
+      const RenderTapeQueryDescriptorV4 descriptor{.type = queryType, .dataBytes = 4u,
+          .initialState = static_cast<std::uint32_t>(RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+          .initialIssueCycle = 508u, .initialIssueOrdinal = 1016u};
       builder.appendObjectDefine(out.queryIdentity,
           static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
           std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
@@ -294,7 +305,7 @@ AdmissionFixture makeFixture(bool capturedRollback = false, bool seeded = false,
   const auto appendQueryIssue = [&] {
     using namespace test::general_cpu_destroy_fixture_detail;
     const std::array records{Record{.type = D9C_COMMAND_RECORD_QUERY_ISSUE,
-        .payload = bytesOf(D9CCommandChunkWireQueryIssue{.queryHandleIndex = 0u, .flags = 1u}),
+        .payload = bytesOf(D9CCommandChunkWireQueryIssue{.queryHandleIndex = 0u, .flags = queryFlags}),
         .handles = {{out.queryIdentity.kind, out.queryIdentity.generation, out.queryIdentity.objectId}}}};
     out.queryIssueEvent = eventIndex++;
     builder.appendCommandChunk({.recordCount = 1u, .handleCount = 1u}, makeChunk(records));
@@ -437,11 +448,12 @@ AdmissionFixture makeFixture(bool capturedRollback = false, bool seeded = false,
       identity.coordinators.push_back({.provenance = {.eventOrdinal = ordinal, .rawOrdinal = raw,
           .buildGeneration = generation - 1u, .dispatchEdge = queryDispatch,
           .queryIdentity = out.queryIdentity,
-          .issueCycle = queryCheckpoint || closed ? 32u : 1u,
-          .issueOrdinal = queryCheckpoint ? 48u : 1u, .deviceEpoch = 903u,
+          .issueCycle = explicitHistory ? 509u : queryCheckpoint || closed ? 32u : 1u,
+          .issueOrdinal = explicitHistory ? 1017u : queryCheckpoint ? 48u : 1u, .deviceEpoch = 903u,
           .recordIndex = 0u, .recordType = D9C_COMMAND_RECORD_QUERY_ISSUE,
-          .flags = 1u, .queryType = 8u,
-          .prefixKind = static_cast<std::uint32_t>(RenderTapeIdentityV3PrefixKind::EmptyBaseline)},
+          .flags = queryFlags, .queryType = queryType,
+          .prefixKind = static_cast<std::uint32_t>(queryFlags == 2u
+              ? RenderTapeIdentityV3PrefixKind::None : RenderTapeIdentityV3PrefixKind::EmptyBaseline)},
           .admissionEdge = queryAdmission,
           .authority = static_cast<std::uint32_t>(TapeCoordinatorAuthority::OrdinarySerial)});
       continue;
@@ -1497,8 +1509,8 @@ void controlledCpuArmAndDomainGuards() {
 
 using OwnedQuery = std::unique_ptr<D9CQuery, decltype(&dxmt9c_query_release)>;
 
-OwnedQuery localEvent(LocalDevice& local, bool setupEnd) {
-  OwnedQuery query(dxmt9c_device_create_query(local.device.get(), 8u), dxmt9c_query_release);
+OwnedQuery localEvent(LocalDevice& local, bool setupEnd, std::uint32_t type = 8u) {
+  OwnedQuery query(dxmt9c_device_create_query(local.device.get(), type), dxmt9c_query_release);
   check(bool(query), "query replay maps a real registry-owned frontend EVENT");
   if (setupEnd)
     check(dxmt9c_query_issue(query.get(), 1u) == core::D3D_OK,
@@ -1606,11 +1618,14 @@ void immutablePreparationQueryIsolation() {
 }
 
 void queryJoinsAndLocalFacts() {
-  for (auto shape : {QueryFixture::CheckpointPrefix, QueryFixture::CheckpointLazy, QueryFixture::Fresh}) {
+  for (auto shape : {QueryFixture::CheckpointPrefix, QueryFixture::CheckpointLazy, QueryFixture::Fresh,
+                    QueryFixture::ClosedHistory, QueryFixture::ClosedOcclusion}) {
     LocalDevice local;
     auto fixture = makeFixture(false, false, false, false, false, shape);
-    const bool checkpoint = shape != QueryFixture::Fresh;
-    auto query = localEvent(local, checkpoint);
+    const bool checkpoint = shape == QueryFixture::CheckpointPrefix || shape == QueryFixture::CheckpointLazy;
+    const std::uint32_t type = shape == QueryFixture::ClosedOcclusion ? 9u : 8u;
+    const std::uint32_t flags = shape == QueryFixture::ClosedOcclusion ? 2u : 1u;
+    auto query = localEvent(local, checkpoint, type);
     const auto setupSnapshot = local.device->dev().captureQueryPollSnapshot(query->obj);
     const auto digest = fixture.plan.digest();
     const auto capturedFact = std::find_if(fixture.plan.records().begin(), fixture.plan.records().end(),
@@ -1655,9 +1670,9 @@ void queryJoinsAndLocalFacts() {
     check(evidence.actualIdentity.coordinators.size() == 1u,
         "only the interval Issue creates a coordinator, never the checkpoint join or definition");
     const auto& actual = evidence.actualIdentity.coordinators[0].provenance;
-    RenderTapeQueryCycleState cycle{.type = 8u};
+    RenderTapeQueryCycleState cycle{.type = type};
     if (checkpoint) check(renderTapeAdvanceQueryCycle(cycle, 1u, false), "pure local setup transition succeeds");
-    check(renderTapeAdvanceQueryCycle(cycle, 1u, true) && actual.issueCycle == cycle.issueCycle &&
+    check(renderTapeAdvanceQueryCycle(cycle, flags, true) && actual.issueCycle == cycle.issueCycle &&
         actual.issueOrdinal == cycle.issueOrdinal &&
         renderTapeIdentityV3SameIdentity(actual.queryIdentity, query->wireIdentity) &&
         !renderTapeIdentityV3SameIdentity(actual.queryIdentity, fixture.queryIdentity) &&
@@ -1669,6 +1684,10 @@ void queryJoinsAndLocalFacts() {
         (!checkpoint || (capturedCycle == 32u && capturedOrdinal == 48u && actual.issueCycle == 2u &&
                         actual.issueOrdinal == 2u)),
         "local projection never overwrites immutable authenticated captured facts or actual evidence");
+    if (shape == QueryFixture::ClosedHistory || shape == QueryFixture::ClosedOcclusion)
+      check(capturedCycle == 509u && capturedOrdinal == 1017u &&
+          actual.issueCycle == 1u && actual.issueOrdinal == 1u && !evidence.queryBaselinesJoined,
+          "closed history maps to a fresh actual query with no synthetic setup Issue or old completion authority");
     // Source rows below are an explicitly authored neutral comparison graph,
     // not reported actual replay evidence. Only its query labels are derived
     // from the genuine observed local END; all physical extents stay exact.

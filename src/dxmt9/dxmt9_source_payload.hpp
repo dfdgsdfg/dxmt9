@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_prefix_prepare.hpp"
 
 #include <array>
 #include <cstddef>
@@ -21,6 +22,8 @@ class CommandQueue;
 }
 
 namespace dxmt9::core {
+
+struct DirectPrefixPrepareTestAccess;
 
 // Native-only evidence minted by CommandQueue after the payload has been
 // prepared and every resource retain/mark obligation has been discharged.
@@ -749,6 +752,9 @@ class TransactionalChunkSlotAssembler {
     std::uint32_t rangeDrawCount = 0;
     std::size_t plannedBytes = 0;
 
+    friend constexpr bool operator==(const OuterBinding&,
+                                     const OuterBinding&) = default;
+
     constexpr bool valid() const noexcept {
       return rawOrdinal != 0 && sourceOrdinal != 0 && seqId != 0 &&
              buildGeneration != 0 && sourceGeneration != 0 &&
@@ -771,6 +777,33 @@ class TransactionalChunkSlotAssembler {
     RolledBack,
     AbandonedFailStop,
     Failed,
+  };
+
+  // Minted at the queue's commit gate only after the active, thread-pinned
+  // Direct build and its destination/ticket have been revalidated. It does
+  // not authorize arbitrary aliases or survive a compatibility writer.
+  class PrefixPrepareCapability final {
+    friend class dxmt9::CommandQueue;
+    friend class TransactionalChunkSlotAssembler;
+    friend struct DirectPrefixPrepareTestAccess;
+
+    PrefixPrepareCapability(TransactionalChunkSlotAssembler& assembler,
+                            ChunkSlot& destination,
+                            OuterBinding binding) noexcept
+        : assembler_(&assembler), destination_(&destination), binding_(binding) {}
+
+   public:
+    PrefixPrepareCapability(const PrefixPrepareCapability&) = delete;
+    PrefixPrepareCapability& operator=(const PrefixPrepareCapability&) = delete;
+    PrefixPrepareCapability(PrefixPrepareCapability&& other) noexcept
+        : assembler_(std::exchange(other.assembler_, nullptr)),
+          destination_(other.destination_), binding_(other.binding_) {}
+    PrefixPrepareCapability& operator=(PrefixPrepareCapability&&) = delete;
+
+   private:
+    TransactionalChunkSlotAssembler* assembler_ = nullptr;
+    ChunkSlot* destination_ = nullptr;
+    OuterBinding binding_{};
   };
 
   explicit TransactionalChunkSlotAssembler(
@@ -894,6 +927,10 @@ class TransactionalChunkSlotAssembler {
   bool tryAppendPresent(PresentCommandRecord&& value) noexcept;
 
  private:
+  friend class dxmt9::CommandQueue;
+  friend struct DirectPrefixPrepareTestAccess;
+  bool prepareOwnedSuffix(PrefixPrepareCapability&& capability) noexcept;
+  bool prepareImpl(PrefixPrepareDecision decision) noexcept;
   bool beginBuild() noexcept;
   bool fail() noexcept;
   bool tryAppendUniform(const DrawUniformPayload& payload,

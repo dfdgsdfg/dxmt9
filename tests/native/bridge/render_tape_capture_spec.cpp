@@ -2200,6 +2200,22 @@ void testCompleteCaptureIdentityV4Attachment() {
 }
 
 void testCaptureIdentityV4PairRejections() {
+  {
+    RenderTapeCaptureSession session(true);
+    RenderTapeBlobCatalogue catalogue;
+    auto pair = sealedCaptureIdentityV4Fixture(session, catalogue);
+    pair.identity.coordinators.emplace_back();
+    check(session.attachCaptureIdentityV4({7u, 8u}, 9u, 5u, pair.identity, pair.topology) ==
+              RenderTapeCaptureStatus::ValidationFailed,
+          "unjoined coordinator aborts the actual sealed capture owner");
+    checkV4AttachmentAborted(session);
+    check(session.identityV4CoordinatorFailure().reason == TapeCoordinatorFailureReason::AttemptJoin &&
+              session.identityV4CoordinatorFailure().coordinatorIndex == 0u,
+          "bounded coordinator witness survives terminal payload release");
+    sealedCaptureIdentityV4Fixture(session, catalogue);
+    check(session.identityV4CoordinatorFailure().reason == TapeCoordinatorFailureReason::None,
+          "fresh capture arm cannot report the prior capture's rejection");
+  }
   for (std::uint32_t mutation = 0u; mutation < 17u; ++mutation) {
     RenderTapeCaptureSession session(true);
     RenderTapeBlobCatalogue catalogue;

@@ -928,6 +928,21 @@ void normalPreparation() {
       !result.normalDiagnostic.historyRestored && !result.normalDiagnostic.unchangedNormal,
       "missing device grants no local history or policy evidence");
   noEffects(result);
+  // Explicit input-bound declaration is owned by immutable preparation, but
+  // neither it nor null-device replay establishes runtime/backend authority.
+  options.productionQueryDiagnostic = RenderTapeProductionQueryDiagnosticV1{
+      .sourcePlanDigest = fixture.planDigest,
+      .captureReceiptDigest = RenderTapeCaptureSession::sha256(fixture.tape)};
+  auto counterPrepared = prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options);
+  check(counterPrepared.valid(), "explicit production-counter contract admits only bound Normal preparation");
+  options.productionQueryDiagnostic->sourcePlanDigest[0] ^= std::byte{1};
+  check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(),
+      "foreign counter contract rejects before publishing preparation");
+  auto counterResult = replayPreparedRenderTapeIdentityV4(nullptr, counterPrepared, RenderTapePreparedRoute::Compatibility);
+  check(!counterResult.queryReplay.productionCounterDiagnostic && !counterResult.queryReplay.gpuResultOracle,
+      "immutable declaration does not fabricate a runtime backend or GPU-result oracle");
+  noEffects(counterResult);
+  options = makeOptions();
   options.expectedNormalHistoryDigest[0] ^= std::byte{1};
   check(!prepareRenderTapeIdentityV4(fixture.tape, fixture.references, options).valid(), "wrong history digest rejects");
   options = makeOptions(); options.normalActionProfile = {};
@@ -960,6 +975,34 @@ void normalPreparation() {
       valid = value.valid(); injected = prepared_v4_allocation_probe::injected; }
     check(injected && !valid, "Normal preparation allocation fault publishes no partial authority");
   }
+}
+
+void productionQueryContract() {
+  RenderTapeDigest source{};
+  source[0] = std::byte{7};
+  const RenderTapeProductionQueryDiagnosticV1 original{
+      .sourcePlanDigest = source, .captureReceiptDigest = source};
+  for (unsigned mutation = 0u; mutation < 9u; ++mutation) {
+    auto declared = original;
+    auto digest = source;
+    if (mutation == 1u) declared.version = 2u;
+    if (mutation == 2u) declared.primitiveCountOcclusion = 0u;
+    if (mutation == 3u) declared.asynchronousFences = 0u;
+    if (mutation == 4u) declared.reserved = 1u;
+    if (mutation == 5u) declared.captureReceiptDigest = {};
+    if (mutation == 6u) declared.sourcePlanDigest[1] = std::byte{1};
+    if (mutation == 7u) digest = {};
+    check(renderTapeProductionQueryDiagnosticAdmitted(declared, digest, mutation != 8u,
+        PublicationMode::ExactSourceDiagnostic) == (mutation == 0u),
+        "production query declaration rejects unsupported profiles, foreign inputs and absent evidence");
+  }
+  check(!renderTapeProductionQueryDiagnosticAdmitted(original, source, true,
+      static_cast<PublicationMode>(255u)), "unsupported execution mode cannot use the diagnostic");
+  check(!renderTapeProductionQueryDiagnosticAdmitted(original, source, true,
+      PublicationMode::SemanticMapping), "policy exploration cannot borrow exact-only backend attestation");
+  for (unsigned mask = 0u; mask < 8u; ++mask)
+    check(renderTapeProductionQueryBackendMatches(mask & 1u, mask & 2u, mask & 4u) == (mask == 5u),
+        "actual backend gate requires Metal, counter occlusion and asynchronous fences together");
 }
 
 void unsupportedQuery() {
@@ -1178,6 +1221,7 @@ int main() {
     observerAdmission();
     observerForwarding();
     normalPreparation();
+    productionQueryContract();
     unsupportedQuery();
     terminalOutputMismatch();
     std::cout << "render_tape_provider_v4_spec: " << checks << " checks passed\n";

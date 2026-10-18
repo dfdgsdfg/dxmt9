@@ -23,6 +23,68 @@ sources remain optional reference lanes, not macOS collector dependencies.
 
 ## Fixed-input replay experiment
 
+### External one-shot capture selection — partial
+
+R-HARN-REPLAY-9.24 has a capture-only PE file reader, process/nonce/expiry gate,
+request-to-token/epoch/queue logging and a same-prefix writer/transport fixture.
+The original skip selector remains unchanged when no request is configured.
+Native refinement covers 117,649 six-action histories and malformed-field/time
+counterexamples; capture/snapshot/install-name regression tests pass 4/4 on
+x86_64. Both PE builds and Sikarugir x86/x64 controlled file transport tests pass,
+including cross-process submission and refusal of a mismatched creation time.
+Existing TLA regression passes (209.69 s); the new selector's model/code binding
+is the exhaustive native checker, not that regression suite. Evidence:
+[H501](../../docs/perfomance/present-pacing/present-pacing-arm-request.501.md).
+The new selector does not read game memory: a supervised camera/frame bracket,
+published source join and original-image oracle are still required. H500
+excludes the older H481 input from its intended relative tail window; it must
+not be used to declare the largest default-tail CPU owner. See
+[capture-arm-request.md](harness/replay/capture-arm-request.md).
+
+[H502](../../docs/perfomance/present-pacing/present-pacing-scene-request-preflight.502.md)
+now demonstrates the external late-camera request and real arm in two bounded
+game runs. Both reject final identity attachment; the second isolates
+`RenderTapeIdentityV4Status::InvalidCoordinator` before topology construction.
+No authenticated bundle or original GPU oracle exists for this input. Retain
+the exact failing coordinator/attempt witness and add a native counterexample
+before another retry; do not relax provenance or change scene selection to
+obtain a passing frame.
+
+[H503](../../docs/perfomance/present-pacing/present-pacing-coordinator-witness.503.md)
+adds a bounded first-failure witness to the existing cold validator, retained
+through capture rollback. Native tests prove witness/no-witness admission parity
+and rearm clearing. It is not a serialized success artifact.
+
+[H504](../../docs/perfomance/present-pacing/present-pacing-closed-query-ordinal.504.md)
+uses that witness in the unlocked late-camera run: the V2 closed occlusion
+descriptor loses pre-cut absolute Issue history (canonical ordinal 1 versus
+runtime 1017, both cycle 509). A native reduced counterexample reproduces the
+rejection. [H505](../../docs/perfomance/present-pacing/present-pacing-closed-query-history.505.md)
+implements R-HARN-REPLAY-9.9's versioned closed-history preservation and
+fresh-local V4 execution mapping without old-result authority or weaker checks.
+The native V2 rejection remains, V4 positives/negatives and 4,096 bounded query
+histories pass, and H502/r5 publishes an authenticated late-camera bundle with
+7 sources and 3,982 draws. Request/token/epoch/queue and component hashes join;
+the external camera envelope is not per-draw/default-work qualification.
+
+Original replay now stops at a separate contract gap: the captured production
+occlusion-counter backend is not admitted by the real-Metal provider, which
+requires hardware occlusion for every occlusion definition. Forcing hardware
+occlusion changes source publication and fails the exact comparator at event
+4075. R-HARN-REPLAY-9.3–9.5's GPU-query oracle must not be weakened. A separately
+scoped, input-bound same-production-query diagnostic is implemented by
+R-HARN-REPLAY-9.25 / [H506](../../docs/perfomance/present-pacing/present-pacing-production-query-diagnostic.506.md).
+It owns caller-attested source/receipt digests, requires Normal exact-source
+mode, and checks actual Metal/counter/asynchronous construction before effects.
+Four H502/r5 replays preserve 7 sources, 9 Issues, 5 polls, 4 defined query
+results and both original images bit-exactly. Hardware and synchronous negative
+processes reject before setup. Six focused tests and 237 existing TLA
+configurations pass. `gpuResultOracle` remains false: no public policy or
+hardware-result promotion occurs. External receipt contents remain the caller's
+proof obligation. Initial-content authority, warm/low-perturbation cost,
+default-tail CPU ranking and removal budget remain open; first traces include
+V4 qualification and cold prefetch, not exclusive product cost.
+
 ### Normal provider diagnostic — partial qualification
 
 R-HARN-REPLAY-9.23 is implemented in immutable V4 preparation and the private
@@ -276,6 +338,13 @@ from replay wall alone. Evidence:
 `docs/perfomance/present-pacing/present-pacing-v4-single-admission.439.md`.
 
 ### V4 in-process reset boundary
+
+H541's private direct same-device reuse probe violated the named V4 API's
+fresh-device precondition: first invocation matched original pixels, second
+returned `output-mismatch` despite matching query results and wrapper counts.
+No warm timings were collected. This is caller misuse, not qualified warm
+support or a product regression; retain the reset boundary below. Evidence:
+`docs/perfomance/present-pacing/present-pacing-encode-source-selection.541.md`.
 
 Shared-prepared-input fresh-device repetitions are implemented and bounded.
 Capture29 L0/L3/L64 each pass two warm-ups plus 16 actual-Metal executions with

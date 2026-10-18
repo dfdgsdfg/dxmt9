@@ -272,6 +272,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     publishedBlobs_.clear();
     publicationBundle_ = {};
     identityV4ValidationStatus_ = RenderTapeIdentityV4Status::InvalidHeader;
+    identityV4CoordinatorFailure_ = {};
     topologyV1ValidationStatus_ = RenderTapeExecutionTopologyV1Status::InvalidHeader;
     objects_.clear();
     sealedArtifact_.clear();
@@ -1333,6 +1334,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     std::span<const std::byte> completeTopology,
     const RenderTapeActionWitnessV1& actionWitness,
     std::span<const std::byte> attachmentHistory) {
+  identityV4CoordinatorFailure_ = {};
   if (state_ != RenderTapeCaptureState::Sealed ||
       !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
     return RenderTapeCaptureStatus::InvalidState;
@@ -1357,7 +1359,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
   try {
     RenderTapeIdentityV4View identityView;
     identityV4ValidationStatus_ = validateRenderTapeIdentityV4(
-        sealedArtifact_, catalogue_, completeIdentity, &identityView, true);
+        sealedArtifact_, catalogue_, completeIdentity, &identityView, true, &identityV4CoordinatorFailure_);
     if (identityV4ValidationStatus_ != RenderTapeIdentityV4Status::Valid) return reject();
     const auto& h = identityView.header;
     if (!attachmentHistory.empty() &&
@@ -1398,6 +1400,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     const RenderTapeExecutionTopologyV1View& topologySnapshot,
     const RenderTapeActionWitnessV1& actionWitness,
     std::span<const std::byte> attachmentHistory) {
+  identityV4CoordinatorFailure_ = {};
   if (state_ != RenderTapeCaptureState::Sealed ||
       !publicationBundle_.identity.empty() || !publicationBundle_.executionTopology.empty()) {
     return RenderTapeCaptureStatus::InvalidState;
@@ -1423,7 +1426,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::attachCaptureIdentityV4(
     return RenderTapeCaptureStatus::ValidationFailed;
   }
   auto identity = buildRenderTapeIdentityV4(
-      sealedArtifact_, catalogue_, identitySnapshot, &identityV4ValidationStatus_);
+      sealedArtifact_, catalogue_, identitySnapshot, &identityV4ValidationStatus_, &identityV4CoordinatorFailure_);
   if (identity.empty()) {
     abortInternal();
     const bool capacity = identityV4ValidationStatus_ == RenderTapeIdentityV4Status::AllocationFailed ||

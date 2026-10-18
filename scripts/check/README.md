@@ -1,7 +1,14 @@
 # scripts/check
 
-Validation and audit scripts. All entries here are wired into Meson tests
-under `tests/meson.build`.
+Validation and audit scripts. Entries are wired into Meson tests under
+`tests/meson.build` unless explicitly identified as manual integration checks.
+
+- `test_render_tape_arm_request.py` — manual bounded Wine integration check;
+  exercises the production PE request-file reader and same-prefix writer using
+  an existing prefix and built `dxmt9-render-tape-arm-request.exe`. No D3D9/GPU,
+  runtime staging or game launch. Requires explicit `--wine`, `--prefix`,
+  `--exe` and fresh `--output`; preserves image/request hashes and process
+  identity receipts. See `specs/experiments/harness/replay/capture-arm-request.md`.
 
 - `check_drift.sh` — invokes `tools/shader_corpus_tool.py drift` against an
   upstream vkd3d tree (test `dxmt9-drift-report`).
@@ -16,6 +23,10 @@ under `tests/meson.build`.
 - `verify_tla.sh` — runs the TLA+ model checker over the queue, CPU pipeline
   ownership, resource lifetime, encoder lifecycle, and query sequencing specs (test
   `dxmt9-verify-tla`).
+- `check_direct_prefix_prepare.py` — pins the private suffix-prepare capability
+  factory, queue guards, live identity fields and shared gate/model spellings;
+  four source mutations test the structural audit itself (test
+  `dxmt9-direct-prefix-prepare-binding`). This is not a C++ concurrency proof.
 - `gen_pe_transition_table.py` — generates or checks the TLA translation of
   the production PE recorder transition table; `verify_tla.sh` rejects stale
   output before starting TLC.

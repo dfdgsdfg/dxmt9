@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -147,6 +148,9 @@ struct RenderTapeQueryReplayEvidence {
   bool actualMetal = false;
   // CPU replay may prove readiness/order but cannot compare GPU samples.
   bool gpuResultOracle = false;
+  // Private same-production-backend evidence, never hardware sample authority.
+  bool productionCounterDiagnostic = false;
+  RenderTapeDigest productionCounterReceiptDigest{};
   RenderTapeQueryProgressLimit progressLimit = RenderTapeQueryProgressLimit::None;
   std::uint32_t queryDefinitions = 0u;
   std::uint32_t issueRecords = 0u;
@@ -750,6 +754,24 @@ bool renderTapeV4TerminalOutputMismatchMayDefer(
 void renderTapeReduceDeferredOutputMismatch(
     FrameTapeReplayResult& result, std::uint32_t mismatchedEventIndex) noexcept;
 
+// Caller attestation, not a capture component. The harness must independently
+// verify the retained receipt's configuration/images/bundle join. The provider
+// validates input binding and the constructed backend, not external JSON.
+struct RenderTapeProductionQueryDiagnosticV1 {
+  std::uint32_t version = 1u;
+  std::uint32_t primitiveCountOcclusion = 1u;
+  std::uint32_t asynchronousFences = 1u;
+  std::uint32_t reserved = 0u;
+  RenderTapeDigest sourcePlanDigest{};
+  RenderTapeDigest captureReceiptDigest{};
+};
+
+bool renderTapeProductionQueryDiagnosticAdmitted(
+    const RenderTapeProductionQueryDiagnosticV1&, const RenderTapeDigest& sourcePlanDigest,
+    bool normalHistory, RenderTapeExecutionV4PublicationMode) noexcept;
+bool renderTapeProductionQueryBackendMatches(
+    bool hasMetalBackend, bool hardwareOcclusion, bool asynchronousFences) noexcept;
+
 struct RenderTapePreparedV4PreparationOptions {
   std::span<const std::byte> sourceBoundaryIdentity{};
   std::span<const std::byte> sourceExecutionTopology{};
@@ -763,6 +785,7 @@ struct RenderTapePreparedV4PreparationOptions {
   std::span<const std::byte> normalActionProfile{};
   std::span<const std::byte> normalAttachmentHistory{};
   RenderTapeDigest expectedNormalActionDigest{}, expectedNormalHistoryDigest{};
+  std::optional<RenderTapeProductionQueryDiagnosticV1> productionQueryDiagnostic{};
 };
 
 // Owns a validated tape, all referenced blob bytes, and immutable preparation.

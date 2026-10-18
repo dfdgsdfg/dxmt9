@@ -2774,10 +2774,21 @@ struct ChunkSlot {
     if (supply::enabled()) {
       if (auto probe = diagnostic::slotValidationProbe) return probe(*this);
     }
+    return commandPayloadSuffixInRange(0);
+  }
+
+  // A pure range predicate, NOT evidence that an unexamined prefix is valid.
+  // Only an ownership-qualified transaction may substitute it for the full
+  // predicate. Handles and parameter ranges are still checked in full for
+  // every command in the suffix, including references to earlier uniforms.
+  bool commandPayloadSuffixInRange(std::size_t firstCommand) const noexcept {
+    if (firstCommand > commandHeaders.size()) return false;
     if (!drawStateStorageConsistent()) {
       return false;
     }
-    for (const auto& header : commandHeaders) {
+    for (std::size_t command = firstCommand; command < commandHeaders.size();
+         ++command) {
+      const auto& header = commandHeaders[command];
       switch (header.kind) {
       case MetalCommandKind::DrawRun: {
         const auto payloadIndex =

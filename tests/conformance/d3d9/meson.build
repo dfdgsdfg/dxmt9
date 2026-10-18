@@ -6,6 +6,9 @@ c = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 fs = import('fs')
 
+executable('dxmt9-render-tape-arm-request', 'render_tape_arm_request.cpp',
+  install: false)
+
 d3d9_conformance = executable(
   'dxmt9-d3d9-conformance',
   [

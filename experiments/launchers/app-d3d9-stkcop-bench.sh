@@ -179,7 +179,7 @@ export DXMT_EXPERIMENT_WORKDIR="$app_root"
 
 read -r -a extra_args <<< "${DXMT_STKCOP_EXTRA_ARGS:-}"
 echo "[stkcop] running lane=$lane via $test_file"
-exp_run_wine_binary "$app_root/bin_test/xrEngine.exe" \
+exp_run_wine_binary "$DXMT_EXPERIMENT_BINARY" \
   -ltx test.ltx -silent_error_mode -openautomate "$test_file" \
   ${extra_args[@]+"${extra_args[@]}"}
 

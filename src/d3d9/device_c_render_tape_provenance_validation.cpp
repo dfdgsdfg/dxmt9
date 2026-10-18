@@ -271,7 +271,9 @@ Status buildTapeCanonicalFacts(std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue& catalogue,
     std::uint64_t presentOrdinal, std::uint32_t maxRows,
     std::vector<RenderTapeIdentityV3EventFact>& events,
-    std::vector<RenderTapeIdentityV3RecordFact>& records) noexcept {
+    std::vector<RenderTapeIdentityV3RecordFact>& records,
+    TapeCoordinatorFailure* failure) noexcept {
+  if (failure) *failure = {};
   try {
     std::vector<RenderTapeIdentityV3EventFact> eventFacts;
     std::vector<RenderTapeIdentityV3RecordFact> recordFacts;
@@ -321,7 +323,8 @@ Status buildTapeCanonicalFacts(std::span<const std::byte> tape,
               .recordType = record.header.type};
           if (recordTopology(record.header.type)->topology == RecordReplayTopology::OrderedControl) {
             const auto control = makeOrderedControlDisposition(record, 1u, recordIndex);
-            if (!control) return Status::InvalidCoordinator;
+            if (!control) return rejectTapeCoordinator(failure,
+                TapeCoordinatorFailureReason::CanonicalControl, kRenderTapeIdentityV3NoIndex, fact);
             fact.requiredReleaseAction = static_cast<std::uint32_t>(control->requiredReleaseAction);
           }
           if (record.header.type == D9C_COMMAND_RECORD_QUERY_ISSUE) {
@@ -333,8 +336,16 @@ Status buildTapeCanonicalFacts(std::span<const std::byte> tape,
             auto query = std::find_if(queries.begin(), queries.end(), [&](const auto& value) {
               return renderTapeIdentityV3SameIdentity(value.identity, fact.queryIdentity);
             });
-            if (query == queries.end() || !renderTapeAdvanceQueryCycle(query->cycle, issue.flags, true))
-              return Status::InvalidCoordinator;
+            if (query == queries.end() || !renderTapeAdvanceQueryCycle(query->cycle, issue.flags, true)) {
+              fact.queryFlags = issue.flags;
+              if (query != queries.end()) {
+                fact.queryType = query->cycle.type;
+                fact.issueCycle = query->cycle.issueCycle;
+                fact.issueOrdinal = query->cycle.issueOrdinal;
+              }
+              return rejectTapeCoordinator(failure,
+                  TapeCoordinatorFailureReason::QueryCycle, kRenderTapeIdentityV3NoIndex, fact);
+            }
             fact.queryType = query->cycle.type;
             fact.queryFlags = issue.flags;
             fact.issueCycle = query->cycle.issueCycle;
@@ -358,7 +369,8 @@ Status validateTapeProvenanceRows(
     const TapeProvenanceContext& context, const TapeProvenanceRows& identity,
     std::span<const RenderTapeIdentityV3EventFact> events,
     std::span<const RenderTapeIdentityV3RecordFact> records,
-    std::uint32_t maxRows, bool requireComplete) noexcept {
+    std::uint32_t maxRows, bool requireComplete, TapeCoordinatorFailure* failure) noexcept {
+  if (failure) *failure = {};
   if (!tapeProvenanceContextAdmitted(context)) return Status::InvalidHeader;
   if (identity.sources.size() > maxRows ||
       identity.initializers.size() > maxRows ||
@@ -371,7 +383,8 @@ Status validateTapeProvenanceRows(
       records.size() > maxRows) return Status::CapacityExceeded;
   if (!identity.sources.valid()) return Status::InvalidSource;
   if (!identity.commands.valid()) return Status::InvalidDisposition;
-  if (!identity.coordinators.valid()) return Status::InvalidCoordinator;
+  if (!identity.coordinators.valid()) return rejectTapeCoordinator(
+      failure, TapeCoordinatorFailureReason::CoordinatorTable);
   if (!identity.settlements.valid()) return Status::InvalidSettlement;
   try {
     std::vector<Position> cuts;
@@ -502,7 +515,8 @@ Status validateTapeProvenanceRows(
         } else if (kind == Kind::Coordinator) {
           if (!noGpuMembership(row) || row.recordCount != 1u ||
               row.coordinatorIndex >= identity.coordinators.size() || coordinatorUsed[row.coordinatorIndex])
-            return Status::InvalidCoordinator;
+            return rejectTapeCoordinator(failure, TapeCoordinatorFailureReason::DispositionMembership,
+                row.coordinatorIndex, {.eventOrdinal = event.ordinal, .recordIndex = row.firstRecord});
           coordinatorUsed[row.coordinatorIndex] = true;
         } else return Status::InvalidDisposition;
         for (std::uint64_t index = row.firstRecord; index < end; ++index) {
@@ -529,12 +543,14 @@ Status validateTapeProvenanceRows(
                 fact.requiredReleaseAction != static_cast<std::uint32_t>(expectedAction) ||
                 (admission.authority == TapeCoordinatorAuthority::SessionRelease &&
                  control.releaseAction != fact.requiredReleaseAction))
-              return Status::InvalidCoordinator;
+              return rejectTapeCoordinator(failure, TapeCoordinatorFailureReason::ShapeOrRecord,
+                  row.coordinatorIndex, fact);
             if (fact.recordType == D9C_COMMAND_RECORD_QUERY_ISSUE &&
                 (control.flags != fact.queryFlags || control.queryType != fact.queryType ||
                  !renderTapeIdentityV3SameIdentity(control.queryIdentity, fact.queryIdentity) ||
                  control.issueCycle != fact.issueCycle || control.issueOrdinal != fact.issueOrdinal))
-              return Status::InvalidCoordinator;
+              return rejectTapeCoordinator(failure, TapeCoordinatorFailureReason::QueryIdentity,
+                  row.coordinatorIndex, fact);
             if (control.prefixInitializer > context.baselineCompletedInitializer) {
               Position initializerCut{};
               if (!cutPosition(identity.initializers[control.initializerIndex], events, initializerCut) ||
@@ -571,8 +587,10 @@ Status validateTapeProvenanceRows(
     if (recordCursor != records.size() || dispositionCursor != identity.dispositions.size())
       return Status::RecordCoverageMismatch;
     if (settlementCursor != identity.settlements.size()) return Status::InvalidSettlement;
-    if (!std::all_of(coordinatorUsed.begin(), coordinatorUsed.end(), [](bool value) { return value; }))
-      return Status::InvalidCoordinator;
+    const auto unused = std::find(coordinatorUsed.begin(), coordinatorUsed.end(), false);
+    if (unused != coordinatorUsed.end())
+      return rejectTapeCoordinator(failure, TapeCoordinatorFailureReason::UnusedCoordinator,
+          static_cast<std::uint32_t>(unused - coordinatorUsed.begin()));
     // Physical commands are counted once; canonical DrawRun contributors
     // partition subdraws even when state-only records separate them.
     for (std::size_t index = 0u; index < identity.commands.size(); ++index)

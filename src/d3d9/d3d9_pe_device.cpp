@@ -2362,12 +2362,13 @@ HRESULT D3D9DeviceImpl::AppendQueryIssueForChild(
                 flags, static_cast<unsigned>(result));
             abortRenderTapeCapture("query_uncaptured_cycle");
         } else if (!captured) {
-            dxmt9::d3d9::RenderTapeQueryDescriptorV2 descriptor{
+            dxmt9::d3d9::RenderTapeQueryDescriptorV4 descriptor{
                 .type = entry->query.type,
                 .dataBytes = dxmt9::d3d9::renderTapeQueryDataBytes(entry->query.type),
                 .initialState = static_cast<std::uint32_t>(
                     dxmt9::d3d9::RenderTapeQueryInitialState::ClosedWithoutReplayResult),
-                .initialIssueCycle = entry->query.issueCycle};
+                .initialIssueCycle = entry->query.issueCycle,
+                .initialIssueOrdinal = entry->query.issueOrdinal};
             if (entry->descriptor.size() != sizeof(descriptor)) {
                 abortRenderTapeCapture("query_descriptor");
             } else {

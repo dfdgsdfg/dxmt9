@@ -1,4 +1,24 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+pending_clear_fusion_spec = executable(
+  'dxmt9-pending-clear-fusion-spec', 'pending_clear_fusion_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-pending-clear-fusion-spec', pending_clear_fusion_spec)
+
+pending_clear_projection_spec = executable(
+  'dxmt9-pending-clear-projection-spec', 'pending_clear_projection_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pending-clear-projection-spec', pending_clear_projection_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false, timeout: 30)
+
+test('dxmt9-direct-prefix-prepare-binding', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/check_direct_prefix_prepare.py')])
+
 perf_binding_counters_spec = executable(
   'dxmt9-perf-binding-counters-spec', 'perf_binding_counters_spec.cpp',
   include_directories: dxmt9_inc,
@@ -831,6 +851,16 @@ source_payload_spec = executable(
 
 test('dxmt9-source-payload-spec',
      source_payload_spec,
+     env: dxmt9_native_test_env)
+
+direct_prefix_prepare_spec = executable(
+  'dxmt9-direct-prefix-prepare-spec',
+  'direct_prefix_prepare_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-direct-prefix-prepare-spec', direct_prefix_prepare_spec,
      env: dxmt9_native_test_env)
 
 replay_projection_transaction_spec = executable(

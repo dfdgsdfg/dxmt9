@@ -183,6 +183,162 @@ void externalControlProvenanceRoundTrip() {
         "external-control facts do not manufacture command records or source lifecycle rows");
 }
 
+void coordinatorFailureWitness() {
+  using Reason = TapeCoordinatorFailureReason;
+  for (auto authority : {TapeCoordinatorAuthority::SessionRelease, TapeCoordinatorAuthority::OrdinarySerial}) {
+    const auto original = test::makeIdentityV4CoordinatorFixture(authority);
+    for (unsigned mutation = 0u; mutation < 4u; ++mutation) {
+      auto fixture = original;
+      auto expected = Reason::None;
+      if (mutation == 1u) { ++fixture.identity.coordinators[0].provenance.buildGeneration; expected = Reason::AttemptJoin; }
+      if (mutation == 2u) { fixture.identity.coordinators[0].provenance.deviceEpoch = 0u; expected = Reason::ShapeOrRecord; }
+      if (mutation == 3u) { ++fixture.identity.coordinators[0].provenance.issueOrdinal; expected = Reason::QueryIdentity; }
+      Status observed{}, unobserved{};
+      TapeCoordinatorFailure failure{Reason::UnusedCoordinator, 123u};
+      const auto withWitness = buildRenderTapeIdentityV4(fixture.tape, {}, fixture.identity, &observed, &failure);
+      const auto withoutWitness = buildRenderTapeIdentityV4(fixture.tape, {}, fixture.identity, &unobserved);
+      check(observed == unobserved && withWitness == withoutWitness && failure.reason == expected,
+          "cold failure witness preserves exact admission and clears stale evidence on success");
+      if (mutation) check(observed == Status::InvalidCoordinator && failure.coordinatorIndex == 0u,
+          "rejected coordinator carries the original row index");
+      if (mutation >= 2u) check(failure.fact.eventOrdinal == 4u && failure.fact.recordIndex == 0u &&
+          failure.fact.queryType == 9u && failure.fact.queryFlags == 2u && failure.fact.issueOrdinal == 1u,
+          "witness keeps the canonical fact, not the corrupt observed row");
+    }
+  }
+}
+
+void closedQueryOrdinalLossCounterexample(bool explicitHistory) {
+  // H502/r4: a closed occlusion query starts its captured BEGIN at cycle
+  // 509 / absolute Issue ordinal 1017. V2 preserves cycle 508, but has no
+  // place for ordinal 1016. Do not make admission accept the lost history.
+  auto fixture = test::makeIdentityV4CoordinatorFixture(TapeCoordinatorAuthority::OrdinarySerial);
+  ImportedRenderTapeView imported;
+  check(importPrevalidatedRenderTape(fixture.tape, imported), "closed-query fixture imports");
+  RenderTapeBuilder builder;
+  for (std::size_t index = 0u; index < imported.events.size(); ++index) {
+    const auto event = imported.event(index);
+    const auto type = static_cast<RenderTapeEventType>(event.header.type);
+    if (type == RenderTapeEventType::ObjectDefine) {
+      RenderTapeObjectDefineHeader definition{};
+      std::memcpy(&definition, event.payload.data(), sizeof(definition));
+      if (definition.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+        const RenderTapeQueryDescriptorV2 descriptor{.type = 9u, .dataBytes = 4u,
+            .initialState = static_cast<std::uint32_t>(
+                RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+            .initialIssueCycle = 508u};
+        const RenderTapeQueryDescriptorV4 complete{.type = descriptor.type,
+            .dataBytes = descriptor.dataBytes, .initialState = descriptor.initialState,
+            .initialIssueCycle = descriptor.initialIssueCycle, .initialIssueOrdinal = 1016u};
+        builder.appendObjectDefine(definition.identity, definition.descriptorKind,
+            explicitHistory ? std::as_bytes(std::span(&complete, 1u))
+                            : std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+        continue;
+      }
+    }
+    builder.appendRawEvent(type, event.payload);
+  }
+  fixture.tape = builder.seal();
+  for (std::size_t index = 0u; index < fixture.identity.coordinators.size(); ++index) {
+    auto& query = fixture.identity.coordinators[index].provenance;
+    query.issueCycle = 509u;
+    query.issueOrdinal = 1017u + index;
+  }
+  check(validateRenderTape(fixture.tape, {}).valid(),
+      "closed V2 history permits a new captured BEGIN/END, not an old result poll");
+  Status status{};
+  TapeCoordinatorFailure failure{};
+  if (explicitHistory) {
+    const auto bytes = buildRenderTapeIdentityV4(fixture.tape, {}, fixture.identity, &status, &failure);
+    check(!bytes.empty() && status == Status::Valid &&
+        failure.reason == TapeCoordinatorFailureReason::None &&
+        validateRenderTapeIdentityV4(fixture.tape, {}, bytes) == Status::Valid,
+        "explicit history preserves observed 509/1017 BEGIN and 509/1018 END without loosening equality");
+    for (unsigned mutation = 0u; mutation < 3u; ++mutation) {
+      auto invalid = fixture.identity;
+      auto& row = invalid.coordinators[0].provenance;
+      if (mutation == 0u) --row.issueOrdinal;
+      if (mutation == 1u) ++row.queryIdentity.generation;
+      if (mutation == 2u) ++row.issueCycle;
+      check(buildRenderTapeIdentityV4(fixture.tape, {}, invalid, &status, &failure).empty() &&
+          status == Status::InvalidCoordinator && failure.reason == TapeCoordinatorFailureReason::QueryIdentity,
+          "explicit initial history cannot authorize stale ordinal, generation or cycle");
+    }
+    return;
+  }
+  check(buildRenderTapeIdentityV4(fixture.tape, {}, fixture.identity, &status, &failure).empty() &&
+      status == Status::InvalidCoordinator &&
+      failure.reason == TapeCoordinatorFailureReason::QueryIdentity &&
+      failure.coordinatorIndex == 0u && failure.fact.queryFlags == 2u &&
+      failure.fact.issueCycle == 509u && failure.fact.issueOrdinal == 1u &&
+      fixture.identity.coordinators[0].provenance.issueOrdinal == 1017u,
+      "real absolute ordinal must not be rewritten to the V2 capture-local ordinal");
+}
+
+void explicitQueryHistoryValidation() {
+  const RenderTapeQueryDescriptorV4 original{.type = 9u, .dataBytes = 4u,
+      .initialState = static_cast<std::uint32_t>(RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+      .initialIssueCycle = 508u, .initialIssueOrdinal = 1016u};
+  for (unsigned mutation = 0u; mutation < 8u; ++mutation) {
+    auto descriptor = original;
+    if (mutation == 1u) descriptor.initialIssueOrdinal = 0u;
+    if (mutation == 2u) descriptor.initialIssueOrdinal = 507u;
+    if (mutation == 3u) descriptor.initialState = 0u;
+    if (mutation == 4u) descriptor.initialState = 2u;
+    if (mutation == 5u) descriptor.schemaVersion = 3u;
+    if (mutation == 6u) descriptor.dataBytes = 8u;
+    if (mutation == 7u) descriptor.initialIssueCycle = 0u;
+    RenderTapeQueryDescriptorDecoded decoded{};
+    check(renderTapeLoadQueryDescriptor(std::as_bytes(std::span(&descriptor, 1u)), decoded) == (mutation == 0u),
+        "explicit query history validates version, type size, state and independent monotone counters");
+  }
+  RenderTapeQueryDescriptorDecoded decoded{};
+  check(renderTapeLoadQueryDescriptor(std::as_bytes(std::span(&original, 1u)), decoded), "closed history decodes");
+  auto state = renderTapeInitialQueryCycle(decoded);
+  check(state.issueCycle == 508u && state.issueOrdinal == 1016u &&
+      !state.active && !state.capturedCycle && !state.completedEventCheckpoint &&
+      !renderTapeQueryPollCycleAdmitted(state, 508u, 0) &&
+      !renderTapeQueryPollCycleAdmitted(state, 508u, 1) &&
+      !renderTapeAdvanceQueryCycle(state, 1u, true),
+      "history is not old-result authority and does not supply a missing occlusion BEGIN");
+  check(renderTapeAdvanceQueryCycle(state, 2u, true) && state.issueCycle == 509u &&
+      state.issueOrdinal == 1017u && !renderTapeQueryPollCycleAdmitted(state, 509u, 0) &&
+      renderTapeAdvanceQueryCycle(state, 1u, true) && state.issueOrdinal == 1018u &&
+      renderTapeQueryPollCycleAdmitted(state, 509u, 0),
+      "captured BEGIN and END alone establish the next result cycle");
+  state.issueOrdinal = UINT64_MAX;
+  check(!renderTapeAdvanceQueryCycle(state, 2u, true) && state.issueOrdinal == UINT64_MAX,
+      "absolute ordinal overflow fails closed without partial mutation");
+
+  // Bounded refinement of the actual pure reducer: independent captured and
+  // fresh-local histories see the same six-action Issue/poll trace.
+  for (std::uint32_t history = 0u; history < 4096u; ++history) {
+    auto captured = renderTapeInitialQueryCycle(decoded);
+    RenderTapeQueryCycleState local{.type = 9u};
+    auto actions = history;
+    for (unsigned step = 0u; step < 6u; ++step, actions /= 4u) {
+      const auto action = actions % 4u;
+      if (action < 2u) {
+        const auto flags = action + 1u;
+        check(renderTapeAdvanceQueryCycle(captured, flags, true) ==
+            renderTapeAdvanceQueryCycle(local, flags, true),
+            "closed-history and fresh-local reducer admit identical Issue transitions");
+      } else if (captured.capturedCycle) {
+        check(renderTapeQueryPollCycleAdmitted(captured, captured.issueCycle, action - 2u) ==
+            renderTapeQueryPollCycleAdmitted(local, local.issueCycle, action - 2u),
+            "poll readiness shape refines only after a captured replacement cycle");
+      } else {
+        check(!renderTapeQueryPollCycleAdmitted(captured, captured.issueCycle, action - 2u),
+            "pre-cut closed history never authorizes old Ready or Pending observations");
+      }
+      check(captured.issueCycle == original.initialIssueCycle + local.issueCycle &&
+          captured.issueOrdinal == original.initialIssueOrdinal + local.issueOrdinal &&
+          captured.active == local.active && captured.capturedCycle == local.capturedCycle,
+          "independent cycle/ordinal offsets and active membership are invariant under every bounded trace");
+    }
+  }
+}
+
 void writeInspectionFixture(const std::filesystem::path& directory) {
   auto fixture = test::makeIdentityV4Fixture();
   constexpr auto wide = UINT64_C(9007199254740993);
@@ -255,6 +411,10 @@ int main(int argc, char** argv) {
     neutralProvenanceRoundTrip();
     malformedProvenanceRejects();
     externalControlProvenanceRoundTrip();
+    coordinatorFailureWitness();
+    closedQueryOrdinalLossCounterexample(false);
+    closedQueryOrdinalLossCounterexample(true);
+    explicitQueryHistoryValidation();
     return 0;
   }
   catch (const std::exception& error) {

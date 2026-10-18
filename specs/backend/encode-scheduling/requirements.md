@@ -1932,3 +1932,33 @@ candidate, publication, repeated-frame, tail-credit, ordered-control,
 ineligible and capacity outcomes, plus tail reservation, parked join, joined
 submission and pre-effect join failure. Promotion remains subject to
 R-BACK-2.50; native/model mechanism proof is not wild evidence.
+
+**R-BACK-2.107** Direct final-Slot preparation may reuse validation of an
+existing prefix only within one successful assembler reservation and its
+exclusive, owner-thread-pinned build. Successful preparation must imply the
+same command/payload-range validity as a full scan of the final Slot.
+
+Authority must be privately minted by the queue after checking its active
+context, owning thread, exact ticket, Writing destination and source/storage
+identity. It must be move-only, bound to that assembler, destination and
+admission binding, and consumed once before preparation. A stale, foreign,
+moved-from, repeated or terminal authority must reject rather than bypass
+validation. The live identity must come from the queue, not from a claimant's
+copy of its own binding.
+
+All fields read by the full validator in the old prefix must remain unchanged
+while the authority's build is active, and every referenced storage extent
+must remain at least its checkpoint extent. Only the admitted assembler's
+suffix writers may execute. A compatibility append that extends an existing
+DrawRun, clear/reclaim/replacement, foreign writer, reset or terminal transition
+must not preserve this authority. No pointer, size, capacity or allocation
+address alone proves this condition.
+
+Preparation must validate every suffix command and all its referenced
+parameters, payload ranges and uniform identities, including references into
+the prefix. Global SoA consistency and admitted range/dimension conservation
+remain mandatory. Generic raw-value callers must retain full validation.
+Existing reservation, publication, completion, rollback and lifetime behavior
+must not change. Default promotion requires the layered evidence in
+R-VERIF-6.4 and a scope-matched performance comparison; reduced visit counts
+alone do not establish removable CPU.

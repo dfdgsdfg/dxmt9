@@ -42,6 +42,26 @@ enum class TapeProvenanceStatus : std::uint8_t {
   AllocationFailed,
 };
 
+// Cold validation witness, never serialized or used as admission authority.
+// A failure records the original canonical fact before rollback clears it.
+enum class TapeCoordinatorFailureReason : std::uint32_t {
+  None, CanonicalControl, QueryCycle, AttemptJoin, CoordinatorTable,
+  DispositionMembership, ShapeOrRecord, QueryIdentity, UnusedCoordinator,
+};
+struct TapeCoordinatorFailure {
+  TapeCoordinatorFailureReason reason = TapeCoordinatorFailureReason::None;
+  std::uint32_t coordinatorIndex = kRenderTapeIdentityV3NoIndex;
+  RenderTapeIdentityV3RecordFact fact{};
+};
+
+inline TapeProvenanceStatus rejectTapeCoordinator(
+    TapeCoordinatorFailure* failure, TapeCoordinatorFailureReason reason,
+    std::uint32_t index = kRenderTapeIdentityV3NoIndex,
+    RenderTapeIdentityV3RecordFact fact = {}) noexcept {
+  if (failure) *failure = {reason, index, fact};
+  return TapeProvenanceStatus::InvalidCoordinator;
+}
+
 // A physical extent projection, never a synthetic V3 command or Pass row.
 struct TapePhysicalCommand {
   std::uint32_t sourceIndex = kRenderTapeIdentityV3NoIndex;
@@ -234,7 +254,8 @@ bool tapeProvenanceObservationAdmitted(const TapeProvenanceContext&,
 TapeProvenanceStatus buildTapeCanonicalFacts(std::span<const std::byte> tape,
     const RenderTapeBlobCatalogue&, std::uint64_t presentOrdinal,
     std::uint32_t maxRows, std::vector<RenderTapeIdentityV3EventFact>& events,
-    std::vector<RenderTapeIdentityV3RecordFact>& records) noexcept;
+    std::vector<RenderTapeIdentityV3RecordFact>& records,
+    TapeCoordinatorFailure* failure = nullptr) noexcept;
 
 // Conserves all original records, physical commands, coordinator releases,
 // immutable END cursors and independent render/initializer lifecycle edges.
@@ -243,6 +264,6 @@ TapeProvenanceStatus buildTapeCanonicalFacts(std::span<const std::byte> tape,
 TapeProvenanceStatus validateTapeProvenanceRows(const TapeProvenanceContext&,
     const TapeProvenanceRows&, std::span<const RenderTapeIdentityV3EventFact>,
     std::span<const RenderTapeIdentityV3RecordFact>, std::uint32_t maxRows,
-    bool requireComplete = true) noexcept;
+    bool requireComplete = true, TapeCoordinatorFailure* failure = nullptr) noexcept;
 
 } // namespace dxmt9::d3d9

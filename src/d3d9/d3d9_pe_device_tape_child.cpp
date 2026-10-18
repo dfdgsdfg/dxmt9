@@ -1093,7 +1093,7 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedQuery(
         AbortRenderTapeCaptureForChild();
         return;
     }
-    const dxmt9::d3d9::RenderTapeQueryDescriptorV2 descriptor{
+    const dxmt9::d3d9::RenderTapeQueryDescriptorV4 descriptor{
         .type = dxmt9c_query_get_type(query),
         .dataBytes = dxmt9c_query_get_data_size(query)};
     if (descriptor.dataBytes == 0u ||

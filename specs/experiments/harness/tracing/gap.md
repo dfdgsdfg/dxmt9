@@ -37,6 +37,17 @@ qualify an unavailable external collector or establish negligible overhead.
 | R-HARN-TRACE-11.4–11.6 | Portable wrap-safe perf parsing, loss/throttle records, sample/register semantics and attribution exclusions. | Fixtures do not establish live Linux scheduling or macOS target coverage. |
 | R-HARN-TRACE-11.7–11.8 | Owned bounded attach/detach state model and fail-closed capability admission. | No live target mutation occurs without an admitted adapter. No perftrace code or mandatory dependency is included. |
 
+## External Collection
+
+External collection gaps are owned by the
+[address/register probe contract](external-probes.md):
+
+| Contract | Status | Current evidence | Missing implementation or evidence |
+|---|---|---|---|
+| R-HARN-TRACE-11.1–11.3: platforms and sites | partial | REA provenance rules and the PE sampler provide discovery inputs; the Linux reference project is identified. | Admitted platform adapters, loaded-address/ABI validation, breakpoint capacity and thread-lifecycle coverage. |
+| R-HARN-TRACE-11.4–11.6: transport and meaning | not started | Inspected perftrace blobs are reference material, not a qualified collector. | Wrap-safe/loss-aware transport, register/sample normalization, identity/clock joins, invocation checks and observer controls. |
+| R-HARN-TRACE-11.7–11.8: lifecycle/admission | not started | [External probe verification](external-probes.md#verification-and-admission) defines acceptance. | Attach/detach model/code evidence, actual Linux/macOS capability fixtures, preserved target state and pinned Perfetto consumer checks. |
+
 ## Existing Component Entry Points
 
 - `src/dxmt9/dxmt9_cpu_supply_trace.{hpp,cpp}` and

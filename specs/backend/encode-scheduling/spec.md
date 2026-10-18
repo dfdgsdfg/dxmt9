@@ -2468,6 +2468,53 @@ because aggregate denials and the remaining CB/pass locality gap still fail
 promotion. Bounded GT2 original-pixel policy qualification is recorded in
 `gap.md`; wild GT2 performance/locality promotion remains separate.
 
+### Transaction-local prefix preparation (R-BACK-2.107)
+
+`TransactionalChunkSlotAssembler::reserve` remains the full prefix validator.
+The new suffix predicate is only a range predicate; it cannot establish
+validity of an unexamined prefix. Public `prepare` and generic value fixtures
+continue to run the full reference validator.
+
+The experimental queue path mints a private `PrefixPrepareCapability` at the
+existing commit gate after active-context, owner-thread, ticket, Writing-slot
+and source/storage checks. The capability snapshots the admitted binding with
+its identity fields derived from the live queue ticket. It is consumed
+immediately under the commit lock, never stored across transactions. Reserve
+and build need not hold that mutex continuously: their protection is the
+existing active Direct build's single-writer exclusion. This premise must not
+be replaced by an uninterrupted-lock argument.
+
+`decidePrefixPrepare` is the shared pure gate: a non-buildable assembler rejects;
+an absent capability retains full validation; a present capability requires
+identity equality and checkpoint extent preservation before suffix validation.
+Mismatch rejects. All terminal states reject consumption. Every newly built
+command is checked using the same validator body as the full path, while the
+usual global SoA and range-conservation checks remain in `prepareImpl`.
+
+The prefix field-preservation argument is specific to this assembler: its open
+run starts closed at reservation, so all extended DrawRuns belong to its new
+suffix; uniform interning preserves old semantic rows; coordinator appenders
+only add rows and close its open run. Lookup links may change because the range
+validator does not read them. Compatibility appenders, which can extend an old
+DrawRun, are excluded. PSO/depth-stencil patches are not dependencies of this
+range predicate and grant no semantic publication authority.
+
+The reference is full validation of the same final Slot. Bounded ownership
+transition checking, actual-predicate fault tests and stale/move/ABA tests must
+precede identical-input source/query/pixel comparison and performance evidence.
+Models exclude arbitrary memory corruption, Metal/driver behavior and raw
+aliases violating the queue's single-writer contract. They must explicitly
+exercise a foreign writer and generation change with the exclusion removed as
+counterexamples. No GPU or default performance claim follows from value tests.
+
+`DirectPrefixPrepare.tla` binds this bounded protocol to
+`direct_prefix_prepare_spec.cpp` (production gate, real suffix/full predicates,
+identity/extent faults and actual append/rollback) and
+`scripts/check/check_direct_prefix_prepare.py` (factory placement and live
+identity drift pins). The latter is structural evidence, not proof of C++
+interleavings. Foreign prefix mutation, ignored generation, repeated consumption
+and reopened terminal rollback have independent expected-counterexample configs.
+
 ### Retained-capacity reuse on a reclaimed payload (R-BACK-2.105)
 
 Optional provisioning denial and allocation rollback have a separate exact
