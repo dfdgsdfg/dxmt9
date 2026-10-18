@@ -45,3 +45,20 @@ The [analytics contract](../../specs/experiments/harness/tracing/spec.md#optiona
 owns qualification, exact values and adoption gates. Use the shared
 [cputrace/gputrace analysis workflow](../../agents/skills/cputrace/references/perfetto.md#optional-cross-run-analysis)
 to decide whether DuckDB improves a measured query bottleneck.
+
+## Retention and compression
+
+Follow the [artifact retention policy](../../specs/experiments/harness/tracing/artifact-retention.md)
+for storage budgets, pins, evidence dependencies and verified restoration.
+Review defaults are 7 days for reproducible unreferenced intermediates, 14 days
+for cold compression and 90 days for unreferenced evidence deletion review.
+Failed attempts remain for at least 30 days and through issue resolution;
+cited/pinned evidence has no automatic expiry. These ages select candidates,
+not automatic deletion. Stopped scratch can be removed after output validation.
+
+Archives and operation records belong outside sealed analysis directories in
+`experiments/output/_retention/{archives,operations}/`. The Brewfile supplies
+`zstd`; use bounded offline compression and verify an extracted copy against
+original digests before removing materialized bytes. Keep current cited paths
+available until archive-aware readers/audits exist. General retention tooling
+and automatic budget enforcement are not implemented yet.

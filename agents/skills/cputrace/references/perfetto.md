@@ -252,6 +252,28 @@ today.
 Treat this as an adoption workflow, not an available harness command. An
 unavailable optional analysis tool does not invalidate the source capture.
 
+## Manage analysis storage
+
+Use the [retention policy](../../../../specs/experiments/harness/tracing/artifact-retention.md)
+before compression or deletion. It owns default review ages and protection rules.
+
+1. Inventory selected run/analysis roots, sizes, lifecycle state, pins and
+   references, including current documents and dependent manifests. Unknown
+   ownership or references require review. Do not infer safety from age alone.
+2. Prefer stopped scratch and verified reproducible unreferenced intermediates.
+   Record the selected candidates, expected savings and available staging space.
+3. For cold evidence, retain a closed-byte zstd archive plus original member
+   paths/digests under `experiments/output/_retention/`. Verify full extraction
+   before considering original-copy removal; preserve sealed manifests.
+4. Record actual actions and failures. Restore original paths/bytes before
+   path-bound consumers run; keep currently cited paths materialized until
+   archive-aware readers and source audits exist.
+
+There is no general retention/restore command yet. The existing
+`scripts/tools/summarize_3dmark05_cleanup_candidates.py` reports only matching
+3DMark05 run directories and name references; it does not authorize removal or
+verify complete dependencies. No automatic compression/deletion is implied.
+
 ## Optional asynchronous persistence
 
 Use `--trace-drain-mode async` to persist bounded binary batches during capture.

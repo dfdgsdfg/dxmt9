@@ -147,6 +147,12 @@ explicit time/memory budgets, exact-value/provenance parity and rejection tests
 for incompatible schemas, mismatched digests and invalid joins. Availability
 of DuckDB alone is not a reason to replace the per-run SQLite contract.
 
+Trace and derived analysis storage follows the
+[artifact retention contract](artifact-retention.md), R-HARN-TRACE-18.1–18.5.
+Pins and evidence dependencies override review ages. Compression preserves
+original digests through verified restoration; availability records remain
+external to sealed manifests. Disk budgets include archive and restore staging.
+
 ## 2. Collection Lifecycle and Profiles
 
 ```mermaid

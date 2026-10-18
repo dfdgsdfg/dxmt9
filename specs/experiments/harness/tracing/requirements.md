@@ -553,3 +553,25 @@ own completion and digest provenance. Deferred mutable renderer reads are forbid
 must survive experiment/test provenance and native/SQLite round trips. Verification
 must cover consumer independence, unwritable files, mutation after publication,
 transport loss and raw sample clocks; live overhead qualification remains explicit.
+
+## 18. Artifact Retention and Recoverable Storage
+
+**R-HARN-TRACE-18.1** Storage policy must distinguish active data, temporary
+scratch, reproducible derived outputs and retained evidence. Pins, unresolved
+ownership and transitive evidence references must override age-based cleanup.
+
+**R-HARN-TRACE-18.2** Compression must preserve original artifact bytes and sealed
+manifests. Removing materialized inputs requires verified archive extraction and
+original digest parity, with a durable source-to-archive availability record.
+
+**R-HARN-TRACE-18.3** Cleanup must default to a non-mutating inventory and apply
+only selected, revalidated candidates under exclusive ownership. Partial failure
+must retain an audit trail; source loss must not remain advertised as available.
+
+**R-HARN-TRACE-18.4** Analysis and archive operations must declare disk/spill and
+free-space budgets including staging/restore overhead. Capacity pressure must
+not trigger deletion of active, referenced or pinned evidence.
+
+**R-HARN-TRACE-18.5** Archive-aware consumers must restore and validate original
+identities before qualification. Retention acceptance must test live-owner,
+reference, stale-plan, corruption, interruption and exact restoration failures.

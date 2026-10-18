@@ -122,6 +122,23 @@ the optional CLI without making it a capture prerequisite.
 Use the [cross-run analysis workflow](../skills/cputrace/references/perfetto.md#optional-cross-run-analysis)
 for adoption decisions.
 
+## Artifact retention
+
+- Apply the [retention contract](../../specs/experiments/harness/tracing/artifact-retention.md)
+  to explicitly scoped trace/analysis roots. Age and disk pressure identify
+  candidates; neither overrides live owners, pins or evidence dependencies.
+- Treat raw spool, receipts and completion proofs as evidence when the artifact
+  graph references them. Do not delete them as temporary files by extension.
+- Preserve sealed bytes and manifests. Compression uses an external archive
+  mapping and verified restoration; do not gzip/replace files or VACUUM sealed
+  SQLite in place. Do not remove live WAL or unresolved crash-recovery data.
+- Inventory first; recheck paths, digests, ownership and transitive references
+  before applying selected actions. Include current uncommitted evidence docs.
+  The existing 3DMark05 name-based inventory is not a general deletion gate.
+- Keep cited paths materialized while readers/audits lack archive resolution.
+  Record deletion/eviction explicitly; unavailable evidence cannot support a
+  fresh qualified claim. Retention tools and automatic cleanup remain unimplemented.
+
 ## Shared acquisition
 
 - The SDK-independent observation source owns physical acquisition. Trace and

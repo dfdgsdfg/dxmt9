@@ -28,6 +28,7 @@ brew "winetricks"
 # Offline cross-run analytics (experiments/analysis/).
 # Installed by brew bundle; not an engine or capture runtime dependency.
 brew "duckdb"
+brew "zstd"
 
 # Target application analysis with REA (see agents/rules/debug_rea.rules.md)
 brew "ghidra"

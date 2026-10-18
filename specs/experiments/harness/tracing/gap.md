@@ -51,6 +51,17 @@ and a developer CLI entry in `Brewfile`. No integrated exporter or scale/parity
 benchmark is provided. Adoption is conditional on a measured analytical query need;
 this is not a required runtime collector or a gap in per-run SQLite publication.
 
+## Artifact retention
+
+R-HARN-TRACE-18.1–18.5 is specified in [artifact retention](artifact-retention.md).
+Retention classes, review ages, storage locations and developer `zstd` support
+are documented. The existing 3DMark05 cleanup inventory is non-destructive and
+uses run-name references; it does not prove transitive artifact safety. No
+general retention planner/applier, archive/restore verifier, pin registry,
+archive-aware source audit or budget enforcement is implemented. Existing
+consumers still require materialized source paths. No automatic deletion or
+compression is enabled by this specification.
+
 ## External Collection
 
 External collection gaps are owned by the
