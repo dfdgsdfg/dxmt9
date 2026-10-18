@@ -74,6 +74,11 @@ Existing consumers require materialized source paths, so cited evidence remains
 materialized. No automatic expiry or cleanup timer is enabled. See the
 [operational workflow](../../../../experiments/analysis/retention.md).
 
+R-HARN-TRACE-18.6–18.7 specifies archive resolution, shared reader leases,
+archived-source audits and digest-bound reader-contract admission. These are
+not implemented yet; referenced source eviction remains blocked until their
+recovery and consumer parity tests qualify the selected file class.
+
 ## External Collection
 
 External collection gaps are owned by the

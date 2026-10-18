@@ -575,3 +575,17 @@ not trigger deletion of active, referenced or pinned evidence.
 **R-HARN-TRACE-18.5** Archive-aware consumers must restore and validate original
 identities before qualification. Retention acceptance must test live-owner,
 reference, stale-plan, corruption, interruption and exact restoration failures.
+
+**R-HARN-TRACE-18.6** Archive resolution must preserve logical source paths and
+expected content identities, validate the archive/operation binding and extracted
+bytes, and fail closed on corrupt, ambiguous, missing or interrupted records.
+Resolution must use bounded temporary storage and coordinate readers with
+retention mutations. Source audits must distinguish recoverable archives from
+missing/deleted evidence, including archived members below a cited directory.
+
+**R-HARN-TRACE-18.7** Referenced-file archival must require a qualified reader
+contract, digest-bound original/restored reader parity and an explicit reader
+scope review. Pins, owner/lifecycle checks and review ages still apply. Archival
+must retain every byte and logical dependency; it must not authorize permanent
+deletion or derived pruning of referenced evidence. Unqualified formats/readers
+remain materialized or require explicit verified restoration before use.

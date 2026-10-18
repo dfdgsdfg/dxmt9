@@ -7,7 +7,7 @@ tags: [specs, experiments, tracing, storage, provenance]
 
 # Trace and Analysis Artifact Retention
 
-Defines R-HARN-TRACE-18.1–18.5 for trace/analysis artifacts under explicitly
+Defines R-HARN-TRACE-18.1–18.7 for trace/analysis artifacts under explicitly
 selected `experiments/output/` and `traces/` roots. It does not authorize
 blanket cleanup of all experiment outputs, worktrees, Wine prefixes or builds.
 Current implementation limits are recorded in [gap](gap.md#artifact-retention).
@@ -33,7 +33,9 @@ Pins override every age threshold. References include uncommitted current
 documents, `docs/perfomance/`, specs, test evidence and other analysis manifests.
 An empty filename search is not proof of no references: resolve the artifact
 graph, including digest references and indirect dependencies. Unknown references
-or unreadable inputs block eviction. Deduplication also requires exact bytes
+or unreadable inputs block permanent deletion and derived pruning. Recoverable
+archival uses the reader-compatibility admission below and preserves those
+dependency edges; it does not infer that references are absent. Deduplication also requires exact bytes
 and preserved logical references, not matching filenames or similar traces.
 
 ## Storage and compression
@@ -72,10 +74,12 @@ Sealed source manifests and proofs remain byte-identical. Retention records form
 an external availability index: `materialized`, `archived`, `pruned-derived` or
 `deleted`. Restore original bytes to their original expected paths before using
 path-bound consumers; never replace a digest-bound file with a pointer stub.
-Current readers and source audits require materialized paths and do not resolve
-this index. Keep actively cited paths materialized until archive-aware resolution
-and audits are implemented and qualified. Archived evidence is recoverable,
-not immediately queryable; deleted evidence cannot support fresh verification.
+Archive-aware readers may resolve a logical source to a verified temporary
+extraction without changing source manifests or writing pointer stubs. Readers
+without such an adapter must explicitly restore the original expected path
+before use. Only qualified reader contracts admit referenced-file archival;
+other cited paths remain materialized. Deleted evidence cannot support fresh
+verification.
 
 ## Capacity and cleanup ordering
 
@@ -105,3 +109,45 @@ expansion limits, interrupted publication/deletion and exact reader revalidation
 Permanent deletion leaves a tombstone and updates dependent evidence claims;
 follow [documentation rules](../../../../agents/rules/documentation.rules.md#the-outdated-key-for-docsperfomance-leaves)
 when cited evidence is lost. Preserve unknown or failed outcomes explicitly.
+
+## Archive-aware resolution and admission
+
+The availability record binds repository-relative logical path, original file
+snapshot, archive digest/location, frozen plan digest, successful operation and
+reader qualification. A resolver must not accept an archive-copy receipt as
+permission to hide a missing source: source eviction must be explicitly recorded
+as completed. Conflicting identities for a missing logical path are ambiguous;
+expected digests may disambiguate, otherwise fail closed. Interrupted operations
+require explicit recovery rather than guessing the last completed state.
+
+Resolve under a shared retention lease; mutations hold the exclusive lease.
+Prefer an existing regular source, retaining caller-supplied digest checks.
+For an archived source, verify the operation binding and archive hash, fully
+extract and validate original bytes in bounded private staging, and remove that
+staging after the read. Do not silently leave restored bulk files at original
+paths or cache unbounded copies. Capacity policy comes from the frozen operation;
+a resolver may refuse a read if restore headroom is insufficient.
+
+A source audit may accept archived evidence only after the same recovery
+validation. A cited existing directory must also validate missing archived
+members beneath it; directory existence alone does not prove that those bytes
+remain available. Report the number of verified archived sources separately
+from missing/deleted evidence. Do not rewrite historical source citations.
+
+The initial qualified contracts are CPU supply v2 and wait trace v1 CSV inputs
+through their shared readers. Qualification binds the source/archive digest,
+reader/resolver/audit implementation identities, and parsed original/restored
+result parity. A review names the contract and confirms that known readers use
+that adapter or explicit original-path restore. Recheck qualification before
+source removal; code drift, a mismatched source or an incompatible reader blocks
+admission. Other formats retain the existing materialized-reference protection.
+
+Referenced archival preserves the complete file, identity and logical reference;
+it does not remove a dependency from the evidence graph. Global unrelated opaque
+metadata is therefore not an absence-of-references test for this narrow lane.
+Candidate-specific unresolved lifecycle/recovery, incompatible readers, pins and
+age gates still block it. Permanent deletion and derived pruning continue to
+require the conservative full dependency checks. Storage verification/parity
+reads do not invent a historical analysis-use timestamp or reset scientific
+analysis age; use the latest explicitly recorded analysis use, including prior
+retention reviews. No age exception is introduced.
