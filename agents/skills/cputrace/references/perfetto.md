@@ -266,14 +266,15 @@ before compression or deletion. It owns default review ages and protection rules
    paths/digests under `experiments/output/_retention/`. Verify full extraction
    before considering original-copy removal; preserve sealed manifests.
 4. Record actual actions and failures. Restore original paths/bytes before
-   path-bound consumers run; keep currently cited paths materialized until
-   archive-aware readers and source audits exist.
+   path-bound consumers run. CPU supply v2 and wait trace v1 readers now resolve
+   qualified archives; other cited formats remain materialized.
 
 Use `scripts/tools/retain_trace_artifacts.py` for `inventory`, `plan`, `apply`
 and `restore`; follow the [offline retention workflow](../../../../experiments/analysis/retention.md)
 for lifecycle review records, pins and capacity overrides. Default `archive-copy`
-preserves cited sources. Eviction supports explicitly reviewed bulk files and
-blocks unknown/opaque dependency metadata. The old
+preserves cited sources. Referenced CPU/wait CSV archival requires
+`retention_readers.py` parity qualification and a reader-scope review; see the
+workflow above. Permanent deletion/pruning still blocks unknown dependencies. The old
 `scripts/tools/summarize_3dmark05_cleanup_candidates.py` remains an inventory,
 not an eviction gate. No automatic compression/deletion is enabled.
 

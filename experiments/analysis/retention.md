@@ -23,7 +23,7 @@ before applying. Inventory and planning never remove source data.
 | Action | Behavior |
 |---|---|
 | `archive-copy` (default) | Create and fully extract/verify an archive while keeping the original. Suitable for validating recovery of cited evidence. No minimum age because it does not evict anything. |
-| `archive` | Compress a closed, reviewed, unreferenced bulk file after 14 days; remove it only after full verification and a second safety check. Skip eviction if compression does not reduce logical size. |
+| `archive` | Compress a closed, reviewed bulk file after 14 days; references additionally require qualified reader admission. Remove it only after full verification and a second safety check. Skip eviction if compression does not reduce logical size. |
 | `delete` | Permanently remove an explicitly reviewed, unreferenced bulk file after 90 days. Preserve a digest tombstone and compact review evidence. |
 | `prune` | Remove stopped scratch or reproducible derived bulk files after output/input verification. Derived data requires 7 days and a verified regeneration record. |
 
@@ -31,7 +31,8 @@ Eviction supports individual bulk files. It does not recursively delete run
 folders. JSON manifests, requests, receipts, proofs, summaries and unknown file
 classes remain materialized. Directory bundles support `archive-copy` and
 verified restoration to a new directory. Failed/rejected source eviction also
-requires issue resolution and at least 30 days. Pins and references override age.
+requires issue resolution and at least 30 days. Pins override age. References require the qualified reader workflow below for
+recoverable archival; they still block permanent deletion and derived pruning.
 
 ## Lifecycle review and pins
 
@@ -124,7 +125,7 @@ stopped before the reviewer asserts exclusive ownership.
 
 ## Reference scan limits
 
-The scan includes current/untracked documents in `docs`, `specs`, `tests`,
+The conservative deletion/pruning scan includes current/untracked documents in `docs`, `specs`, `tests`,
 `agents`, `scripts`, `experiments/analysis`, root-level text documents/configs,
 and textual artifact metadata under `experiments/output` and `traces`.
 Path, basename, ancestor run-name and member-digest matches protect the source.
@@ -138,9 +139,58 @@ Unreadable, malformed, oversized or opaque metadata blocks eviction. SQLite,
 DuckDB and Parquet dependency metadata do not yet have qualified graph adapters.
 Symlinks, hardlinked eviction sources, open handles, unresolved WAL/SHM/journal,
 missing lifecycle data and unknown ownership also block eviction. This is not a
-generic binary dependency parser, archive-aware source audit or live-writer lock.
-Existing source audits and analysis consumers still require materialized paths;
-cited files remain in place even when an archive-copy exists.
+generic binary dependency parser or live-writer lock.
+Source audits now verify recoverable archives, including missing archived files
+below a cited directory. CPU supply and wait CSV shared readers resolve original
+logical paths automatically. Other analysis consumers require explicit restore;
+an archive-copy alone never makes an unexpectedly missing source acceptable.
 
 Real-data recovery and blocked cleanup evidence is recorded in the
 [2026-10-18 qualification](../../docs/perfomance/present-pacing/artifact-retention-recovery-20261018.md).
+Subsequent qualified source eviction and original-path consumer parity are
+recorded in the [reader archival result](../../docs/perfomance/present-pacing/artifact-retention-readers-20261018.md).
+
+## Archive referenced CPU/wait CSV evidence
+
+The `cpu-supply-v2` and `wait-trace-v1` contracts admit recoverable archival after
+original/restored parser parity. All ordinary ownership, recovery, pin and age
+gates remain in force; this does not authorize deleting referenced evidence.
+
+1. Create and apply a single-source `archive-copy` plan with a truthful lifecycle
+   review and the required staging capacity. Keep the original source in place.
+2. Qualify that copy with the matching reader:
+
+   ```sh
+   scripts/run_python.sh scripts/tools/retention_readers.py \
+     --receipt experiments/output/_retention/operations/COPY_OPERATION/receipt.json \
+     --contract cpu-supply-v2
+   ```
+
+3. Add `reader_contract`, `reader_scope_complete: true`, and
+   `reader_qualification: {"path": "experiments/output/_retention/operations/COPY_OPERATION/reader-qualification-cpu-supply-v2.json", "sha256": "actual report SHA256"}`
+   to the lifecycle review. Record known readers and their adapter or explicit
+   restore workflow. Add `analysis_use_evidence` as path/SHA256 records naming
+   performance documents with an `updated` date; the reviewed last-use time must
+   be at least the end of that date in UTC. Include any later known use. A newer
+   prior retention review for the same source or an ancestor cannot be backdated.
+4. Generate a new `archive` plan and inspect it, then apply it. Qualification
+   binds original bytes, archive, reader/resolver/audit code and parsed parity.
+   Any code drift before removal requires fresh qualification. Unrelated opaque
+   metadata does not prove missing references: this lane retains the complete
+   byte content and logical dependency instead of pruning that dependency.
+5. Re-run the existing reader against the original logical source path and run
+   the source audit on its citing documents. The reader/audit verifies the ledger,
+   archive and exact extraction under a shared lease, then removes its private
+   staging copy. No bulk file is left behind at the original path.
+
+Keep all operation plans, receipts, contents and qualification reports. Missing,
+changed, ambiguous, interrupted or tombstoned records fail closed. Historical
+qualification identity is checked on reads; later code changes do not by
+themselves make a previously verified archive unreadable. Original source paths
+and manifests remain the provenance identifiers; temporary paths never replace
+them. A missing logical path with only an `archive-copy` receipt remains missing.
+
+Materialized reader inputs keep their usual relative-to-current-directory
+semantics. A missing input outside the selected repository cannot resolve to
+that repository's archives. Shared readers exclude concurrent retention
+mutations; they do not stop an independent live capture producer.

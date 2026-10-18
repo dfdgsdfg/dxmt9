@@ -53,7 +53,7 @@ this is not a required runtime collector or a gap in per-run SQLite publication.
 
 ## Artifact retention
 
-R-HARN-TRACE-18.1–18.5 is specified in [artifact retention](artifact-retention.md).
+R-HARN-TRACE-18.1–18.7 is specified in [artifact retention](artifact-retention.md).
 Status: **partial**. `scripts/tools/retain_trace_artifacts.py` implements
 inventory, frozen explicit plans, manual digest-bound lifecycle reviews,
 path/digest pins, conservative reverse-reference checks, a mutation lease,
@@ -65,19 +65,26 @@ including simultaneous staging and allocation overhead. Focused tests are
 `dxmt9-retention-archive` and `dxmt9-trace-retention`.
 
 Eviction is limited to individual reviewed bulk files; directory bundles can be
-archive-copied. Unknown/opaque dependency metadata blocks eviction. Automatic
+archive-copied. Unknown/opaque dependency metadata blocks unqualified eviction. Automatic
 producer lifecycle qualification, SQLite/DuckDB/Parquet dependency adapters,
-archive-aware source audits/readers, integrated 10 GiB analysis quotas and
+other archive-aware analysis adapters, integrated 10 GiB analysis quotas and
 unattended interrupted-operation recovery remain unimplemented. The mutation
 lease does not lock producers; explicit offline owner closure is required.
-Existing consumers require materialized source paths, so cited evidence remains
-materialized. No automatic expiry or cleanup timer is enabled. See the
+Unqualified consumers require materialized source paths or explicit restoration. No automatic expiry or cleanup timer is enabled. See the
 [operational workflow](../../../../experiments/analysis/retention.md).
 
-R-HARN-TRACE-18.6–18.7 specifies archive resolution, shared reader leases,
-archived-source audits and digest-bound reader-contract admission. These are
-not implemented yet; referenced source eviction remains blocked until their
-recovery and consumer parity tests qualify the selected file class.
+R-HARN-TRACE-18.6–18.7: **implemented for individual CPU supply v2 and wait
+trace v1 CSVs**. `retention_resolver.py` verifies frozen operation/content/archive
+bindings, resolves under shared leases into bounded temporary storage, and rejects
+interrupted, ambiguous or tombstoned histories. The shared CPU/wait readers and
+performance source audit use it, including missing archived descendants of cited
+directories. `retention_readers.py` qualifies original/restored parser parity and
+binds source/archive/reader identities before referenced-file archival. Pins,
+owner/recovery checks, analysis-use documentation and age gates remain active.
+Tests: `dxmt9-retention-resolver`, `dxmt9-retention-readers`,
+`dxmt9-cpu-supply-analysis`, `dxmt9-wait-trace-spec`, and
+`dxmt9-audit-perf-docs-sources`. Other formats, native Perfetto/SQLite readers and
+large directory-bundle eviction remain outside this admission scope.
 
 ## External Collection
 

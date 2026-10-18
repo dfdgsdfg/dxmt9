@@ -37,6 +37,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 - `retain_trace_artifacts.py` — explicit evidence-aware inventory/plan/apply/restore;
   protects citations, pins, lifecycle evidence and live owners. See
   [retention workflow](../../experiments/analysis/retention.md).
+- `retention_readers.py` — qualify original/restored CPU supply or wait CSV
+  parser parity before referenced-file archival.
+- `retention_resolver.py` — shared-lease, digest-bound archive reads and source
+  availability verification without persistent restored copies.
 - `retention_archive.py` — bounded zstd archive and exact restore verification;
   never deletes source artifacts.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank

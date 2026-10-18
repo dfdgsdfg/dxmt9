@@ -9,7 +9,7 @@ tree is clean.
 
 Source entries are separated by semicolons (the preferred spelling) or commas,
 and support simple brace expansion such as ``run-{gt1,gt3}``. Every expanded
-entry must name a surviving file or directory. A source fragment (for example
+entry must name a surviving file/directory or verified recoverable archive. A source fragment (for example
 ``result.json#L1-L4``) is checked by its path without the fragment.
 """
 
@@ -190,7 +190,28 @@ def _source_path(raw_source: str, repo_root: Path) -> Path:
     return path if path.is_absolute() else repo_root / path
 
 
-def audit_paths(paths: list[Path], repo_root: Path = REPO_ROOT) -> list[str]:
+def _retention_resolver():
+    """Load the shared archive adapter for both CLI and importlib callers."""
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from scripts.tools import retention_resolver
+    return retention_resolver
+
+
+def _is_retention_source(source_path: Path, repo_root: Path) -> bool:
+    for root in (repo_root / "traces", repo_root / "experiments" / "output"):
+        try:
+            source_path.resolve().relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def audit_paths(
+    paths: list[Path], repo_root: Path = REPO_ROOT, *, stats: dict[str, int] | None = None
+) -> list[str]:
     """Audit source metadata and surviving concrete paths for *paths*."""
 
     failures: list[str] = []
@@ -230,10 +251,27 @@ def audit_paths(paths: list[Path], repo_root: Path = REPO_ROOT) -> list[str]:
             if legacy_exception:
                 continue
             source_path = _source_path(raw_source, repo_root)
-            if not source_path.exists():
+            available = source_path.exists()
+            recovery_error = None
+            if _is_retention_source(source_path, repo_root):
+                try:
+                    archived = _retention_resolver().verify_available(
+                        source_path, repo=repo_root
+                    )
+                except (OSError, ValueError, RuntimeError, TypeError, KeyError) as error:
+                    available = False
+                    recovery_error = str(error)
+                else:
+                    if stats is not None:
+                        stats["archived_sources"] = stats.get("archived_sources", 0) + archived
+                    # verify_available validates archived descendants of a cited
+                    # directory as well as resolving a missing cited file.
+                    available = True
+            if not available:
                 failures.append(
                     f"{path}: source path does not exist: "
                     f"{raw_source.split('#', 1)[0].strip()}"
+                    + (f"; archive resolution: {recovery_error}" if recovery_error else "")
                 )
     return failures
 
@@ -265,13 +303,21 @@ def main() -> int:
         paths = list(dict.fromkeys(paths))
         scope = "changed + accepted-verdict"
 
-    failures = audit_paths(paths)
+    stats = {"archived_sources": 0}
+    failures = audit_paths(paths, stats=stats)
     if failures:
-        print("audit_perf_docs_sources: FAIL", file=sys.stderr)
+        print(
+            "audit_perf_docs_sources: FAIL "
+            f"({stats['archived_sources']} archived source(s) verified)",
+            file=sys.stderr,
+        )
         for failure in failures:
             print(failure, file=sys.stderr)
         return 1
-    print(f"audit_perf_docs_sources: OK ({len(paths)} {scope} leaf file(s) checked)")
+    print(
+        f"audit_perf_docs_sources: OK ({len(paths)} {scope} leaf file(s) checked; "
+        f"{stats['archived_sources']} archived source(s) verified)"
+    )
     return 0
 
 

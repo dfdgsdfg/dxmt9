@@ -170,7 +170,7 @@ inaccuracy into a loud one that gets routinely bypassed. The repo already has
 the correct shape in two audits: `audit_thread_ownership_declarations.py`
 asserts the cited file exists and still contains a named marker, explicitly not
 a line, and `audit_perf_docs_sources.py` strips any `#L1-L4` fragment before
-validating a `source:` path. Extend that shape — path exists ∧ symbol present
+validating a `source:` path or verified archival availability. Extend that shape — path exists ∧ symbol present
 — if a gate is wanted.
 
 Existing `:LINE` citations are known-stale; rewrite one to path + symbol when

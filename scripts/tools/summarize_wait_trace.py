@@ -7,6 +7,16 @@ import io
 import json
 from pathlib import Path
 import re
+import sys
+
+
+def _retention_resolver():
+    """Load the shared archive adapter in direct-script and importlib use."""
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from scripts.tools import retention_resolver
+    return retention_resolver
 
 
 SITES = {0: "query_receipt", 1: "resource_replay", 2: "buffer_lock",
@@ -14,7 +24,7 @@ SITES = {0: "query_receipt", 1: "resource_replay", 2: "buffer_lock",
 
 
 def load(path):
-    lines = Path(path).read_text().splitlines()
+    lines = _retention_resolver().read_bytes(path).decode().splitlines()
     if not lines or not lines[0].startswith("# wait-trace-v1 "):
         raise ValueError("missing versioned header (window may not have closed)")
     meta = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", lines[0])}

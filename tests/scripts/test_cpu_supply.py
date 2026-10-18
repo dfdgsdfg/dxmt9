@@ -4,6 +4,8 @@ import tempfile
 import re
 import sys
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('supply', ROOT/'scripts/tools/analyze_cpu_supply.py')
@@ -773,6 +775,27 @@ class TestSupply(unittest.TestCase):
             supply.qualify_scene(log.replace('draw_calls=1500','draw_calls=0'),3,6)
         with self.assertRaises(ValueError):
             supply.qualify_scene(log,3,7)
+
+    def test_load_reads_verified_resolved_trace_but_keeps_caller_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            logical = Path(directory) / 'archived.csv'
+            physical = Path(directory) / 'verified.csv'
+            physical.write_text(
+                '# cpu-supply-v2 first=1 last=5 cpu_clock=1 closed=1 overflow=0 incomplete=0\n'
+                'event,wall_ns,cpu_ns,tid,owner,id,value,frame\n',
+                encoding='utf-8')
+
+            @contextmanager
+            def resolved(path, **kwargs):
+                self.assertEqual(Path(path), logical)
+                yield physical
+
+            resolver = type('Resolver', (), {'resolved_artifact': staticmethod(resolved)})
+            with patch.object(supply, '_retention_resolver', return_value=resolver):
+                meta, rows = supply.load(logical)
+
+        self.assertEqual(meta['first'], 1)
+        self.assertEqual(rows, [])
 
 
 if __name__ == '__main__':

@@ -259,8 +259,31 @@ def lifecycle_check(repo, review, action, at):
         return ['missing explicit lifecycle/use review'], []
     if review.get('owner_closed') is not True or review.get('recovery_resolved') is not True:
         blockers.append('owner closure and recovery resolution are required')
-    if action != 'archive-copy' and review.get('reference_scope_complete') is not True:
+    qualified_archive = action == 'archive' and review.get('reader_contract')
+    if qualified_archive:
+        if review.get('reader_scope_complete') is not True:
+            blockers.append('review must identify compatible readers or explicit restore workflows')
+    elif action != 'archive-copy' and review.get('reference_scope_complete') is not True:
         blockers.append('review must confirm all dependency locations are in the scan scope')
+    if qualified_archive:
+        use_records = review.get('analysis_use_evidence', [])
+        if not use_records:
+            blockers.append('qualified archival requires digest-bound analysis-use documentation')
+        for record in use_records:
+            try:
+                raw = Path(record['path'])
+                if raw.is_absolute() or '..' in raw.parts or raw.parts[:2] != ('docs', 'perfomance'):
+                    raise ValueError('analysis-use record must name a performance document')
+                document = _safe_path(repo / raw)
+                if document.stat().st_size > MAX_REFERENCE_BYTES or sha256(document) != record['sha256']:
+                    raise ValueError('analysis-use document changed or exceeds bound')
+                text = document.read_text()
+                frontmatter = re.match(r'\A---\s*\n(.*?)\n---', text, re.S)
+                updated = re.search(r'^updated:\s*(\d{4}-\d{2}-\d{2})\s*$', frontmatter[1], re.M) if frontmatter else None
+                if not updated or timestamp(review['last_used_at']) < timestamp(updated[1] + 'T23:59:59+00:00'):
+                    raise ValueError('last-use review predates documented analysis day')
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                blockers.append(f'invalid analysis-use evidence: {error}')
     if not review.get('reviewer') or not review.get('reason'):
         blockers.append('reviewer and rationale are required')
     evidence = []
@@ -315,6 +338,24 @@ def lifecycle_check(repo, review, action, at):
     return blockers, evidence
 
 
+def recorded_use_floor(repo, relative):
+    """An earlier review cannot silently forget a newer recorded analysis use."""
+    latest = None
+    operations = store_path(repo) / 'operations'
+    if operations.exists():
+        plans = sorted(operations.glob('*/plan.json'))
+        if len(plans) > 10000:
+            raise ValueError('retention plan count exceeds lifecycle review bound')
+        for path in plans:
+            data = read_json(path)
+            for entry in data['entries']:
+                review = entry.get('review')
+                if (entry['path'] == relative or relative.startswith(entry['path'].rstrip('/') + '/')) and review and review.get('last_used_at'):
+                    used = timestamp(review['last_used_at'])
+                    latest = max(latest, used) if latest else used
+    return latest
+
+
 def assess(repo, value, action, review, *, at=None, scan=True):
     path = source_path(repo, value)
     at = at or datetime.now(timezone.utc)
@@ -323,6 +364,10 @@ def assess(repo, value, action, review, *, at=None, scan=True):
     reasons, evidence = lifecycle_check(repo, review, action, at)
     result['blockers'].extend(reasons)
     result['evidence'] = evidence
+    if review and review.get('last_used_at'):
+        latest_use = recorded_use_floor(repo, result['path'])
+        if latest_use and timestamp(review['last_used_at']) < latest_use:
+            result['blockers'].append('review predates a recorded analysis use')
     info = path.lstat()
     result['logical_bytes'] = info.st_size if path.is_file() else None
     result['allocated_bytes'] = info.st_blocks * 512 if path.is_file() else None
@@ -352,10 +397,18 @@ def assess(repo, value, action, review, *, at=None, scan=True):
         result['blockers'].append('explicitly pinned')
     refs = reference_scan(repo, path, result['snapshot']) if scan else {'references': [], 'unknown': ['scan disabled'], 'files_scanned': 0}
     result['reference_scan'] = refs
+    qualification = None
+    if action == 'archive' and review and review.get('reader_contract'):
+        try:
+            from scripts.tools.retention_readers import validate_qualification
+            qualification = validate_qualification(repo, path, result['snapshot'], review)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result['blockers'].append(f'reader qualification unavailable: {error}')
+    result['reader_qualification'] = qualification
     if action != 'archive-copy':
-        if refs['references']:
+        if refs['references'] and not qualification:
             result['blockers'].append('referenced evidence requires its materialized path')
-        if refs['unknown']:
+        if refs['unknown'] and not qualification:
             result['blockers'].append('reference graph has unknown inputs')
         if any(e['path'] == result['path'] for e in evidence):
             result['blockers'].append('candidate is required review/dependency evidence')
@@ -487,7 +540,8 @@ def apply_plan(repo, plan_path, zstd='zstd'):
                     continue
                 fresh = assess(repo, entry['path'], entry['action'], entry['review'])
                 if (not fresh['eligible'] or fresh['snapshot'] != entry['snapshot'] or
-                        fresh['evidence'] != entry['evidence']):
+                        fresh['evidence'] != entry['evidence'] or
+                        fresh.get('reader_qualification') != entry.get('reader_qualification')):
                     raise ValueError('stale plan: identity, lifecycle, ownership, pins or references changed')
                 path = source_path(repo, entry['path'])
                 contents['sources'].append({'path': entry['path'], 'snapshot': entry['snapshot'],
@@ -526,6 +580,10 @@ def apply_plan(repo, plan_path, zstd='zstd'):
                     result['archive'] = archive_verified(path, archives, operation,
                         entry['snapshot'], policy['free_space_floor_bytes'], zstd=zstd)
                     result['restore_verified'] = True
+                    if entry.get('reader_qualification'):
+                        if result['archive']['sha256'] != entry['reader_qualification']['archive_sha256']:
+                            raise ValueError('new archive differs from reader-qualified archive')
+                        result['reader_qualification'] = entry['reader_qualification']
                     write_json(operation / 'receipt.json', receipt)
                     if entry['action'] == 'archive' and result['archive']['size'] >= entry['snapshot']['total_bytes']:
                         result['status'], result['phase'] = 'skipped', 'compression-not-beneficial'

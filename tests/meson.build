@@ -632,7 +632,7 @@ foreach tracing_test : ['harness', 'normalize', 'consumer', 'external', 'store']
        args: [join_paths(meson.project_source_root(),
               'tests/scripts/test_tracing_' + tracing_test + '.py')])
 endforeach
-foreach retention_test : ['retention_archive', 'trace_retention']
+foreach retention_test : ['retention_archive', 'trace_retention', 'retention_resolver', 'retention_readers']
   test('dxmt9-' + retention_test.replace('_', '-'), python3,
        args: [join_paths(meson.project_source_root(),
               'tests/scripts/test_' + retention_test + '.py')],

@@ -135,7 +135,8 @@ for adoption decisions.
 - Inventory first; recheck paths, digests, ownership and transitive references
   before applying selected actions. Include current uncommitted evidence docs.
   The existing 3DMark05 name-based inventory is not a general deletion gate.
-- Keep cited paths materialized while readers/audits lack archive resolution.
+- Keep cited paths materialized unless a qualified reader contract and source
+  audit can recover their exact bytes; other readers require explicit restore.
   Record deletion/eviction explicitly; unavailable evidence cannot support a
   fresh qualified claim. Use the [offline retention tool](../../experiments/analysis/retention.md)
   for explicit plans and verified recovery; automatic cleanup remains disabled.

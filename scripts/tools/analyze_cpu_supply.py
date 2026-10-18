@@ -11,6 +11,16 @@ import json
 from pathlib import Path
 import re
 import statistics
+import sys
+
+
+def _retention_resolver():
+    """Load the shared archive adapter in direct-script and importlib use."""
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from scripts.tools import retention_resolver
+    return retention_resolver
 
 EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_ready '
           'replay_begin replay_end queue_empty queue_reserved queue_ready '
@@ -49,7 +59,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
 
 
 def load(path):
-    with Path(path).open() as stream:
+    resolver = _retention_resolver()
+    with resolver.resolved_artifact(path) as physical_path, physical_path.open() as stream:
         header = stream.readline().strip()
         if not header.startswith('# cpu-supply-v2 '):
             raise ValueError('unknown/unqualified CPU clock schema; v1 POSIX CPU clock rejected')
@@ -329,11 +340,14 @@ def main():
     a = p.parse_args()
     meta, rows = load(a.trace)
     result = analyze(meta, rows, a.trim)
-    result['scene_window'] = qualify_scene(a.frame_log.read_text(errors='replace'),
+    resolver = _retention_resolver()
+    frame_log_bytes = resolver.read_bytes(a.frame_log)
+    trace_bytes = resolver.read_bytes(a.trace)
+    result['scene_window'] = qualify_scene(frame_log_bytes.decode(errors='replace'),
                                          result['first_present'], result['last_present'])
     result['frame_log'] = dict(path=str(a.frame_log),
-        sha256=hashlib.sha256(a.frame_log.read_bytes()).hexdigest())
-    result['input'] = dict(path=str(a.trace), sha256=hashlib.sha256(a.trace.read_bytes()).hexdigest())
+        sha256=hashlib.sha256(frame_log_bytes).hexdigest())
+    result['input'] = dict(path=str(a.trace), sha256=hashlib.sha256(trace_bytes).hexdigest())
     result['analyzer_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     a.output.write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result, indent=2))

@@ -198,6 +198,46 @@ class AuditPerfDocsSourcesTests(unittest.TestCase):
 
         self.assertEqual(changed, [leaf])
 
+    def test_accepts_only_resolver_verified_missing_archived_source(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            leaf = root / "docs" / "perfomance" / "domain" / "leaf.md"
+            leaf.parent.mkdir(parents=True)
+            leaf.write_text(
+                "---\nsource: traces/cold-run.csv\n---\n", encoding="utf-8"
+            )
+            stats = {}
+            with patch.object(module, "_retention_resolver") as resolver_loader:
+                resolver_loader.return_value.verify_available.return_value = 1
+                failures = module.audit_paths([leaf], root, stats=stats)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(stats["archived_sources"], 1)
+        resolver_loader.return_value.verify_available.assert_called_once_with(
+            root / "traces" / "cold-run.csv", repo=root
+        )
+
+    def test_rejects_corrupt_archive_for_existing_cited_directory(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            leaf = root / "docs" / "perfomance" / "domain" / "leaf.md"
+            leaf.parent.mkdir(parents=True)
+            cited_dir = root / "experiments" / "output" / "run"
+            cited_dir.mkdir(parents=True)
+            leaf.write_text(
+                "---\nsource: experiments/output/run\n---\n", encoding="utf-8"
+            )
+            with patch.object(module, "_retention_resolver") as resolver_loader:
+                resolver_loader.return_value.verify_available.side_effect = ValueError(
+                    "archive digest mismatch"
+                )
+                failures = module.audit_paths([leaf], root)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("source path does not exist: experiments/output/run", failures[0])
+
 
 if __name__ == "__main__":
     unittest.main()

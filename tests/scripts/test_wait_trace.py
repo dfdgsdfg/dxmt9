@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("wait_trace", sys.argv[2])
 module = importlib.util.module_from_spec(spec)
@@ -47,3 +48,20 @@ with tempfile.TemporaryDirectory() as directory:
         assert path.read_bytes() == original
     env = dict(os.environ, DXMT9_WAIT_TRACE="0")
     subprocess.run([sys.argv[1]], env=env, check=True, timeout=20)
+
+# The production reader accepts verified archived bytes through the same load
+# path used for materialized CSVs.
+logical_path = Path("traces/archived-wait.csv")
+archived_bytes = (
+    b"# wait-trace-v1 pid=1 first=1 last=2 closed=1 overflow=0 incomplete=0 "
+    b"unknown=0 owners=0 capacity=32768 mutex_min_ns=0 storage=1 cv_entries=0\n"
+    b"site,begin_ns,acquired_ns,end_ns,tid,owner,target,query,first_frame,last_frame,"
+    b"queue,waits,state_before,state_after,raw_before,raw_after\n"
+    b"# end rows=0\n"
+)
+resolver = type("Resolver", (), {
+    "read_bytes": staticmethod(lambda path, **kwargs:
+                                archived_bytes if Path(path) == logical_path else b"")})
+with patch.object(module, "_retention_resolver", return_value=resolver):
+    archived_meta, archived_rows = module.load(logical_path)
+assert archived_meta["pid"] == 1 and archived_rows == []
