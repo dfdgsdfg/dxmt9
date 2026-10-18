@@ -74,7 +74,7 @@ collection. `scheduler`, `target-probe`, and `emulated-structure` profiles requi
 an admitted adapter. Linux references and QEMU execution cannot establish
 macOS/Wine/Metal timing. No perftrace code or mandatory dependency is bundled.
 
-Use [REA rules](rea.rules.md) for target discovery and address provenance.
+Use [REA rules](debug_rea.rules.md) for target discovery and address provenance.
 Static reachability or a validated probe manifest does not prove activation,
 runtime hits, invocation pairing, or CPU/GPU cost.
 

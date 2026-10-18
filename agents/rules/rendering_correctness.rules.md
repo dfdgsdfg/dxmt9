@@ -76,5 +76,5 @@ single composed model would explode.
   output, rather than only checking for non-black output or API errors?
 - Is the wild run the final evidence layer rather than the only oracle?
 
-See `agents/rules/metal_debugging.rules.md` for capture/readback operations and
+See `agents/rules/debug_metal.rules.md` for capture/readback operations and
 `agents/rules/test_wild.rules.md` for supervised integration runs.

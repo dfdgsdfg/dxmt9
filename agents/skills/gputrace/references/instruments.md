@@ -1,7 +1,7 @@
 # Metal System Trace timeline
 
-Read [xctrace rules](../../../rules/xctrace.rules.md) and
-[Instruments rules](../../../rules/instruments.rules.md). Use this route for
+Read [xctrace rules](../../../rules/trace_xctrace.rules.md) and
+[Instruments rules](../../../rules/trace_instruments.rules.md). Use this route for
 available GPU/driver intervals and CPU submission context, not frame replay.
 
 For 3DMark05 use the guarded sidecar from [GT1 probes](gt1-probes.md). It retains

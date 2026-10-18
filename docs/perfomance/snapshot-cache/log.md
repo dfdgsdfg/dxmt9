@@ -687,7 +687,7 @@ The relevant counters (`d3d9_draw_state_cache_*`,
 `d3d9_snapshot_draw_submission_cpu_ms`, `encode_draw_*_cpu_ms`) live in
 `result.json`. The exact per-experiment flags live in each leaf's `**Method.**`
 field. See `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 For post-snapshot-cache-snapshot.24 runs, also read the
 `d3d9_draw_state_cache_batch_miss_reason_*` counters from the generated
 `3dmark05-perf-summary.md`; they are the proof gate for deciding whether the

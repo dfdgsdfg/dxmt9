@@ -2,7 +2,7 @@
 
 Use this route for short-call frequency, execution order and instruction/cycle
 questions that sampled stacks cannot answer. Read the hardware, symbol and
-interpretation constraints in [Instruments rules](../../../rules/instruments.rules.md).
+interpretation constraints in [Instruments rules](../../../rules/trace_instruments.rules.md).
 
 ## Select capture or offline analysis
 

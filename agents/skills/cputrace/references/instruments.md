@@ -1,7 +1,7 @@
 # Native CPU and thread recording
 
-Read [xctrace rules](../../../rules/xctrace.rules.md) and
-[Instruments rules](../../../rules/instruments.rules.md). Commands run from the
+Read [xctrace rules](../../../rules/trace_xctrace.rules.md) and
+[Instruments rules](../../../rules/trace_instruments.rules.md). Commands run from the
 repository root. Replace the run ID and target PID with a verified workload
 child; retain its command line, start identity and loaded runtime images.
 

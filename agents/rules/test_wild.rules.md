@@ -166,7 +166,7 @@ Before reporting a dxmt9 regression from a wild run, confirm:
 ## Related
 
 - `agents/rules/environment_variables.rules.md` — `DXMT*` runtime knobs.
-- `agents/rules/metal_debugging.rules.md` — capture / counter / signpost
+- `agents/rules/debug_metal.rules.md` — capture / counter / signpost
   workflow that assumes a clean Wine baseline.
 - `experiments/README.md` — per-app wild-run conventions and the
   catalogue of supported targets.

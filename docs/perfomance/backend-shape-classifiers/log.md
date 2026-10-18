@@ -223,7 +223,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix cull-off --frame 60 
 
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 
 ## Cross-references
 - [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving owner every rejection in this domain points to (hidden TVB/parameter storage, VS-write density, scaling).

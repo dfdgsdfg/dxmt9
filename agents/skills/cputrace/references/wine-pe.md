@@ -1,6 +1,6 @@
 # Wine and PE CPU attribution
 
-Read [Instruments rules](../../../rules/instruments.rules.md) and [REA rules](../../../rules/rea.rules.md). Processor Trace guest attribution is unqualified; do not generalize Time Profiler observations to a different collector.
+Read [Instruments rules](../../../rules/trace_instruments.rules.md) and [REA rules](../../../rules/debug_rea.rules.md). Processor Trace guest attribution is unqualified; do not generalize Time Profiler observations to a different collector.
 
 For attributing the wine game thread's opaque
 PE samples per module: **the observed Time Profiler lane cannot recover translated PE PCs on Apple Silicon.** PE x86 code

@@ -12,8 +12,8 @@ alwaysApply: false
 # Instruments evidence
 
 These rules own instrument selection and interpretation. Use
-[xctrace rules](xctrace.rules.md) for CLI collection/export and
-[Metal rules](metal_debugging.rules.md) for Xcode's separate Metal frame debugger.
+[xctrace rules](trace_xctrace.rules.md) for CLI collection/export and
+[Metal rules](debug_metal.rules.md) for Xcode's separate Metal frame debugger.
 Execution entrypoints are [cputrace](../skills/cputrace/SKILL.md) and
 [gputrace](../skills/gputrace/SKILL.md).
 
@@ -66,4 +66,4 @@ checked 2026-10-18:
   required for performance claims; a populated UI is not qualification.
 - A shared run ID is provenance, not clock calibration. Correlating Instruments
   with Perfetto requires proven endpoints/identity and clock mapping under
-  [Perfetto rules](perfetto.rules.md).
+  [Perfetto rules](trace_perfetto.rules.md).

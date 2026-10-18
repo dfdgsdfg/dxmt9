@@ -390,7 +390,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix idx-cache --frame 60
 
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 
 ## Cross-references
 - [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) — proves *why* fewer VS invocations reduce GPU time; this domain is the production application of that mechanism.

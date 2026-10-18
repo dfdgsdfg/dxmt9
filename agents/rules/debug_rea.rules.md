@@ -148,8 +148,8 @@ version rather than assuming that upstream main matches the package.
 
 For runtime follow-up, use [cputrace](../skills/cputrace/SKILL.md) or
 [gputrace](../skills/gputrace/SKILL.md). Follow
-[Perfetto rules](perfetto.rules.md) for event joins and
-[Instruments rules](instruments.rules.md) for native/guest attribution limits.
+[Perfetto rules](trace_perfetto.rules.md) for event joins and
+[Instruments rules](trace_instruments.rules.md) for native/guest attribution limits.
 
 ## Evidence Handoff
 

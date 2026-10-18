@@ -134,7 +134,7 @@ python3 scripts/tools/analyze_metal_shader_codegen.py \
 
 The original commands and measurements above remain historical evidence. See
 `agents/rules/environment_variables.rules.md` for live env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

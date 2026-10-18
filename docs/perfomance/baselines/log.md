@@ -233,7 +233,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix baseline --frame 50 
 The exact per-experiment flags (frame ids, `--encoder-breakdown-seq`, `--top`)
 live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

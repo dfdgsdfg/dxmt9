@@ -145,7 +145,7 @@ Measured incidents, three shapes of the same mistake:
 | **Ungated `PerfScope` family** | `4.64 ms/present` (`11.5%` of the frame) against the encode stage wall, after an A/B against frame wall had priced it at `0.3%` — see [environment_variables_perf.rules.md](environment_variables_perf.rules.md). |
 
 How to price one of these is a separate question with its own rules:
-[metal_debugging.rules.md](metal_debugging.rules.md) and
+[debug_metal.rules.md](debug_metal.rules.md) and
 [environment_variables_perf.rules.md](environment_variables_perf.rules.md). This
 section is only about the structural rule — keep diagnostics out of hot-path
 type contracts, so the question of cost never reaches the call site.

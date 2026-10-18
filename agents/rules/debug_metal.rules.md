@@ -13,8 +13,8 @@ alwaysApply: false
 
 Use [gputrace](../skills/gputrace/SKILL.md) for execution. This rule owns
 `.gputrace`, capture-layer correctness, resource inspection and Xcode replay.
-[Instruments](instruments.rules.md), [xctrace](xctrace.rules.md), and
-[Perfetto](perfetto.rules.md) own their respective measurement/tool contracts.
+[Instruments](trace_instruments.rules.md), [xctrace](trace_xctrace.rules.md), and
+[Perfetto](trace_perfetto.rules.md) own their respective measurement/tool contracts.
 
 ## Capture and workload identity
 

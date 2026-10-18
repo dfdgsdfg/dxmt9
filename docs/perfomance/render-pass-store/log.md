@@ -249,7 +249,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix color-dontcare --fra
 
 The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+`agents/rules/debug_metal.rules.md` for the full workflow.
 
 For H6 DAG observation, keep the Metal stream on the default traditional encode
 path and use the DAG as a side-channel:

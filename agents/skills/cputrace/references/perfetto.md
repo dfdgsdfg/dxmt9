@@ -1,6 +1,6 @@
 # Engine timeline and shared Perfetto qualification
 
-Read [Perfetto rules](../../../rules/perfetto.rules.md) before capture or analysis.
+Read [Perfetto rules](../../../rules/trace_perfetto.rules.md) before capture or analysis.
 Run commands from the repository root using `scripts/run_python.sh`.
 For existing artifacts, skip capture and use normalization or native consumer
 validation below. Do not rebuild or launch a workload merely to inspect a trace.

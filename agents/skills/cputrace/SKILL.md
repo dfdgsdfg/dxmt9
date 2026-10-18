@@ -13,13 +13,13 @@ root, and Python through `scripts/run_python.sh`.
 
 | Question | Route | Read before using |
 |---|---|---|
-| Where is native CPU work concentrated? | Time Profiler samples | [Instruments rules](../../rules/instruments.rules.md), [record/export recipe](references/instruments.md) |
-| Which short functions ran, in what order, with what instruction/cycle cost? | Processor Trace on supported devices | [Instruments rules](../../rules/instruments.rules.md), [Processor Trace recipe](references/processor-trace.md) |
-| How do import, replay, queue, encode and waits relate? | Integrated Perfetto timeline | [Perfetto rules](../../rules/perfetto.rules.md), [capture and qualification](references/perfetto.md) |
-| Is a thread running, blocked or descheduled? | Available Thread State/System Trace evidence | [Instruments rules](../../rules/instruments.rules.md), [record/export recipe](references/instruments.md) |
-| Which guest module or code site is involved? | Qualified PE samples plus static REA analysis | [Wine/PE recipe](references/wine-pe.md), [REA rules](../../rules/rea.rules.md) |
+| Where is native CPU work concentrated? | Time Profiler samples | [Instruments rules](../../rules/trace_instruments.rules.md), [record/export recipe](references/instruments.md) |
+| Which short functions ran, in what order, with what instruction/cycle cost? | Processor Trace on supported devices | [Instruments rules](../../rules/trace_instruments.rules.md), [Processor Trace recipe](references/processor-trace.md) |
+| How do import, replay, queue, encode and waits relate? | Integrated Perfetto timeline | [Perfetto rules](../../rules/trace_perfetto.rules.md), [capture and qualification](references/perfetto.md) |
+| Is a thread running, blocked or descheduled? | Available Thread State/System Trace evidence | [Instruments rules](../../rules/trace_instruments.rules.md), [record/export recipe](references/instruments.md) |
+| Which guest module or code site is involved? | Qualified PE samples plus static REA analysis | [Wine/PE recipe](references/wine-pe.md), [REA rules](../../rules/debug_rea.rules.md) |
 
-For xctrace collection/export, also read [xctrace rules](../../rules/xctrace.rules.md).
+For xctrace collection/export, also read [xctrace rules](../../rules/trace_xctrace.rules.md).
 Load only the selected route's references. A missing capability is a recorded
 limitation; switching collectors changes the evidence and requires a distinct
 attempt. Processor Trace is not a universal fallback for opaque PE stacks.

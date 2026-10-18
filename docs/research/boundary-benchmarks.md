@@ -144,7 +144,7 @@ existing M3 signposts (`com.dxmt9.translator/metal`, intervals
 `frame`/`commit`/`draw`).
 
 - Implementation: ~0.5 day. Recommended path: skip the in-tree probe and
-  document the Instruments workflow in `agents/rules/metal_debugging.rules.md`.
+  document the Instruments workflow in `agents/rules/debug_metal.rules.md`.
 
 ## 4. Per-boundary reporting schema
 

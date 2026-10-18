@@ -12,7 +12,7 @@ alwaysApply: false
 # xctrace collection and export
 
 `xcrun xctrace` is the Instruments CLI. These rules own transport and lifecycle;
-[Instruments rules](instruments.rules.md) own measurement meaning and device
+[Instruments rules](trace_instruments.rules.md) own measurement meaning and device
 support. Workflows live in [cputrace](../skills/cputrace/SKILL.md) and
 [gputrace](../skills/gputrace/SKILL.md).
 

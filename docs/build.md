@@ -29,7 +29,7 @@ This installs system and bootstrap tools:
 | `clang-format` | Source formatter |
 | `temurin`, `tla+-toolbox` (casks) | Java runtime and TLC model checker for formal verification |
 | `msitools`, `winetricks` | Optional Wine experiment helpers |
-| `ghidra` | Native target application analysis through REA; see [REA setup](../agents/rules/rea.rules.md) |
+| `ghidra` | Native target application analysis through REA; see [REA setup](../agents/rules/debug_rea.rules.md) |
 
 **Python via uv, optionally launched by mise** (see `.mise.toml`,
 `.python-version`, `pyproject.toml`, and the committed `uv.lock`):

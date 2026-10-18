@@ -199,7 +199,7 @@ domain's dedicated mechanism for measuring a metric's own noise floor
 `.gputrace`), but it is a separate script from the ones that produce a
 directional verdict — no script in this domain invokes it, or reads
 its output, before emitting a pass/fail/win/lose result. Per
-`agents/rules/metal_debugging.rules.md`'s own guidance ("Use this tool
+`agents/rules/debug_metal.rules.md`'s own guidance ("Use this tool
 whenever an A/B comparison reports a sub-10% delta or when only some
 encoders move and others appear noisy"), consulting the noise floor
 before trusting a small delta is a documented manual procedure a human

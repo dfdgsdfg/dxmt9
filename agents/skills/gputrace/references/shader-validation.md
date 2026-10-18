@@ -1,6 +1,6 @@
 # Metal validation and shader inspection
 
-Use [Metal rules](../../../rules/metal_debugging.rules.md) and the workload's
+Use [Metal rules](../../../rules/debug_metal.rules.md) and the workload's
 supervised runner. Enable `MTL_DEBUG_LAYER=1` for an API diagnostic and
 `MTL_SHADER_VALIDATION=1` only when shader instrumentation addresses the question.
 Retain stderr and the actual observer settings. Such runs are not clean timing

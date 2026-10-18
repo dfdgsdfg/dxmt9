@@ -25,5 +25,5 @@ cask "tla+-toolbox"
 brew "msitools"
 brew "winetricks"
 
-# Target application analysis with REA (see agents/rules/rea.rules.md)
+# Target application analysis with REA (see agents/rules/debug_rea.rules.md)
 brew "ghidra"

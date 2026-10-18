@@ -368,7 +368,7 @@ Linux perf sources are optional reference lanes; macOS/Wine adapters require
 independent qualification. They produce external evidence consumed by `join`,
 without adding debugger or Linux dependencies to the engine Perfetto module.
 
-Follow the [REA evidence workflow](../../../../agents/rules/rea.rules.md).
+Follow the [REA evidence workflow](../../../../agents/rules/debug_rea.rules.md).
 Probe discovery proceeds from existing samples/caller addresses to bounded
 static investigation, then to selected runtime markers only where those sources
 cannot answer the question. REA does not itself provide a runtime hook backend.

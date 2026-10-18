@@ -179,7 +179,7 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix reverse-opaque --fra
 
 The exact per-experiment flags (row/class selectors) live in each leaf's
 `**Method.**` field. See `agents/rules/environment_variables.rules.md` for env-var
-meanings and `agents/rules/metal_debugging.rules.md` for the full workflow.
+meanings and `agents/rules/debug_metal.rules.md` for the full workflow.
 
 ## Cross-references
 

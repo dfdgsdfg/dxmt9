@@ -117,7 +117,7 @@ The workflow is sound; gap #3 (diff tool) would speed it up.
 
 - **GPU-only fixed-CB replay probe.** Xcode Instruments + the M3
   signposts already do this better. Document the workflow in
-  `agents/rules/metal_debugging.rules.md`; do not build an in-tree probe.
+  `agents/rules/debug_metal.rules.md`; do not build an in-tree probe.
 - **Consolidate PerformanceProbe 4 mode-variants.** Env-var modes are
   fine; per-launcher granularity is correct for reproducibility.
 - **Replace wild-app benchmarks.** Boundary probes complement

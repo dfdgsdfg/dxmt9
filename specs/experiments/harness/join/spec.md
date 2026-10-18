@@ -222,7 +222,7 @@ fi
 ```
 
 This is the literal two-line diagnostic; it names both the missing
-path and the specific GUI action (`agents/rules/metal_debugging.rules.md`
+path and the specific GUI action (`agents/rules/debug_metal.rules.md`
 §2b's steps 3-6) that produces it. `--dry-run` (`:1635-1637`) exits
 `0` *before* this check runs — a dry-run therefore proves the derived
 paths and commands are correct, but does **not** prove the human

@@ -1,6 +1,6 @@
 # Integrated Perfetto GPU timing
 
-Read [Perfetto rules](../../../rules/perfetto.rules.md). Use the
+Read [Perfetto rules](../../../rules/trace_perfetto.rules.md). Use the
 [shared setup, closure and qualification workflow](../../cputrace/references/perfetto.md)
 for build/staging, fixture preparation, normalization and pinned Trace Processor
 validation. Commands run from the repository root.

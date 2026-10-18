@@ -1,6 +1,6 @@
 # Xcode counter export and attribution
 
-Run commands from the repository root. Read [Metal rules](../../../rules/metal_debugging.rules.md).
+Run commands from the repository root. Read [Metal rules](../../../rules/debug_metal.rules.md).
 
 When a `.gputrace` is opened in Xcode for real performance debugging, do not
 leave the useful data trapped in the Xcode UI. Export both the replayed capture
