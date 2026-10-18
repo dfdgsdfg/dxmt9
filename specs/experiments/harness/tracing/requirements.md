@@ -437,3 +437,41 @@ qualified POD output failure must not change legacy totals or production policy.
 snapshot arithmetic/metadata, stale/filtered/overflow consumers and SDK-off/on
 native-to-SQL round trips with pinned Trace Processor. Live Wine overhead remains
 a separate matched-control qualification.
+
+## 15. Remaining Diagnostic Consumers
+
+**R-HARN-TRACE-15.1** Query timeline, split, replay-drain and poll reports must
+fan out the same acquired report to compatibility output and bounded native
+observations. Query, publication and command-buffer populations must remain
+distinct. Report time must not be presented as the original query time.
+
+**R-HARN-TRACE-15.2** The complete process counter report, histogram/breakdown
+rows and process-memory samples must share acquired values. Native output must
+retain integer precision before legacy millisecond formatting, sample failures,
+report cadence and original aggregation semantics. No additional OS query or
+percentile evaluation may be performed for an additional consumer.
+
+**R-HARN-TRACE-15.3** Detailed CPU supply and wait records must retain endpoints,
+identities and predicates. Native placement requires a bounded clock observation
+at each endpoint; failed qualification must remain explicit. Recorded wait-body
+duration includes wakeup and lock reacquisition and is not exclusive scheduler
+sleep. CPU totals remain distinct from wall endpoints.
+
+**R-HARN-TRACE-15.4** PE sampler and recorder reports must use SDK-independent,
+bounded, versioned POD transport. The original sample distribution, omitted and
+overflow populations must survive. Native report receipt time is not a sampled
+PC timestamp. SuspendThread sampling must remain diagnostic-only.
+
+**R-HARN-TRACE-15.5** Queue lifecycle snapshots and Instruments signpost sites
+must share semantic identities with native observations. Renderer DAG, draw,
+encoder, PSO and resource diagnostics must share acquired reports and structural
+data; opaque images, shader code and captures may remain linked artifacts.
+
+**R-HARN-TRACE-15.6** All six families must preserve existing acquisition gates,
+windows and behavior when consumers fail. Bounded output must reject stale
+generations and expose truncation/loss. Native Perfetto and immutable SQLite
+must retain source/schema/record identity, exact values and experiment/test
+provenance. External acquisitions join through qualified identity/clock/artifact
+evidence only. Verification must exercise all families, transport rejection,
+clock failure, SDK-off/on and native/SQL round trips; live workload overhead
+remains a separate qualification.
