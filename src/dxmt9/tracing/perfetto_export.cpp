@@ -94,6 +94,8 @@ const char* event_name(uint16_t event) {
     case EventId::PeChunkCommitEnd: return "pe_chunk_commit_end";
     case EventId::PeClockCalibration: return "pe_clock_calibration";
     case EventId::Metric: return "metric";
+    case EventId::Diagnostic: return "diagnostic";
+    case EventId::DiagnosticEndpoint: return "diagnostic.endpoint";
   }
   return "engine_event";
 }
@@ -141,7 +143,7 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
         descriptor->set_name(metric_track_name(event));
         descriptor->set_parent_uuid(event.track_id);
         auto* counter = descriptor->set_counter();
-        counter->set_unit_name(metric_unit(event.metric_id));
+        counter->set_unit_name(metric_unit(event));
         counter->set_is_incremental(false);
       } else if (event.category == static_cast<uint8_t>(Category::Gpu)) {
         // Synthetic track IDs distinguish device/queue, CB-vs-stage, and
@@ -181,7 +183,7 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
     for (uint64_t flow_id : incoming_flows)
       track_event->add_terminating_flow_ids(flow_id);
     if (static_cast<Phase>(event.phase) != Phase::End)
-      track_event->set_name(event_name(event.event_id));
+      track_event->set_name((event.diagnostic_schema[0] ? event.diagnostic_schema : event_name(event.event_id)));
     track_event->add_categories(category_name(event.category));
     auto* store = track_event->add_debug_annotations();
     store->set_name(annotation_name(event.phase, "observation_store"));
@@ -192,31 +194,31 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
     if (static_cast<Phase>(event.phase) == Phase::End) {
       auto* end_name = track_event->add_debug_annotations();
       end_name->set_name("end_event_name");
-      end_name->set_string_value(event_name(event.event_id));
+      end_name->set_string_value((event.diagnostic_schema[0] ? event.diagnostic_schema : event_name(event.event_id)));
     } else if (static_cast<Phase>(event.phase) == Phase::Begin) {
       auto* begin_name = track_event->add_debug_annotations();
       begin_name->set_name("begin_event_name");
-      begin_name->set_string_value(event_name(event.event_id));
+      begin_name->set_string_value((event.diagnostic_schema[0] ? event.diagnostic_schema : event_name(event.event_id)));
     }
     if (event.observation_kind) {
       auto* source = track_event->add_debug_annotations();
-      source->set_name("observation_source");
+      source->set_name(annotation_name(event.phase, "observation_source"));
       source->set_string_value(observations::source_name(event.observation_kind));
       auto* record = track_event->add_debug_annotations();
-      record->set_name("observation_record");
+      record->set_name(annotation_name(event.phase, "observation_record"));
       record->set_uint_value(event.observation_record);
       auto* version = track_event->add_debug_annotations();
-      version->set_name("acquisition_version");
+      version->set_name(annotation_name(event.phase, "acquisition_version"));
       version->set_uint_value(1);
       auto* semantics = track_event->add_debug_annotations();
-      semantics->set_name("observation_timestamp_kind");
-      semantics->set_string_value(observations::timestamp_kind(event.observation_kind));
+      semantics->set_name(annotation_name(event.phase, "observation_timestamp_kind"));
+      semantics->set_string_value(observations::timestamp_kind(event.observation_kind, event.observation_mode));
     }
-    if (event.observation_kind >= 3) {
+    if (event.observation_kind >= 3 && event.observation_kind <= 6) {
       const auto field = observations::field(event.observation_kind, event.observation_field);
       const auto annotation = [&](const char* name, const std::string& value) {
         auto* arg = track_event->add_debug_annotations();
-        arg->set_name(name);
+        arg->set_name(annotation_name(event.phase, name));
         arg->set_string_value(value);
       };
       annotation("observation_field", field.name);
@@ -225,6 +227,19 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
       annotation("observation_aggregation", field.aggregation);
       annotation("observer_mode", std::to_string(event.observation_mode));
       annotation("timing_stride", std::to_string(event.observation_stride));
+    }
+    if (event.diagnostic_parts) {
+      const auto annotation = [&](const char* name, const std::string& value) {
+        auto* arg = track_event->add_debug_annotations();
+        arg->set_name(annotation_name(event.phase, name)); arg->set_string_value(value);
+      };
+      annotation("diagnostic_schema", event.diagnostic_schema);
+      annotation("diagnostic_display", observations::diagnostic_display(event.diagnostic_payload));
+      annotation("diagnostic_payload", observations::diagnostic_hex(event.diagnostic_payload));
+      annotation("diagnostic_part", std::to_string(event.diagnostic_part));
+      annotation("diagnostic_parts", std::to_string(event.diagnostic_parts));
+      annotation("diagnostic_encoding", std::to_string(event.observation_mode));
+      annotation("diagnostic_value", std::to_string(event.metric_value));
     }
     if (event.arg0) {
       auto* owner = track_event->add_debug_annotations();
@@ -491,7 +506,7 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       retain_timed_out_session(session);
       return result;
     }
-    std::map<std::tuple<uint64_t, uint64_t, uint16_t, uint16_t, uint16_t>, uint64_t> counter_tracks;
+    std::map<std::tuple<uint64_t, uint64_t, uint16_t, uint16_t, uint16_t, std::string>, uint64_t> counter_tracks;
     std::set<uint64_t> occupied;
     for (const auto& event : events) occupied.insert(event.track_id);
     uint64_t next_counter = UINT64_MAX;
@@ -508,7 +523,7 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       uint64_t counter_track = 0;
       if (event.phase == static_cast<uint8_t>(Phase::Counter)) {
         const auto key = std::make_tuple(event.track_id, event.arg0, event.metric_id,
-                                         event.observation_kind, event.observation_field);
+                                         event.observation_kind, event.observation_field, std::string(event.diagnostic_schema));
         auto found = counter_tracks.find(key);
         if (found == counter_tracks.end()) {
           while (occupied.contains(next_counter)) --next_counter;

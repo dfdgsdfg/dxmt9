@@ -7,6 +7,7 @@ Raw timestamps stay in their declared clocks; publication never qualifies data.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -42,6 +43,15 @@ CREATE TABLE diagnostic_value(row_id INTEGER REFERENCES diagnostic_row, key TEXT
  value_exact TEXT NOT NULL, PRIMARY KEY(row_id, key));
 CREATE TABLE bundle(id INTEGER PRIMARY KEY, artifact_id INTEGER REFERENCES artifact,
  run_id TEXT NOT NULL, validity_json TEXT NOT NULL, envelope_json TEXT NOT NULL);
+CREATE TABLE observation_report(id INTEGER PRIMARY KEY, bundle_id INTEGER REFERENCES bundle,
+ source_event_id INTEGER REFERENCES source_event, source TEXT NOT NULL, source_record TEXT NOT NULL,
+ schema TEXT NOT NULL, encoding INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+ value_exact TEXT, payload_bytes BLOB NOT NULL);
+CREATE TABLE observation_field(report_id INTEGER REFERENCES observation_report,
+ ordinal INTEGER NOT NULL, key TEXT NOT NULL, value_exact TEXT NOT NULL,
+ PRIMARY KEY(report_id, ordinal));
+CREATE TABLE structural_value(artifact_id INTEGER REFERENCES artifact,
+ path TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY(artifact_id, path));
 CREATE TABLE clock(id INTEGER PRIMARY KEY, bundle_id INTEGER REFERENCES bundle,
  source_id TEXT NOT NULL, unit TEXT NOT NULL, alignment TEXT NOT NULL, definition_json TEXT NOT NULL,
  UNIQUE(bundle_id, source_id));
@@ -170,6 +180,93 @@ def _diagnostic_log(db: sqlite3.Connection, artifact_id: int, path: Path) -> Non
                 _insert(db, "diagnostic_value", row_id=row_id, key=key, value_exact=value)
 
 
+def _structured_artifact(db: sqlite3.Connection, aid: int, path: Path) -> None:
+    """Preserve JSON trees and CSV rows without guessing clocks or units."""
+    if path.suffix.lower() not in (".json", ".csv"):
+        return
+    if path.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError("structural artifact exceeds byte budget")
+    before = digest(path)
+    count = 0
+    def insert(key, value):
+        nonlocal count
+        count += 1
+        if count > MAX_EVENTS:
+            raise ValueError("structural artifact exceeds row budget")
+        _insert(db, "structural_value", artifact_id=aid, path=key, value_json=encoded(value))
+    if path.suffix.lower() == ".json":
+        document = json.loads(path.read_text())
+        pending = [("", document)]
+        while pending:
+            key, value = pending.pop()
+            if isinstance(value, dict) and value:
+                pending.extend((key + "/" + str(k).replace("~", "~0").replace("/", "~1"), v)
+                               for k, v in value.items())
+            elif isinstance(value, list) and value:
+                pending.extend((key + "/" + str(i), v) for i, v in enumerate(value))
+            else:
+                insert(key, value)
+    else:
+        with path.open(newline="") as stream:
+            for i, row in enumerate(csv.reader(stream)):
+                insert("/" + str(i), row)
+    if before != digest(path):
+        raise ValueError("structural input changed during import")
+
+
+def _shared_reports(db, bid, artifact_id, observations):
+    groups = {}
+    for event, eid in observations:
+        a = event.get("attrs", {})
+        if "diagnostic_parts" not in a:
+            continue
+        encoding = int(a["diagnostic_encoding"])
+        key = ((event["process_id"], a.get("guest_process_id"), a.get("process_create_time100ns")), a["observation_source"], a["observation_record"],
+               a["diagnostic_schema"], encoding,
+               eid if encoding == 3 else None)
+        groups.setdefault(key, []).append((event, eid))
+    artifacts = {}
+    for (_, source, record, schema, encoding, _), rows in groups.items():
+        attrs = [e["attrs"] for e, _ in rows]
+        count = int(attrs[0]["diagnostic_parts"])
+        complete = (0 < count <= 64 and len(rows) == count and
+                    all(int(a["diagnostic_parts"]) == count for a in attrs) and
+                    sorted(int(a["diagnostic_part"]) for a in attrs) == list(range(count)))
+        attrs.sort(key=lambda a: int(a["diagnostic_part"]))
+        payload_bytes = bytes.fromhex("".join(a["diagnostic_payload"] for a in attrs))
+        payload = payload_bytes.decode("utf-8", errors="backslashreplace")
+        rid = _insert(db, "observation_report", bundle_id=bid, source_event_id=rows[0][1],
+                      source=source, source_record=record, schema=schema, encoding=encoding,
+                      status="complete" if complete else "incomplete", payload=payload, payload_bytes=payload_bytes,
+                      value_exact=attrs[0]["diagnostic_value"] if encoding == 2 else None)
+        if not complete:
+            _insert(db, "qualification", bundle_id=bid, scope="shared-report:" + str(rid),
+                    status="unqualified", details_json=encoded({"reason": "fragment coverage"}))
+            continue
+        values = [(schema, attrs[0]["diagnostic_value"])] if encoding == 2 else re.findall(
+            r"([A-Za-z_][A-Za-z_0-9.]*)=([^\s]+)", payload)
+        for i, (key, value) in enumerate(values):
+            _insert(db, "observation_field", report_id=rid, ordinal=i, key=key, value_exact=value)
+        if source in ("cpu-detail", "wait-detail") and ("qualified", "0") in values:
+            _insert(db, "qualification", bundle_id=bid, scope="endpoint-clock:" + str(rid),
+                    status="unqualified", details_json=encoded({"reason": "endpoint bracket"}))
+        if schema == "dxmt9-artifact-v1":
+            path = safe_path(Path(payload))
+            if path not in artifacts:
+                if len(artifacts) >= 1024:
+                    raise ValueError("structural artifact count exceeds budget")
+                aid = _artifact(db, {"role": "renderer-structure", "path": str(path),
+                                    "required": False, "reason": "shared producer output"})
+                artifacts[path] = aid
+                if path.is_file():
+                    before = db.execute("SELECT sha256 FROM artifact WHERE id=?", (aid,)).fetchone()[0]
+                    _structured_artifact(db, aid, path)
+                    if before != digest(path):
+                        raise ValueError("structural input changed after hashing")
+            _insert(db, "artifact_link", artifact_id=artifacts[path], source_event_id=rows[0][1],
+                    relation="produced", evidence="shared-output-path-v1")
+
+
 def _bundle(db: sqlite3.Connection, role: str, path: Path, run_id: str) -> tuple[int, dict[str, int]]:
     path = safe_path(path)
     if path.stat().st_size > MAX_INPUT_BYTES:
@@ -260,6 +357,7 @@ def _bundle(db: sqlite3.Connection, role: str, path: Path, run_id: str) -> tuple
                 source_event_id=events.get(relation.get("source_event")),
                 target_event_id=events.get(relation.get("target_event")),
                 type=relation["type"], evidence_json=encoded(relation))
+    _shared_reports(db, bid, artifact_id, [(e, events[e["event_id"]]) for e in value["events"]])
     return bid, events
 
 

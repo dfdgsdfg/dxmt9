@@ -1,4 +1,5 @@
 #include "dxmt9_queue.hpp"
+#include "observations/diagnostic_sink.hpp"
 
 #include "util/config/config.hpp"
 
@@ -119,6 +120,7 @@ u64 queueTraceFromSeq() {
 }
 
 void emitQueueTraceLine(const std::string& line) {
+  observations::report(observations::Source::QueueReport, "queue-snapshot-v1", line);
   std::fputs(line.c_str(), stderr);
   std::fputc('\n', stderr);
   std::fflush(stderr);

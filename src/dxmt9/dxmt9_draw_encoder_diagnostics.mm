@@ -1,3 +1,4 @@
+#include "util/diagnostic_file.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_draw_encoder_diagnostics.hpp"
@@ -678,7 +679,7 @@ void appendVisibilityScoutCsv(const std::string& path,
   const bool needsHeader =
       !std::filesystem::exists(outputPath, sizeError) ||
       std::filesystem::file_size(outputPath, sizeError) == 0;
-  std::ofstream out(path, std::ios::app);
+  dxmt9::diagnostics::OutputFile out(path, std::ios::app);
   if (!out) {
     return;
   }
@@ -1706,11 +1707,11 @@ void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
       std::filesystem::create_directories(parent);
     }
     {
-      std::ofstream out(binaryPath, std::ios::binary | std::ios::trunc);
+      dxmt9::diagnostics::OutputFile out(binaryPath, std::ios::binary | std::ios::trunc);
       out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
     }
     {
-      std::ofstream meta(path + ".json", std::ios::trunc);
+      dxmt9::diagnostics::OutputFile meta(path + ".json", std::ios::trunc);
       meta << "{\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
            << "  \"seq\": " << active.seq << ",\n"
@@ -1841,14 +1842,14 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
       hex[i * 2u + 1u] = digits[hash[i] & 15u];
     }
     if (!hashOnly) {
-      std::ofstream out(binaryPath, std::ios::binary | std::ios::trunc);
+      dxmt9::diagnostics::OutputFile out(binaryPath, std::ios::binary | std::ios::trunc);
       out.exceptions(std::ios::failbit | std::ios::badbit);
       out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
       out.close();
     }
     const auto channelHashes = colorAttachmentChannelHashes(active, rowBytes, byteCount, bytes);
     {
-      std::ofstream meta(path + ".json", std::ios::trunc);
+      dxmt9::diagnostics::OutputFile meta(path + ".json", std::ios::trunc);
       meta.exceptions(std::ios::failbit | std::ios::badbit);
       meta << "{\n"
            << "  \"rawBytesRetained\": " << (hashOnly ? "false" : "true") << ",\n"
@@ -1961,7 +1962,7 @@ void appendColorAttachmentRoiSummary(
     const bool writeHeader =
         !std::filesystem::exists(csvPath) ||
         std::filesystem::file_size(csvPath) == 0;
-    std::ofstream out(csvPath, std::ios::app);
+    dxmt9::diagnostics::OutputFile out(csvPath, std::ios::app);
     if (writeHeader) {
       out << "handle,seq,enc,index,after_draw,draw,command_index,"
              "command_draw_index,command_draw_count,texture0,format,"
@@ -2147,13 +2148,13 @@ void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
         continue;
       }
       const auto binPath = parent / subresource.basename;
-      std::ofstream out(binPath, std::ios::binary | std::ios::trunc);
+      dxmt9::diagnostics::OutputFile out(binPath, std::ios::binary | std::ios::trunc);
       out.write(static_cast<const char*>(subresource.bytes),
                 static_cast<std::streamsize>(subresource.byteCount));
     }
 
     {
-      std::ofstream meta(jsonPath, std::ios::trunc);
+      dxmt9::diagnostics::OutputFile meta(jsonPath, std::ios::trunc);
       meta << "{\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
            << "  \"metalTextureObservationId\": " << active.metalTextureObservationId << ",\n"
@@ -2339,12 +2340,12 @@ static void maybeEncodePairedDepthAttachmentDump(
           hex[i * 2u] = digits[digest[i] >> 4u];
           hex[i * 2u + 1u] = digits[digest[i] & 15u];
         }
-        std::ofstream raw(binaryPath, std::ios::binary | std::ios::trunc);
+        dxmt9::diagnostics::OutputFile raw(binaryPath, std::ios::binary | std::ios::trunc);
         raw.exceptions(std::ios::failbit | std::ios::badbit);
         raw.write(static_cast<const char*>(memory), static_cast<std::streamsize>(byteCount));
         raw.close();
         const auto capture = source.value_or(ColorAttachmentCaptureSource{});
-        std::ofstream meta(metadataPath, std::ios::trunc);
+        dxmt9::diagnostics::OutputFile meta(metadataPath, std::ios::trunc);
         meta.exceptions(std::ios::failbit | std::ios::badbit);
         meta << "{\n  \"schema\": \"dxmt9.paired_pass_depth.v1\",\n"
              << "  \"diagnosticOnly\": true,\n  \"rawBytesRetained\": true,\n"

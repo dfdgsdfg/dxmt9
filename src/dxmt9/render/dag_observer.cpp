@@ -1,3 +1,4 @@
+#include "util/diagnostic_file.hpp"
 #include "dag_observer.hpp"
 
 #include "../dxmt9_backend_types.hpp"  // core::ChunkSlot
@@ -69,7 +70,7 @@ void writeDagJsonToDir(const framegraph::FrameGraph& fg, std::uint64_t frameId,
   // representation.
   const std::string contents =
       framegraph::serializeDagJson(fg, seqId, stage, payload);
-  std::ofstream out(path, std::ios::out | std::ios::trunc | std::ios::binary);
+  dxmt9::diagnostics::OutputFile out(path, std::ios::out | std::ios::trunc | std::ios::binary);
   if (out.is_open()) {
     out << contents;  // best-effort: never fail a render on an unwritable dir.
   }

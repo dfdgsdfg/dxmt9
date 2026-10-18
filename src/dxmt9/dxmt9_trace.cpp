@@ -1,4 +1,6 @@
 #include "dxmt9_trace.hpp"
+#include "observations/diagnostic_sink.hpp"
+#include "observations/reservation.hpp"
 
 #include "tracing/config.hpp"
 #include "tracing/metrics.hpp"
@@ -115,6 +117,9 @@ struct Session {
   std::atomic<bool> finalizer_claimed{false};
   std::array<ThreadBuffer, kMaxThreads> threads{};
   std::unique_ptr<TraceEvent[]> storage;
+  TraceEvent* diagnostic_events = nullptr;
+  std::atomic<uint32_t> diagnostic_count{0};
+  uint32_t diagnostic_capacity = 0;
   uint32_t max_events = 0;
   uint32_t max_bytes = 0;
   uint32_t max_threads = 0;
@@ -278,6 +283,8 @@ const char* event_name(uint16_t event) {
     case EventId::PeChunkCommitEnd: return "pe_chunk_commit_end";
     case EventId::PeClockCalibration: return "pe_clock_calibration";
     case EventId::Metric: return "metric";
+    case EventId::Diagnostic: return "diagnostic";
+    case EventId::DiagnosticEndpoint: return "diagnostic.endpoint";
     default: return "unknown";
   }
 }
@@ -409,38 +416,38 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
   for (uint32_t i = 0; i < count; ++i)
     seenPeHostThreads.emplace(s.threads[i].track_id, s.threads[i].native_tid);
   std::vector<TraceEvent> rawEvents;
-  size_t rawEventCount = 0;
+  size_t rawEventCount = s.diagnostic_count.load();
   size_t scan = 0;
   for (uint32_t i = 0; i < count; ++i) rawEventCount += s.threads[i].count;
   rawEvents.reserve(rawEventCount);
   for (uint32_t i = 0; i < count; ++i) {
     const ThreadBuffer& t = s.threads[i];
     rawEvents.insert(rawEvents.end(), t.events, t.events + t.count);
-    for (uint32_t j = 0; j < t.count; ++j) {
-      if (((scan++) & 0xffu) == 0 &&
-          std::chrono::steady_clock::now() >= deadline)
-        return false;
-      const TraceEvent& e = t.events[j];
-      if (e.category != static_cast<uint8_t>(Category::Pe)) continue;
-      const std::pair<uint64_t, uint64_t> hostThread{
-          e.track_id ? e.track_id : t.track_id,
-          e.thread_id ? e.thread_id : t.native_tid};
-      if (seenPeHostThreads.insert(hostThread).second)
-        peHostThreads.push_back(hostThread);
-      if (!e.guest_process_id || !e.guest_thread_id ||
-          !e.process_create_time100ns || !e.thread_create_time100ns)
-        continue;
-      const GuestIdentity identity{e.guest_process_id, e.guest_thread_id,
-          e.process_create_time100ns, e.thread_create_time100ns};
-      if (seenGuests.emplace(identity.process_id, identity.thread_id,
-                             identity.process_created,
-                             identity.thread_created).second)
-        guestIdentities.push_back(identity);
-      const std::pair<uint64_t, uint64_t> guestProcess{
-          identity.process_id, identity.process_created};
-      if (seenGuestProcesses.insert(guestProcess).second)
-        guestProcesses.push_back(guestProcess);
-    }
+  }
+  rawEvents.insert(rawEvents.end(), s.diagnostic_events,
+                   s.diagnostic_events + s.diagnostic_count.load());
+  for (const auto& e : rawEvents) {
+    if (((scan++) & 0xffu) == 0 &&
+        std::chrono::steady_clock::now() >= deadline)
+      return false;
+    if (e.category != static_cast<uint8_t>(Category::Pe)) continue;
+    const std::pair<uint64_t, uint64_t> hostThread{
+        e.track_id, e.thread_id};
+    if (seenPeHostThreads.insert(hostThread).second)
+      peHostThreads.push_back(hostThread);
+    if (!e.guest_process_id || !e.guest_thread_id ||
+        !e.process_create_time100ns || !e.thread_create_time100ns)
+      continue;
+    const GuestIdentity identity{e.guest_process_id, e.guest_thread_id,
+        e.process_create_time100ns, e.thread_create_time100ns};
+    if (seenGuests.emplace(identity.process_id, identity.thread_id,
+                           identity.process_created,
+                           identity.thread_created).second)
+      guestIdentities.push_back(identity);
+    const std::pair<uint64_t, uint64_t> guestProcess{
+        identity.process_id, identity.process_created};
+    if (seenGuestProcesses.insert(guestProcess).second)
+      guestProcesses.push_back(guestProcess);
   }
   if (!assign_gpu_tracks(rawEvents, generation, deadline)) return false;
   const detail::RelationBuildResult relationBuild =
@@ -529,17 +536,12 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
   uint64_t peCount = 0;
   uint64_t gpuCount = 0;
   size_t countScan = 0;
-  for (uint32_t i = 0; i < count; ++i) {
-    const ThreadBuffer& t = s.threads[i];
-    for (uint32_t j = 0; j < t.count; ++j) {
-      if (((countScan++) & 0xffu) == 0 &&
-          std::chrono::steady_clock::now() >= deadline)
-        return false;
-      switch (static_cast<Category>(t.events[j].category)) {
-        case Category::Pe: ++peCount; break;
-        case Category::Gpu: ++gpuCount; break;
-        default: ++nativeCount; break;
-      }
+  for (const auto& e : rawEvents) {
+    if (((countScan++) & 0xffu) == 0 && std::chrono::steady_clock::now() >= deadline) return false;
+    switch (static_cast<Category>(e.category)) {
+      case Category::Pe: ++peCount; break;
+      case Category::Gpu: ++gpuCount; break;
+      default: ++nativeCount; break;
     }
   }
   const mach_timebase_info_data_t timebase = [] {
@@ -717,7 +719,7 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
           << "\",\"timestamp_ns\":\"" << e.timestamp_ns
           << "\",\"event_type\":" << e.event_id
           << ",\"category\":\"" << category_name(e.category)
-          << "\",\"name\":\"" << event_name(e.event_id)
+          << "\",\"name\":\"" << escape_json(e.diagnostic_schema[0] ? e.diagnostic_schema : event_name(e.event_id))
           << "\",\"phase\":\"" << phase_name(e.phase)
           << "\",\"scope_id\":\"" << e.scope_id
           << "\",\"work_ids\":[";
@@ -725,7 +727,7 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       out << "],\"track_id\":\"" << (e.track_id ? e.track_id : e.thread_id)
           << "\",\"timestamp\":\"" << e.timestamp_ns
           << "\",\"kind\":\"" << phase_name(e.phase)
-          << "\",\"attrs\":{\"name\":\"" << event_name(e.event_id)
+          << "\",\"attrs\":{\"name\":\"" << escape_json(e.diagnostic_schema[0] ? e.diagnostic_schema : event_name(e.event_id))
           << "\",\"category\":\"" << category_name(e.category)
           << "\",\"native_tid\":";
       if (e.category == static_cast<uint8_t>(Category::Gpu)) out << "null";
@@ -739,9 +741,9 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
             << observations::source_name(e.observation_kind)
             << "\",\"observation_record\":\"" << e.observation_record
             << "\",\"observation_timestamp_kind\":\""
-            << observations::timestamp_kind(e.observation_kind)
+            << observations::timestamp_kind(e.observation_kind, e.observation_mode)
             << "\"";
-      if (e.observation_kind >= 3) {
+      if (e.observation_kind >= 3 && e.observation_kind <= 6) {
         const auto field = observations::field(e.observation_kind, e.observation_field);
         out << ",\"observation_field\":\"" << field.name
             << "\",\"observation_value\":\"" << e.metric_value
@@ -750,11 +752,20 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
             << "\",\"observer_mode\":\"" << e.observation_mode
             << "\",\"timing_stride\":\"" << e.observation_stride << "\"";
       }
+      if (e.diagnostic_parts) {
+        out << ",\"diagnostic_schema\":\"" << escape_json(e.diagnostic_schema)
+            << "\",\"diagnostic_display\":\"" << escape_json(observations::diagnostic_display(e.diagnostic_payload))
+            << "\",\"diagnostic_payload\":\"" << observations::diagnostic_hex(e.diagnostic_payload)
+            << "\",\"diagnostic_part\":\"" << e.diagnostic_part
+            << "\",\"diagnostic_parts\":\"" << e.diagnostic_parts
+            << "\",\"diagnostic_encoding\":\"" << e.observation_mode
+            << "\",\"diagnostic_value\":\"" << e.metric_value << "\"";
+      }
       if (e.phase == static_cast<uint8_t>(Phase::Counter))
         out << ",\"counter_value\":\"" << e.metric_value
             << "\",\"metric_id\":\"" << e.metric_id
-            << "\",\"unit\":\"" << metric_unit(e.metric_id)
-            << "\",\"track_name\":\"" << metric_track_name(e) << "\"";
+            << "\",\"unit\":\"" << escape_json(metric_unit(e))
+            << "\",\"track_name\":\"" << escape_json(metric_track_name(e)) << "\"";
       out << "},\"owner_id\":\"" << e.arg0 << "\",\"related_id\":\"" << e.arg1
           << "\",\"uncertainty_ns\":\"" << e.uncertainty_ns
           << "\",\"clock_frequency\":\"" << e.clock_frequency
@@ -887,6 +898,13 @@ bool publish_receipt(Session& s, const char* status, const char* flush_status,
         }
       }
     }
+    if (include_buffer_counts) {
+      event_count += s.diagnostic_count.load();
+      for (uint32_t i = 0; i < s.diagnostic_count.load(); ++i) {
+        const auto category = s.diagnostic_events[i].category;
+        if (category < category_counts.size()) ++category_counts[category];
+      }
+    }
     const trace::gpu::Counters gpu = s.gpu_initialized
         ? trace::gpu::processGpuTraceCounters() : trace::gpu::Counters{};
     const trace::gpu::StageCounters stage = s.gpu_initialized
@@ -968,7 +986,8 @@ bool publish_receipt(Session& s, const char* status, const char* flush_status,
         << static_cast<uint64_t>(s.max_events) * sizeof(TraceEvent)
         << "\",\"sdk_buffer_bytes\":\"" << s.max_bytes
         << "\",\"cold_event_copy_count\":\"2\",\"events_per_copy_max\":\""
-        << s.max_events << "\",\"thread_slots_max\":\"" << s.max_threads
+        << s.max_events << "\",\"diagnostic_event_slots_max\":\"" << s.diagnostic_capacity
+        << "\",\"thread_slots_max\":\"" << s.max_threads
         << "\",\"cold_auxiliary_items_max\":\"" << s.max_events
         << "\"},\"loss\":{\"total\":\"" << loss_total
         << "\",\"event_overflow\":";
@@ -1080,13 +1099,14 @@ bool finalize(Session& s) noexcept {
   try {
   const uint32_t count = std::min(s.next_thread.load(), s.max_threads);
   std::vector<TraceEvent> events;
-  size_t total = 0;
+  size_t total = s.diagnostic_count.load();
   for (uint32_t i = 0; i < count; ++i) total += s.threads[i].count;
   events.reserve(total);
   for (uint32_t i = 0; i < count; ++i) {
     const ThreadBuffer& t = s.threads[i];
     events.insert(events.end(), t.events, t.events + t.count);
   }
+  events.insert(events.end(), s.diagnostic_events, s.diagnostic_events + s.diagnostic_count.load());
   std::stable_sort(events.begin(), events.end(), [](const auto& a, const auto& b) {
     if (a.timestamp_ns != b.timestamp_ns) return a.timestamp_ns < b.timestamp_ns;
     return a.source_record < b.source_record;
@@ -1156,6 +1176,15 @@ uint64_t now_ns() noexcept {
       scale.denom;
   return nanoseconds > UINT64_MAX ? UINT64_MAX
                                   : static_cast<uint64_t>(nanoseconds);
+}
+
+uint64_t clock_resolution_ns() noexcept {
+  static const uint64_t resolution = [] {
+    mach_timebase_info_data_t scale{};
+    if (mach_timebase_info(&scale) != KERN_SUCCESS || !scale.denom) return uint64_t{0};
+    return (uint64_t{scale.numer} + scale.denom - 1) / scale.denom;
+  }();
+  return resolution;
 }
 
 uint64_t native_thread_id() noexcept {
@@ -1329,7 +1358,12 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
   const uint32_t index = thread_slot(s);
   if (index == UINT32_MAX) return false;
   ThreadBuffer& thread = s.threads[index];
-  if (accepted > thread.capacity - thread.count) {
+  const bool diagnostic = s.diagnostic_capacity && std::all_of(inputs.begin(), inputs.end(),
+      [](const auto& e) { return e.observation_kind >= 3; });
+  uint32_t first = 0;
+  if (diagnostic ? !observations::reserve(s.diagnostic_count, s.diagnostic_capacity,
+                                          static_cast<uint32_t>(accepted), first)
+                 : accepted > thread.capacity - thread.count) {
     ++thread.dropped;
     s.total_dropped.fetch_add(accepted, std::memory_order_relaxed);
     return false;
@@ -1346,7 +1380,8 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
     if (!event.process_id) event.process_id = s.process_id;
     if (!event.source_record)
       event.source_record = s.source_order.fetch_add(1, std::memory_order_relaxed) + 1;
-    thread.events[thread.count++] = event;
+    if (diagnostic) s.diagnostic_events[first++] = event;
+    else thread.events[thread.count++] = event;
   }
   return true;
 }
@@ -1354,6 +1389,7 @@ bool emit_batch_for_generation(std::span<const TraceEvent> inputs,
 }  // namespace
 
 bool prepare_and_start(const TraceConfig& config) noexcept {
+  observations::install_diagnostic_consumer();
 #if !DXMT9_HAS_PERFETTO
   (void)config;
   report_start_rejection("Perfetto SDK is disabled in this build");
@@ -1462,15 +1498,21 @@ bool prepare_and_start(const TraceConfig& config) noexcept {
     report_start_rejection("event storage allocation failed");
     return false;
   }
-  const uint32_t base = s.max_events / s.max_threads;
+  // Cold diagnostic reports must not be capped to 1/256th of the session's
+  // budget. Reserve half of the same allocation, never additional memory.
+  s.diagnostic_capacity = s.max_events >= 4096 ? s.max_events / 2 : 0;
+  s.diagnostic_count.store(0, std::memory_order_relaxed);
+  const uint32_t threadEvents = s.max_events - s.diagnostic_capacity;
+  const uint32_t base = threadEvents / s.max_threads;
   uint32_t offset = 0;
   for (uint32_t i = 0; i < s.max_threads; ++i) {
     ThreadBuffer& t = s.threads[i];
     t = {};
     t.events = s.storage.get() + offset;
-    t.capacity = base + (i < s.max_events % s.max_threads ? 1 : 0);
+    t.capacity = base + (i < threadEvents % s.max_threads ? 1 : 0);
     offset += t.capacity;
   }
+  s.diagnostic_events = s.storage.get() + offset;
   s.process_id = static_cast<uint32_t>(getpid());
   const uint64_t previousGeneration = s.generation.load(std::memory_order_relaxed);
   if (previousGeneration >= kAdmissionGateGenerationMask) {

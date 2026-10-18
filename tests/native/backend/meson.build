@@ -2179,6 +2179,11 @@ tracing_runtime_spec = executable(
   '../../../src/dxmt9/dxmt9_cpu_supply_trace.cpp',
   '../../../src/dxmt9/dxmt9_wait_trace.cpp',
   '../../../src/dxmt9/dxmt9_append_diag.cpp',
+  '../../../src/dxmt9/dxmt9_perf_counters.cpp',
+  '../../../src/dxmt9/dxmt9_perf_counters_report.cpp',
+  '../../../src/d3d9/device_c_trace.cpp',
+  '../../../src/dxmt9/dxmt9_queue_trace.cpp',
+  '../../../src/dxmt9/dxmt9_signposts.cpp',
   include_directories: [dxmt9_inc, include_directories('../../../src')],
   cpp_args: ['-DDXMT9_TEST_PERFETTO=' + (get_option('dxmt9_perfetto') ? '1' : '0')],
   dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
@@ -2253,4 +2258,19 @@ if get_option('dxmt9_perfetto')
     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_shared_snapshot_capture.py'),
            tracing_runtime_spec.full_path()],
     depends: tracing_runtime_spec, env: dxmt9_native_test_env, timeout: 60)
+endif
+
+shared_diagnostic_spec = executable(
+  'dxmt9-shared-diagnostic-spec', 'shared_diagnostic_spec.cpp',
+  '../../../src/dxmt9/dxmt9_perf_counters_report.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+)
+test('dxmt9-shared-diagnostic-spec', shared_diagnostic_spec)
+
+test('dxmt9-shared-diagnostic-store', python3,
+  args: [files('../../scripts/test_shared_diagnostic_store.py')])
+if get_option('dxmt9_perfetto')
+  test('dxmt9-shared-diagnostic-roundtrip', python3,
+    args: [files('../../scripts/test_shared_diagnostic_capture.py'), tracing_runtime_spec],
+    env: dxmt9_native_test_env, timeout: 120)
 endif

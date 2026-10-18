@@ -194,3 +194,51 @@ depth mismatch. Pinned TP nests simultaneous zero-duration instant rows for
 layout; the consumer now reproduces that rule without shifting timestamps or
 inventing measured durations. A focused regression and the real native round
 trip cover the correction. These rows do not establish nested workload phases.
+
+
+## Shared diagnostic consumers
+
+R-HARN-TRACE-15.1–15.6 extends the previous query/frame/append increment to all
+remaining producer families. It shares acquired diagnostic report bytes, exact
+counter/percentile observations and existing artifact serialization; it does not
+infer acquisition from parsing an unrelated log after execution.
+
+| Family | Implementation | Verification |
+|---|---|---|
+| Query timeline/split/core/drain/poll | `util/log/log.cpp` fans out the existing bounded report through the SDK-free consumer; source tags/populations survive. | Production drain ledger and query report through native/SQL fixture; existing query observer specs. |
+| Process counters and histograms | `dxmt9_perf_counters_report.cpp` reuses each table load/percentile observation and exact disposition/outcome values; percentile sample census comes from the same sorted ring. | Counting fixture tests all 2416 table entries, exact unsigned values and legacy formatting; native fixture executes the full production report. |
+| Process memory | `sampleProcessMemory` projects the existing OS sample and failures. | Native fixture performs one actual sample; SQL verifies sample status and exact fields. |
+| CPU supply/wait | `observations/endpoint.hpp` brackets the existing clock read; full detail rows remain linked by ordinal. Qualified wait pairs become native slices; failed brackets remain explicit. | Original row tests, invalid/reversed/wide endpoint tests, deterministic interval round trip and actual CPU collector. |
+| PE sampler/recorder | `D9CDiagnosticReport` and generated bridge operation preserve report bytes, guest incarnation and generation; receipt time is explicit. | x86/x64 builds, native production receiver, malformed/stale records, loss handling and ABI field fingerprint regression. SuspendThread sampling itself is unchanged and remains diagnostic-only. |
+| Queue/signposts | Existing queue text snapshot fans out; commit/draw/frame signpost sites retain IDs in native records. | Production queue and signpost adapters in runtime fixture; draw detail remains opt-in. |
+| Renderer | `diagnostic_file.hpp` links already serialized DAG/draw/encoder/resource artifacts; native logs use the shared report path. | JSON/CSV structural import, hash/event links, large identities and artifact failure/provenance tests. No GPU re-capture. |
+
+Common bounded report tests cover atomic fragment admission, stale/disabled
+consumers, truncation, exact bytes across UTF-8 boundaries and concurrent
+non-overlapping reservations. The shared reservation uses the existing writer
+lease, generation and drain/seal protocol. Whole process counter reports remain
+relaxed multi-field observations; they are not atomic renderer snapshots.
+
+Final SDK-off regression passed 29/29 plus the install-name audit; final SDK-on
+regression passed 34/34. Both PE architectures and the x86_64 unix provider
+build with ABI hash `0x2afc5cb7fa384bf2`.
+The pinned v58.2 consumer and immutable SQL capture is retained under
+`experiments/output/remaining-diagnostic-consumers/qualified-final/` with 95 complete
+slices, 2927 counters, 3 flows, 31925 exact counter annotations and 2755 shared
+reports. Test provenance and source hashes survive SQLite publication. Sixteen
+additional sequential/concurrent captures qualified. An initial concurrent
+snapshot round trip reported TP diagnostics; subsequent repeated captures and
+the complete matrix passed, without weakening qualification policy. The first
+SDK-off install-name audit overlapped an unfinished x86_64 build; it passed once
+that full build and its fixup completed. A CPU-supply timing fixture under
+parallel builds observed 20.65 ms CPU / 42.05 ms wall and failed its >0.5 ratio
+control; the subsequent complete SDK-off matrix passed without changing the
+control. These environmental failures remain in the ignored validation logs.
+
+TLC passed 71 safety models, 8 progress configurations and 178 intended
+counterexamples. Python tracing tests passed 78/78; structural/report tests and
+ABI fingerprint tests provide additional focused coverage. Native fixtures and
+cross-builds are not fresh live Wine workload or observer-overhead evidence.
+The larger bounded record and diagnostic capacity partition require matched
+controls before performance-transfer claims. External Instruments/Processor
+Trace/Xcode capture qualification remains independent.

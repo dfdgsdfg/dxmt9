@@ -54,6 +54,8 @@ enum class EventId : uint16_t {
   PeChunkCommitEnd = 33,
   PeClockCalibration = 34,
   Metric = 35,
+  Diagnostic = 36,
+  DiagnosticEndpoint = 37,
 };
 
 enum class Phase : uint8_t { Instant, Begin, End, Counter };
@@ -65,7 +67,7 @@ enum class Metric : uint16_t {
   FrameEncodeChunkElapsedNs, FrameEncodeDrawElapsedNs,
   NativeThreadCpuNs,
   WaitMutexAcquireElapsedNs, WaitBodyElapsedNs,
-  SnapshotCount, SnapshotElapsedNs, SnapshotIdentity,
+  SnapshotCount, SnapshotElapsedNs, SnapshotIdentity, DiagnosticValue,
 };
 
 struct TraceEvent {
@@ -112,6 +114,11 @@ struct TraceEvent {
   uint16_t event_id;
   uint8_t category;
   uint8_t phase;
+  // Bounded copied diagnostic output; included in the configured byte budget.
+  char diagnostic_schema[128];
+  char diagnostic_payload[192];
+  uint16_t diagnostic_part;
+  uint16_t diagnostic_parts;
 };
 
 struct TraceConfig {
@@ -153,6 +160,7 @@ inline bool enabled_detail() noexcept {
   return g_trace_detail_enabled.load(std::memory_order_relaxed);
 }
 uint64_t now_ns() noexcept;
+uint64_t clock_resolution_ns() noexcept;
 uint64_t native_thread_id() noexcept;
 
 // Control-path only. Reads and validates DXMT9_TRACE_CONFIG if paths are null,

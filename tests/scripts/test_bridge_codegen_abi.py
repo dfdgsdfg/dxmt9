@@ -31,6 +31,15 @@ class BridgeCodegenAbiTest(unittest.TestCase):
         records = GENERATOR.collect_record_schemas([path])
         return GENERATOR.compute_bridge_abi_hash(protos, records)
 
+    def test_diagnostic_report_is_part_of_device_abi(self) -> None:
+        records = GENERATOR.collect_record_schemas([GENERATOR.DEVICE_C_HEADER])
+        report = next(r for r in records if r.name == "D9CDiagnosticReport")
+        self.assertIn("char payload[D9C_DIAGNOSTIC_REPORT_BYTES]", report.fields)
+        self.assertTrue(any("D9C_DIAGNOSTIC_REPORT_BYTES" in line for line in report.layout_context))
+        original = GENERATOR.compute_bridge_abi_hash([], [report])
+        changed = GENERATOR.RecordSchema(report.name, report.fields + ("uint64_t added",), report.layout_context)
+        self.assertNotEqual(original, GENERATOR.compute_bridge_abi_hash([], [changed]))
+
     def test_deterministic_for_identical_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = self.write_schema(
@@ -160,12 +169,12 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         )
         canonical = GENERATOR.canonicalize_schema(protos, records)
 
-        self.assertEqual(len(protos), 168)
+        self.assertEqual(len(protos), 182)
         self.assertEqual(protos[0].name, "dxmt9c_factory_create")
         self.assertEqual(protos[-1].name, "dxmt9c_vdecl_get_declaration")
         self.assertIn("op|ordinal=0|dxmt9c_factory_create|", canonical)
         self.assertIn(
-            "op|ordinal=167|dxmt9c_vdecl_get_declaration|", canonical
+            "op|ordinal=181|dxmt9c_vdecl_get_declaration|", canonical
         )
         record_names = {record.name for record in records}
         self.assertIn("D9CCommandChunk", record_names)

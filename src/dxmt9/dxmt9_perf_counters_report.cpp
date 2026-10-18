@@ -1,4 +1,5 @@
 #include "dxmt9_perf_counters.hpp"
+#include "observations/diagnostic_sink.hpp"
 
 #include "dxmt9_perf_counters_internal.hpp"
 
@@ -2476,36 +2477,59 @@ void report() {
   std::string line;
   line.reserve(65536);
   line += "[dxmt9-perf]";
+  const observations::DiagnosticContext reportContext;
   for (const auto& e : kCounterTable) {
+    // One load/evaluation feeds both exact native output and legacy formatting.
+    const auto percentile = e.ringField ? (c.*e.ringField).observePercentile(e.percentile)
+        : PercentileRing::Observation{};
+    const auto acquired = e.atomicField ? load(c.*e.atomicField) : percentile.value;
+    if (e.ringField) {
+      char key[128]{};
+      std::snprintf(key, sizeof(key), "%s.samples", e.key);
+      observations::value(observations::Source::PerfReport, key, percentile.samples,
+                           "count:percentile-population", reportContext);
+    }
+    const auto second = e.field2 ? load(c.*e.field2) : 0;
+    const char* semantics = e.kind == CounterEntry::Kind::Milliseconds ? "ns:source-defined"
+        : e.kind == CounterEntry::Kind::PercentileMs || e.kind == CounterEntry::Kind::PercentileNs
+            ? "ns:percentile-ring" : e.kind == CounterEntry::Kind::Hex64 ? "id:latest"
+            : e.kind == CounterEntry::Kind::WidthByHeight ? "pixels:latest"
+            : "integer:source-defined";
+    observations::value(observations::Source::PerfReport, e.key, acquired, semantics, reportContext);
+    if (e.field2) {
+      char key[128]{};
+      std::snprintf(key, sizeof(key), "%s.height", e.key);
+      observations::value(observations::Source::PerfReport, key, second, "pixels:latest", reportContext);
+    }
     char field[128]{};
     switch (e.kind) {
       case CounterEntry::Kind::UnsignedCount:
         std::snprintf(field, sizeof(field), " %s=%llu", e.key,
-                      static_cast<unsigned long long>(load(c.*e.atomicField)));
+                      static_cast<unsigned long long>(acquired));
         break;
       case CounterEntry::Kind::Milliseconds:
         std::snprintf(field, sizeof(field), " %s=%.3f", e.key,
-                      static_cast<double>(load(c.*e.atomicField)) / 1000000.0);
+                      static_cast<double>(acquired) / 1000000.0);
         break;
       case CounterEntry::Kind::Hex64:
         std::snprintf(field, sizeof(field), " %s=0x%llx", e.key,
-                      static_cast<unsigned long long>(load(c.*e.atomicField)));
+                      static_cast<unsigned long long>(acquired));
         break;
       case CounterEntry::Kind::WidthByHeight:
         std::snprintf(field, sizeof(field), " %s=%llux%llu", e.key,
-                      static_cast<unsigned long long>(load(c.*e.atomicField)),
-                      static_cast<unsigned long long>(load(c.*e.field2)));
+                      static_cast<unsigned long long>(acquired),
+                      static_cast<unsigned long long>(second));
         break;
       case CounterEntry::Kind::PercentileMs:
         std::snprintf(field, sizeof(field), " %s=%.3f", e.key,
                       static_cast<double>(
-                          (c.*e.ringField).percentile(e.percentile)) /
+                          acquired) /
                           1000000.0);
         break;
       case CounterEntry::Kind::PercentileNs:
         std::snprintf(field, sizeof(field), " %s=%llu", e.key,
                       static_cast<unsigned long long>(
-                          (c.*e.ringField).percentile(e.percentile)));
+                          acquired));
         break;
     }
     line += field;
@@ -2526,6 +2550,16 @@ void report() {
   static_assert(std::size(kOutcomeNames) ==
                 static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count));
   for (std::size_t i = 0; i < std::size(kDispositionNames); ++i) {
+    const auto raws = load(c.directChunkSlotReplayRaws[i]);
+    const auto records = load(c.directChunkSlotReplayRecords[i]);
+    const auto bytes = load(c.directChunkSlotReplayWireBytes[i]);
+    char key[128]{};
+    std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_raws", kDispositionNames[i]);
+    observations::value(observations::Source::PerfReport, key, raws, "count:cumulative", reportContext);
+    std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_records", kDispositionNames[i]);
+    observations::value(observations::Source::PerfReport, key, records, "count:cumulative", reportContext);
+    std::snprintf(key, sizeof(key), "direct_chunkslot_replay_%s_wire_bytes", kDispositionNames[i]);
+    observations::value(observations::Source::PerfReport, key, bytes, "bytes:cumulative", reportContext);
     char field[160]{};
     std::snprintf(field, sizeof(field),
                   " direct_chunkslot_replay_%s_raws=%llu"
@@ -2533,20 +2567,24 @@ void report() {
                   " direct_chunkslot_replay_%s_wire_bytes=%llu",
                   kDispositionNames[i],
                   static_cast<unsigned long long>(
-                      load(c.directChunkSlotReplayRaws[i])),
+                      raws),
                   kDispositionNames[i],
                   static_cast<unsigned long long>(
-                      load(c.directChunkSlotReplayRecords[i])),
+                      records),
                   kDispositionNames[i],
                   static_cast<unsigned long long>(
-                      load(c.directChunkSlotReplayWireBytes[i])));
+                      bytes));
     line += field;
   }
   for (std::size_t i = 0; i < std::size(kOutcomeNames); ++i) {
+    const auto outcome = load(c.directChunkSlotReplayOutcomes[i]);
+    char key[128]{};
+    std::snprintf(key, sizeof(key), "direct_chunkslot_replay_outcome_%s", kOutcomeNames[i]);
+    observations::value(observations::Source::PerfReport, key, outcome, "count:cumulative", reportContext);
     char field[128]{};
     std::snprintf(field, sizeof(field), " direct_chunkslot_replay_outcome_%s=%llu",
                   kOutcomeNames[i],
-                  static_cast<unsigned long long>(load(c.directChunkSlotReplayOutcomes[i])));
+                  static_cast<unsigned long long>(outcome));
     line += field;
   }
   line += '\n';

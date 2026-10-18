@@ -509,3 +509,5 @@ change rendering. Concurrent observer lifecycles require R-VERIF-1.1–1.4
 model/code evidence. If instrumentation changes production queue/lifetime/query
 behavior, it has exceeded this observation-only design and must satisfy the
 owning rendering refinement contracts before integration.
+
+All remaining acquired diagnostic families follow [shared diagnostic consumers](remaining-consumers.md), R-HARN-TRACE-15.1–15.6.

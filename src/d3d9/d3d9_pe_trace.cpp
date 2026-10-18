@@ -3,6 +3,9 @@
 
 #include "d3d9_pe_trace.hpp"
 
+#include "util/diagnostic_report.hpp"
+#include <algorithm>
+#include <cstring>
 #include <array>
 #include <atomic>
 #include <cstdlib>
@@ -279,3 +282,47 @@ void dxmt9PeTraceChunkEnd(D9CDevice* device) noexcept {
   state.droppedBatchCount = transition.droppedBatchCount;
   SetLastError(priorError);
 }
+
+namespace {
+void sendDiagnosticReport(const char* schema, std::string_view bytes, bool truncated) noexcept {
+  if (!dxmt9PeTraceEnabled()) return;
+  const std::string_view tag(schema);
+  if (!tag.starts_with("dxmt9-pe") && !tag.starts_with("dxmt9-query") &&
+      !tag.starts_with("dxmt9-bridge")) return;
+  const DWORD savedError = GetLastError();
+  auto& state = threadState();
+  D9CTraceClockProbe probe{};
+  if (!state.identityValid || dxmt9c_trace_clock_probe(nullptr, &probe) != 0 ||
+      probe.status != D9C_TRACE_RECEIPT_ACCEPTED) {
+    SetLastError(savedError); return;
+  }
+  D9CDiagnosticReport report{};
+  report.structSize = sizeof(report);
+  report.version = D9C_DIAGNOSTIC_REPORT_VERSION;
+  report.sessionGeneration = probe.sessionGeneration;
+  report.nativeThreadId = probe.nativeThreadId;
+  report.guestProcessId = state.processId;
+  report.guestThreadId = state.threadId;
+  report.processCreateTime100ns = state.processCreateTime100ns;
+  report.threadCreateTime100ns = state.threadCreateTime100ns;
+  report.sourceOrder = gPeTraceSourceOrder.fetch_add(1, std::memory_order_relaxed);
+  // Transport loss belongs to this thread and generation, separate from scopes.
+  static thread_local uint64_t generation = 0, lost = 0;
+  if (generation != probe.sessionGeneration) { generation = probe.sessionGeneration; lost = 0; }
+  report.droppedReports = lost;
+  const auto schemaSize = std::strlen(schema);
+  report.truncated = truncated || bytes.size() >= sizeof(report.payload) || schemaSize >= sizeof(report.schema);
+  report.length = static_cast<uint32_t>(std::min(bytes.size(), sizeof(report.payload) - 1));
+  std::memcpy(report.payload, bytes.data(), report.length);
+  std::memcpy(report.schema, schema, std::min(schemaSize, sizeof(report.schema) - 1));
+  const auto status = dxmt9c_device_diagnostic_report(nullptr, &report);
+  if (status == 0 || status == 4) lost = 0; // Receiver already accounted for output loss.
+  else if (lost != UINT64_MAX) ++lost;
+  SetLastError(savedError);
+}
+struct DiagnosticRegistration {
+  DiagnosticRegistration() noexcept {
+    dxmt9::diagnostics::consumer.store(sendDiagnosticReport, std::memory_order_release);
+  }
+} diagnosticRegistration;
+}  // namespace

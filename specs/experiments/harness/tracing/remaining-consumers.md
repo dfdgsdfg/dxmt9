@@ -73,3 +73,43 @@ Trace Processor verify annotations and SQL. Bridge changes require x86/x64 PE
 and unix build evidence. Existing lifecycle model checks remain applicable;
 new output must not change rendering state or retirement authority. Native
 fixtures do not establish live Wine overhead or external capture qualification.
+
+## Native and SQL representation
+
+Report encoding 1 carries exact bytes split into at most 64 fragments of 191
+bytes. The cold exporter writes hexadecimal `diagnostic_payload` annotations
+so UTF-8 split boundaries cannot corrupt JSON/protobuf consumers; a printable
+`diagnostic_display` annotation serves the native viewer. Encoding 2 carries
+exact unsigned values, unit/aggregation text and stable table keys. Values that
+fit signed counters use separate native tracks; identities and larger unsigned
+values remain exact instant annotations. Percentiles retain the sample count
+from the same sorted ring observation, including empty rings.
+
+Encoding 3 denotes individually bracketed endpoints. CPU supply projects
+qualified points, while wait acquisition/body pairs produce native slices only
+when all three endpoints qualify. Source clock reads are not retried to obtain
+more favorable brackets. Failed brackets retain original values and explicit
+qualification status in SQL; they do not fabricate time-aligned slices.
+
+For sessions with at least 4096 slots, half of the existing event allocation is
+reserved for shared diagnostic admission. A bounded CAS reservation runs under
+the existing writer lease; only drained/sealed sessions can read reserved
+records. This prevents a process counter table being limited to one thread's
+1/256 share. Smaller sessions retain the original per-thread admission path.
+Both partitions count toward the same configured byte/event limits and report
+loss without changing the legacy consumer. The larger record size and changed
+capacity partition require fresh overhead and retention-window qualification.
+
+`observation_report`/`observation_field` preserve source/schema/ordinal,
+fragment completeness, exact values and raw payload bytes. `structural_value`
+contains JSON pointer leaves or ordered CSV rows from producer-linked artifacts.
+Artifact hashes and `artifact_link` bind these rows to native source events;
+failed files remain explicit records. Paths are resolved at the producer. No
+artifact timestamp is promoted into an execution interval.
+
+Only reports produced while trace admission is open enter the native consumer.
+Existing periodic/final cadence is preserved; a shutdown report after trace
+closure still reaches the compatibility consumer. PE report timestamps denote
+native receipt, with guest process/thread incarnations retained. `DXMT9_TRACE_PE`
+remains the transport gate. External acquisitions require their existing
+qualified provenance; shared signpost IDs alone do not establish clock equality.

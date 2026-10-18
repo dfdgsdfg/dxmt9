@@ -2,11 +2,33 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace dxmt9::observations {
+inline std::string diagnostic_hex(std::string_view bytes) {
+  constexpr char hex[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(bytes.size() * 2);
+  for (unsigned char ch : bytes) {
+    result.push_back(hex[ch >> 4]); result.push_back(hex[ch & 15]);
+  }
+  return result;
+}
+inline std::string diagnostic_display(std::string_view bytes) {
+  std::string result;
+  for (unsigned char ch : bytes) {
+    if (ch >= 32 && ch < 127) result.push_back(static_cast<char>(ch));
+    else { result += "\\x"; result += diagnostic_hex({reinterpret_cast<const char*>(&ch), 1}); }
+  }
+  return result;
+}
 enum class Source : std::uint16_t {
   CpuSupply = 1, Wait = 2, QueryBackend = 3, QueryReceipt = 4,
   PerfFrame = 5, CompatAppend = 6,
+  QueryReport = 7, PerfReport = 8, ProcessMemory = 9,
+  CpuDetail = 10, WaitDetail = 11, PeReport = 12,
+  QueueReport = 13, Signpost = 14, Renderer = 15,
 };
 inline const char* source_name(std::uint16_t source) noexcept {
   switch (static_cast<Source>(source)) {
@@ -16,10 +38,22 @@ inline const char* source_name(std::uint16_t source) noexcept {
     case Source::QueryReceipt: return "query-receipt";
     case Source::PerfFrame: return "perf-frame";
     case Source::CompatAppend: return "compat-append";
+    case Source::QueryReport: return "query-report";
+    case Source::PerfReport: return "perf-report";
+    case Source::ProcessMemory: return "process-memory";
+    case Source::CpuDetail: return "cpu-detail";
+    case Source::WaitDetail: return "wait-detail";
+    case Source::PeReport: return "pe-report";
+    case Source::QueueReport: return "queue-report";
+    case Source::Signpost: return "signpost";
+    case Source::Renderer: return "renderer";
   }
   return "unknown";
 }
-inline const char* timestamp_kind(std::uint16_t source) noexcept {
+inline const char* timestamp_kind(std::uint16_t source, std::uint16_t mode = 0) noexcept {
+  if (source == 10 || source == 11) return mode == 3 ? "bracketed-endpoint" : "detailed-record-observed";
+  if (source == 12) return "report-received";
+  if (source >= 7) return "report-observed";
   return source == 1 ? "cpu-query-start" : source == 2
       ? "wait-result-observed" : "snapshot-observed";
 }

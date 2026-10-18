@@ -18,9 +18,9 @@ qualify an unavailable external collector or establish negligible overhead.
 
 | Contract | Implementation | Qualification and remaining limits |
 |---|---|---|
-| R-HARN-TRACE-15.1–15.6 | Specified in [shared diagnostic consumers](remaining-consumers.md). | All remaining families require producer adapters, bounded native/PE transport and native/SQLite evidence. Live overhead remains separately qualified. |
-| R-HARN-TRACE-14.1–14.5 | Implemented: bounded atomic query-ledger/frame/append snapshot projections with source, population and aggregation metadata. | SDK-off 25/25 and SDK-on 28/28; pinned native/SQLite round trip covers 204 snapshot fields. See [evidence](evidence.md#shared-query-and-counter-snapshots). Live Wine overhead and fields outside CounterSnapshot remain unqualified. |
-| R-HARN-TRACE-13.1–13.5 | Shared object-owned GPU endpoint sources, retained legacy stage attachments, common bounded CPU/wait records, native counter projections and SQL source keys. | SDK-off/on and actual Metal fixture evidence is recorded in [shared acquisition evidence](evidence.md#shared-acquisition). Detailed legacy clocks remain unqualified for direct timeline placement; fresh Wine and observer-overhead qualification remain open. |
+| R-HARN-TRACE-15.1–15.6 | Implemented: shared acquired reports, exact process counters/percentile populations, memory samples, qualified CPU/wait endpoints, generated PE report transport, queue/signpost and renderer artifact adapters. | Native/SQLite fixtures cover all families; see [shared diagnostic evidence](evidence.md#shared-diagnostic-consumers). Live Wine overhead, external captures and capture-window coverage remain separately qualified. |
+| R-HARN-TRACE-14.1–14.5 | Implemented: bounded atomic query-ledger/frame/append snapshot projections with source, population and aggregation metadata. | SDK-off 25/25 and SDK-on 28/28; pinned native/SQLite round trip covers 204 snapshot fields. See [evidence](evidence.md#shared-query-and-counter-snapshots). Live Wine overhead remains unqualified; process fields outside CounterSnapshot are covered by R-HARN-TRACE-15. |
+| R-HARN-TRACE-13.1–13.5 | Shared object-owned GPU endpoint sources, retained legacy stage attachments, common bounded CPU/wait records, native counter projections and SQL source keys. | SDK-off/on and actual Metal fixture evidence is recorded in [shared acquisition evidence](evidence.md#shared-acquisition). Unbracketed historical legacy clocks remain unqualified for direct placement; R-HARN-TRACE-15 qualifies new endpoint brackets. Fresh Wine and observer-overhead qualification remain open. |
 | R-HARN-TRACE-12.1–12.6 | Implemented: default overview, native queue/frame counter tracks, slice-to-SQL source links, supplemental CPU/wait/PE adapters and source-line log indexing, immutable SQLite, experiment and conformance provenance. | Native counter/SQLite round trip and deterministic failure fixtures pass. Full replacement of legacy producers and live migration overhead remain unqualified; PE QPC limits above still apply. |
 | R-HARN-TRACE-1.1–1.3 | Catalogue profiles, unique attempts, frozen requests, build/source provenance, separate collector outcomes and atomic manifest sealing. | Python positive/negative fixtures pass; final catalogue Wine evidence is recorded in the matrix. |
 | R-HARN-TRACE-2.1–2.3 | Process/thread/session incarnations, distinct raw/queue/CB identities and explicit cold-side relation resolution. | Native and Wine x64 GPU captures qualify typed submit-to-CB flows. Broad many-source/shared-CB fan-out remains unqualified; completion membership does not establish exclusive physical GPU contribution. |
@@ -54,13 +54,14 @@ External collection gaps are owned by the
 
 ## Existing Component Entry Points
 
-Remaining migration beyond R-HARN-TRACE-14: detailed CPU/wait slices require
-qualified endpoint clocks; PE sampler/recorder observations need population-
-preserving bridge projection; queue text/signpost sites and renderer structural
-diagnostics need shared output adapters. Perf fields/histograms outside
-CounterSnapshot remain independent. External Instruments/Processor Trace/Xcode
-capture retain separate acquisition and join only through qualified identity,
-clock and artifact provenance.
+R-HARN-TRACE-15 adds the remaining producer consumers. CPU endpoints use native
+brackets and qualified wait pairs become slices; failed brackets stay explicit.
+PE sampler/recorder reports use generated bounded transport, and process perf
+fields/histogram outputs share acquired values. Queue/signpost and renderer
+outputs have native/SQL adapters. These implementations do not establish that a
+particular live trace window captured a collector's periodic or shutdown report.
+External Instruments/Processor Trace/Xcode capture retain separate acquisition
+and join only through qualified identity, clock and artifact provenance.
 
 - `src/dxmt9/dxmt9_cpu_supply_trace.{hpp,cpp}` and
   `scripts/tools/analyze_cpu_supply.py` (`load`, `pair`).

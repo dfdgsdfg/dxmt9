@@ -19,6 +19,7 @@
 // All intervals are no-ops when no Instruments consumer is recording, so
 // this is wired unconditionally rather than gated on DXMT_PERF_COUNTERS.
 
+#include "dxmt9_trace.hpp"
 #include <os/log.h>
 #include <os/signpost.h>
 
@@ -28,5 +29,7 @@ namespace dxmt9::signposts {
 // Safe to call before main(); the underlying os_log_create is invoked
 // lazily on the first call via a function-local static.
 os_log_t log();
+void tracePoint(const char* name, std::uint64_t id, bool begin,
+                std::uint64_t work = 0) noexcept;
 
 }  // namespace dxmt9::signposts

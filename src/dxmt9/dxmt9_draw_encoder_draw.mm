@@ -3039,6 +3039,7 @@ bool encodeDraw(EncodeContext& ctx,
   // Instruments. No-op when no consumer is recording (~5 ns).
   os_log_t signpostLog = dxmt9::signposts::log();
   os_signpost_id_t drawSignpost = os_signpost_id_generate(signpostLog);
+  if (tracing::enabled_detail()) signposts::tracePoint("draw", drawSignpost, true, seqId);
   os_signpost_interval_begin(signpostLog, drawSignpost, "draw",
                              "seq=%llu",
                              static_cast<unsigned long long>(seqId));
@@ -3046,6 +3047,7 @@ bool encodeDraw(EncodeContext& ctx,
     os_log_t log;
     os_signpost_id_t id;
     ~DrawSignpostScope() {
+      if (tracing::enabled_detail()) signposts::tracePoint("draw", id, false);
       os_signpost_interval_end(log, id, "draw");
     }
   } drawSignpostScope{signpostLog, drawSignpost};
