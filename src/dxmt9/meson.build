@@ -9,6 +9,7 @@ dxmt9_trace_srcs = files(
   'dxmt9_trace_gpu.cpp',
   'dxmt9_trace_gpu.mm',
   'dxmt9_trace_gpu_bridge.mm',
+  'observations/gpu_source.mm',
 )
 dxmt9_trace_links = []
 dxmt9_trace_inc = []

@@ -1,4 +1,5 @@
 #include "dxmt9_trace_gpu_bridge.hpp"
+#include "observations/gpu_source.hpp"
 
 #include "../winemetal/Metal.hpp"
 
@@ -277,8 +278,9 @@ std::size_t poll(BridgeImpl& impl) noexcept {
             ? WMTCommandBufferStatusError
             : commandBuffer.status();
     if (status == WMTCommandBufferStatusCompleted) {
-      const std::uint64_t start = commandBuffer.gpuStartTime();
-      const std::uint64_t end = commandBuffer.gpuEndTime();
+      const auto endpoints = observations::commandBufferEndpoints(commandBuffer.handle);
+      const std::uint64_t start = endpoints.begin;
+      const std::uint64_t end = endpoints.end;
       const bool published = impl.collector.complete(slot.ticket, Completion{
           .status = CommandBufferStatus::Completed,
           .gpuStartNs = start,
@@ -447,6 +449,13 @@ std::uint64_t SubmissionBridge::observeSubmission(
                                              std::memory_order_acq_rel,
                                              std::memory_order_relaxed)) {
       continue;
+    }
+    if (!observations::prepareCommandBufferSource(
+            static_cast<obj_handle_t>(commandBufferHandle))) {
+      impl->collector.recordLostCapacity();
+      slot.state.store(SubmissionSlot::Free, std::memory_order_release);
+      releaseObserver(*impl);
+      return 0;
     }
     const Ticket ticket = impl->collector.reserve(identity);
     if (!ticket) {
@@ -813,7 +822,8 @@ bool publishCompletedProcessGpuCommandBuffer(
 
 StagePairReservation reserveCurrentStageAttachment(
     std::uintptr_t deviceHandle,
-    std::uintptr_t commandBufferHandle) noexcept {
+    std::uintptr_t commandBufferHandle,
+    const WMTSampleBufferAttachmentInfo* sharedAttachment) noexcept {
   const WorkIdentity* current = currentStageWork();
   if (!current || !deviceHandle || !commandBufferHandle ||
       current->deviceGeneration == 0 ||
@@ -830,7 +840,7 @@ StagePairReservation reserveCurrentStageAttachment(
       commandBufferHandle, static_cast<std::uintptr_t>(work.queueGeneration),
       work.sequenceId);
   if (work.commandBufferId == 0) return {};
-  const auto reservation = gProcessStageBuffer.reserve(work);
+  const auto reservation = gProcessStageBuffer.reserve(work, sharedAttachment);
   if (!reservation || reservation.ticket.pairIndex >= gProcessStageRecords.size()) {
     return {};
   }

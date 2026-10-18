@@ -99,7 +99,8 @@ bool publishCompletedProcessGpuCommandBuffer(
 std::uint64_t processGpuCompletionLosses() noexcept;
 StagePairReservation reserveCurrentStageAttachment(
     std::uintptr_t deviceHandle,
-    std::uintptr_t commandBufferHandle) noexcept;
+    std::uintptr_t commandBufferHandle,
+    const WMTSampleBufferAttachmentInfo* sharedAttachment = nullptr) noexcept;
 std::size_t resolveProcessGpuStageSamples(
     const CompletionEvidence& evidence) noexcept;
 std::size_t drainProcessGpuStageSamples(StageSampleConsumer consumer,

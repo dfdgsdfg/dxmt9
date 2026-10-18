@@ -64,6 +64,7 @@ enum class Metric : uint16_t {
   FrameDrawCalls, FrameCommandBuffers, FramePresentEncoded,
   FrameEncodeChunkElapsedNs, FrameEncodeDrawElapsedNs,
   NativeThreadCpuNs,
+  WaitMutexAcquireElapsedNs, WaitBodyElapsedNs,
 };
 
 struct TraceEvent {
@@ -99,6 +100,8 @@ struct TraceEvent {
   uint64_t calibration_valid_begin;
   uint64_t calibration_valid_end;
   uint64_t calibration_resolution_ns;
+  uint64_t observation_record;
+  uint16_t observation_kind;
   uint64_t metric_value;
   uint16_t metric_id;
   uint32_t clock_id;
@@ -168,6 +171,8 @@ bool emit_batch(std::span<const TraceEvent> events,
 // Capture this token at the start of a bounded external handler, then use the
 // captured form when appending so a delayed old handler cannot target a rearm.
 uint64_t capture_generation() noexcept;
+// Returns true only if this observation's category was selected and appended.
+bool emit_observation(const TraceEvent& event, uint64_t generation) noexcept;
 bool emit_batch_captured(std::span<const TraceEvent> events,
                          uint64_t generation,
                          uint64_t loss_count = 0) noexcept;

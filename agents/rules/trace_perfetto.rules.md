@@ -5,6 +5,7 @@ paths:
   - "scripts/tools/tracing*"
   - "src/dxmt9/*trace*"
   - "src/dxmt9/tracing/**/*"
+  - "src/dxmt9/observations/**/*"
   - "specs/experiments/harness/tracing/**/*.md"
   - "docs/perfomance/**/*.md"
   - "agents/skills/cputrace/**/*"
@@ -106,3 +107,21 @@ domain; follow [documentation rules](documentation.rules.md).
 - Preserve legacy acquisition formats, control/receipt envelopes, crash
   breadcrumbs and opaque captures where their format/lifecycle requires files.
   Existing aggregates remain usable with the SDK disabled.
+
+## Shared acquisition
+
+- The SDK-independent observation source owns physical acquisition. Trace and
+  legacy consumers may share only equivalent object-lifetime/sample-index pairs.
+  Do not reset or reuse timestamp indices within a shared counter buffer.
+- Trace stage tickets retain supplied legacy buffers independently. Close/timeout
+  cannot release an in-flight source or replace production retirement authority.
+  Cache missing/invalid results as invalid; never retry them into plausible data.
+- CPU supply and wait keep their existing gates/windows. Native projections use
+  already-acquired values. CPU counter timestamps mean query start; wait counter
+  timestamps mean result observation, not wait endpoint alignment.
+- Retain acquisition version and per-consumer attempted/accepted counts. Matching
+  observation_source/observation_record requires a complete source, proven same
+  process/attempt and immutable artifact; row numbers alone do not prove a join.
+- SDK-off legacy acquisition must work without allocating trace source caches.
+  Shared per-pair resolve has a different CPU cost from legacy bulk resolve;
+  require matched controls before asserting an overhead reduction.

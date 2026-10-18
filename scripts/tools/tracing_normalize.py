@@ -891,7 +891,8 @@ def adapt_runtime_jsonl(text: str, *, producer: str = "tracing_normalize.py") ->
 def _base(run_id: str, producer: str, input_path: Path, input_digest: str,
           process: dict[str, Any], clocks: list[dict[str, Any]], threads: list[dict[str, Any]],
           events: list[dict[str, Any]], *, closed: bool, loss: int,
-          coverage: dict[str, Any], window: dict[str, Any], adapter: str) -> dict[str, Any]:
+          coverage: dict[str, Any], window: dict[str, Any], adapter: str,
+          acquisition: dict[str, Any] | None = None) -> dict[str, Any]:
     result = {"schema": SCHEMA, "producer": producer, "stage": "reduce", "domain": "dxmt9",
               "run_id": run_id, "inputs": [{"path": str(input_path), "sha256": input_digest,
                                               "adapter": adapter}],
@@ -899,6 +900,8 @@ def _base(run_id: str, producer: str, input_path: Path, input_digest: str,
               "processes": [process], "threads": threads, "clocks": clocks,
               "events": events, "relations": [], "window": window,
               "loss": {"total": str(loss), "source": adapter}, "coverage": coverage}
+    if acquisition is not None:
+        result["acquisition"] = acquisition
     result["qualification"] = validate_bundle(result)
     return result
 
@@ -945,7 +948,11 @@ def adapt_cpu_supply(text: str, input_path: Path, *, run_id: str,
         attrs = {"legacy_event": kind, "owner": str(row["owner"]), "id": str(row["id"]),
                  "value": str(row["value"]), "frame": str(row["frame"]),
                  "thread_cpu_counter_ns": str(row["cpu_ns"]),
-                 "thread_cpu_kind": "native_thread_cpu_counter"}
+                 "thread_cpu_kind": "native_thread_cpu_counter",
+                 "acquisition_version": header.get("acquisition_version", "0"),
+                 "trace_attempted": header.get("trace_attempted", "unknown"),
+                 "trace_accepted": header.get("trace_accepted", "unknown"),
+                 "observation_source": "cpu-supply", "observation_record": str(i + 1)}
         if kind.endswith("_begin"):
             event_kind, scope_id = "scope_begin", f"cpu:{row['owner']}:{row['id']}:{kind[:-6]}"
         elif kind.endswith("_end"):
@@ -978,7 +985,11 @@ def adapt_cpu_supply(text: str, input_path: Path, *, run_id: str,
                  coverage={"legacy_rows": {"observed": str(len(rows)), "population": str(len(rows))}},
                  window={"start": None, "end": None, "closed": header["closed"] == "1",
                          "frame_first": header["first"], "frame_last": header["last"]},
-                 adapter="cpu-supply-v2")
+                 adapter="cpu-supply-v2", acquisition={
+                     "version": header.get("acquisition_version", "0"),
+                     "source": "cpu-supply", "compatibility_export": True,
+                     "trace_attempted": header.get("trace_attempted", "unknown"),
+                     "trace_accepted": header.get("trace_accepted", "unknown")})
 
 
 def adapt_wait_trace(text: str, input_path: Path, *, run_id: str,
@@ -1025,7 +1036,11 @@ def adapt_wait_trace(text: str, input_path: Path, *, run_id: str,
                         "native_tid": tid, "incarnation": "unknown", "identity_quality": "tid_only"}
         scope = f"wait:{i}"
         attrs = {k: str(v) for k, v in row.items()}
-        attrs.update(site_name=site, duration_kind="elapsed_wait_or_acquisition",
+        attrs.update(acquisition_version=header.get("acquisition_version", "0"),
+                     trace_attempted=header.get("trace_attempted", "unknown"),
+                     trace_accepted=header.get("trace_accepted", "unknown"),
+                     observation_source="wait", observation_record=str(i + 1),
+                     site_name=site, duration_kind="elapsed_wait_or_acquisition",
                      interpretation="hooked_site_elapsed_not_cpu")
         events.append(_event(f"wait:{i}:begin", f"row:{i}", process_id, f"tid:{tid}",
                              "wait-steady-clock", row["begin_ns"], "scope_begin", attrs,
@@ -1055,7 +1070,11 @@ def adapt_wait_trace(text: str, input_path: Path, *, run_id: str,
                                               "population": str(len(rows))}},
                  window={"start": None, "end": None, "closed": header["closed"] == "1",
                          "frame_first": header["first"], "frame_last": header["last"]},
-                 adapter="wait-trace-v1")
+                 adapter="wait-trace-v1", acquisition={
+                     "version": header.get("acquisition_version", "0"),
+                     "source": "wait", "compatibility_export": True,
+                     "trace_attempted": header.get("trace_attempted", "unknown"),
+                     "trace_accepted": header.get("trace_accepted", "unknown")})
 
 
 def adapt_pe_sampler(text: str, input_path: Path, *, run_id: str) -> dict[str, Any]:

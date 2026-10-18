@@ -1,4 +1,6 @@
 #include "dxmt9_cpu_supply_trace.hpp"
+#include "observations/bounded_records.hpp"
+#include "observations/trace_sink.hpp"
 
 #include <atomic>
 #include <cstdio>
@@ -21,7 +23,6 @@ std::uint64_t nextWaitAttempt() noexcept {
 namespace {
 constexpr std::size_t kCapacity = 262144;
 struct Row {
-  std::atomic<bool> ready{false};
   std::uint64_t wall = 0, cpu = 0, tid = 0, owner = 0, id = 0, value = 0;
   std::uint64_t frame = 0;
   Event event{};
@@ -57,9 +58,10 @@ std::uint64_t setting(const char* name, std::uint64_t fallback) noexcept {
 }
 
 struct Sink {
-  std::unique_ptr<Row[]> rows;
-  std::atomic<std::uint64_t> next{0}, frame{0};
+  observations::BoundedRecords<Row, kCapacity> rows;
+  std::atomic<std::uint64_t> frame{0};
   std::atomic<std::uint64_t> writers{0};
+  std::atomic<std::uint64_t> traceAttempted{0}, traceAccepted{0};
   std::atomic<bool> finished{false};
   std::uint64_t first = setting("DXMT9_CPU_SUPPLY_TRACE_FIRST_PRESENT", 300);
   std::uint64_t last = setting("DXMT9_CPU_SUPPLY_TRACE_LAST_PRESENT", 600);
@@ -71,22 +73,24 @@ struct Sink {
     // Never overwrite another run's evidence. Opening/allocation precedes
     // the warm-up window; failure produces no apparently valid transcript.
     file = std::fopen(path, "wx");
-    if (file) rows.reset(new (std::nothrow) Row[kCapacity]);
+    if (file) rows.allocate();
   }
   void finish(bool closed) noexcept {
     if (finished.exchange(true) || !file) return;
     std::uint64_t incomplete = writers.load();
-    const auto count = next.load();
+    const auto count = rows.size();
     for (std::size_t i = 0; i < count && i < kCapacity; ++i) {
-      if (!rows[i].ready.load(std::memory_order_acquire)) ++incomplete;
+      if (!rows.read(i)) ++incomplete;
     }
-    std::fprintf(file, "# cpu-supply-v2 first=%llu last=%llu closed=%u overflow=%llu incomplete=%llu cpu_clock=1 pid=%d\n",
+    std::fprintf(file, "# cpu-supply-v2 first=%llu last=%llu closed=%u overflow=%llu incomplete=%llu cpu_clock=1 pid=%d acquisition_version=1 trace_attempted=%llu trace_accepted=%llu\n",
         first, last, closed ? 1u : 0u,
-        count > kCapacity ? count - kCapacity : 0ull, incomplete, getpid());
+        count > kCapacity ? count - kCapacity : 0ull, incomplete, getpid(),
+        traceAttempted.load(), traceAccepted.load());
     std::fprintf(file, "wall_ns,cpu_ns,tid,owner,id,value,frame,event\n");
     for (std::size_t i = 0; i < count && i < kCapacity; ++i) {
-      const auto& r = rows[i];
-      if (!r.ready.load(std::memory_order_acquire)) continue;
+      const auto* published = rows.read(i);
+      if (!published) continue;
+      const auto& r = *published;
       std::fprintf(file, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%u\n",
           r.wall, r.cpu, r.tid, r.owner, r.id, r.value, r.frame,
           static_cast<unsigned>(r.event));
@@ -125,12 +129,12 @@ void record(Event event, const void* owner, std::uint64_t id,
     s.writers.fetch_sub(1);
     return;
   }
-  const auto index = s.next.fetch_add(1, std::memory_order_relaxed);
+  const auto index = s.rows.reserve();
   if (index >= kCapacity) {
     s.writers.fetch_sub(1);
     return;
   }
-  auto& r = s.rows[index];
+  auto& r = s.rows.writable(index);
   r.wall = clockNs(CLOCK_MONOTONIC);
   static thread_local const std::uint64_t tid = [] {
     std::uint64_t result = 0;
@@ -140,13 +144,21 @@ void record(Event event, const void* owner, std::uint64_t id,
     return result;
   }();
   r.tid = tid;
+  const auto traceGeneration = tracing::enabled() ? tracing::capture_generation() : 0;
+  const auto cpuQueryTime = traceGeneration ? tracing::now_ns() : 0;
   r.cpu = nativeCpuNs(tid);
   r.owner = reinterpret_cast<std::uintptr_t>(owner);
   r.id = id;
   r.value = value;
   r.frame = frame;
   r.event = event;
-  r.ready.store(true, std::memory_order_release);
+  s.rows.publish(index);
+  if (traceGeneration && r.cpu) {
+    s.traceAttempted.fetch_add(1, std::memory_order_relaxed);
+    if (observations::counter(traceGeneration, observations::Source::CpuSupply,
+          index, cpuQueryTime, tracing::Metric::NativeThreadCpuNs, r.cpu))
+      s.traceAccepted.fetch_add(1, std::memory_order_relaxed);
+  }
   s.writers.fetch_sub(1);
 }
 

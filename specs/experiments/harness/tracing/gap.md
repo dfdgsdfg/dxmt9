@@ -11,14 +11,15 @@ Owns implementation/evidence status for [requirements](requirements.md) and
 [spec](spec.md). This inventory distinguishes existing components from the
 integrated contract; source presence is not a fresh runtime qualification.
 
-The [48-requirement evidence matrix](evidence.md) is the authoritative
+The [requirement evidence matrix](evidence.md) is the authoritative
 code/test mapping. Implementation and platform qualification remain distinct.
 Native SDK import, deterministic fixtures, and device smoke do not by themselves
 qualify an unavailable external collector or establish negligible overhead.
 
 | Contract | Implementation | Qualification and remaining limits |
 |---|---|---|
-| R-HARN-TRACE-12.1–12.6 | Implemented: default overview, native queue/frame counter tracks, slice-to-SQL source links, supplemental CPU/wait/PE adapters and source-line log indexing, immutable SQLite, experiment and conformance provenance. | Native counter/SQLite round trip and deterministic failure fixtures pass. Full replacement of legacy producers, shared GPU sampler and live migration overhead remain unqualified; PE QPC limits above still apply. |
+| R-HARN-TRACE-13.1–13.5 | Shared object-owned GPU endpoint sources, retained legacy stage attachments, common bounded CPU/wait records, native counter projections and SQL source keys. | SDK-off/on and actual Metal fixture evidence is recorded in [shared acquisition evidence](evidence.md#shared-acquisition). Detailed legacy clocks remain unqualified for direct timeline placement; fresh Wine and observer-overhead qualification remain open. |
+| R-HARN-TRACE-12.1–12.6 | Implemented: default overview, native queue/frame counter tracks, slice-to-SQL source links, supplemental CPU/wait/PE adapters and source-line log indexing, immutable SQLite, experiment and conformance provenance. | Native counter/SQLite round trip and deterministic failure fixtures pass. Full replacement of legacy producers and live migration overhead remain unqualified; PE QPC limits above still apply. |
 | R-HARN-TRACE-1.1–1.3 | Catalogue profiles, unique attempts, frozen requests, build/source provenance, separate collector outcomes and atomic manifest sealing. | Python positive/negative fixtures pass; final catalogue Wine evidence is recorded in the matrix. |
 | R-HARN-TRACE-2.1–2.3 | Process/thread/session incarnations, distinct raw/queue/CB identities and explicit cold-side relation resolution. | Native and Wine x64 GPU captures qualify typed submit-to-CB flows. Broad many-source/shared-CB fan-out remains unqualified; completion membership does not establish exclusive physical GPU contribution. |
 | R-HARN-TRACE-3.1–3.4 | Declared clocks, bounded calibration validity, source metrics, unknown populations and legacy adapters. | Native and Wine x64 GPU calibration passes. Wine x86/x64 PE point brackets now pass the unchanged 1000 ns policy on three captures per architecture; unknown populations remain unknown. See [qualification](pe-clock.md#qualification). |

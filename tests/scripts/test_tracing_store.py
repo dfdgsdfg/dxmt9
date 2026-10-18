@@ -46,6 +46,33 @@ class StoreTests(unittest.TestCase):
             record = json.loads(db.execute("SELECT record_json FROM source_event WHERE source_id='counter'").fetchone()[0])
             self.assertEqual(record['attrs']['owner_id'], '18446744073709551615')
 
+    def test_shared_projection_keys_survive_native_and_legacy_sql(self):
+        event = dict(self.bundle['events'][0], event_id='projection', source_record='native:1',
+                     source_order='3', kind='counter',
+                     attrs={'counter_value': '99', 'unit': 'ns',
+                            'observation_source': 'cpu-supply', 'observation_record': '1',
+                            'acquisition_version': '1',
+                            'observation_timestamp_kind': 'cpu-query-start'})
+        self.bundle['events'].append(event)
+        self.bundle['coverage']['events'] = {'observed': '3', 'population': '3'}
+        self.source.write_text(json.dumps(self.bundle))
+        legacy = self.root / 'cpu.csv'
+        legacy.write_text('# cpu-supply-v2 first=1 last=2 closed=1 overflow=0 incomplete=0 '
+                          'cpu_clock=1 pid=42 acquisition_version=1 trace_attempted=1 trace_accepted=1\n'
+                          'wall_ns,cpu_ns,tid,owner,id,value,frame,event\n'
+                          '10,99,7,0,0,0,1,0\n')
+        publish_store(self.output, run_id='run-1', attempt_id='attempt-1', provenance={},
+                      bundles=[('engine', self.source), ('cpu-supply', legacy)], artifacts=[])
+        with sqlite3.connect(self.output) as db:
+            records = [json.loads(row[0]) for row in db.execute('SELECT record_json FROM source_event')]
+            matching = [r for r in records if r['attrs'].get('observation_source') == 'cpu-supply']
+            self.assertEqual(len(matching), 2)
+            self.assertTrue(all(r['attrs']['observation_record'] == '1' for r in matching))
+            self.assertTrue(all(r['attrs']['acquisition_version'] == '1' for r in matching))
+            # Keys survive, but unknown legacy process/clock identity must not be auto-joined.
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM artifact_link').fetchone()[0], 0)
+            self.assertIn(('unqualified',), db.execute('SELECT alignment FROM clock').fetchall())
+
     def test_partial_scope_and_unqualified_clock_remain_visible(self):
         self.bundle['events'].pop()
         self.bundle['window']['closed'] = False

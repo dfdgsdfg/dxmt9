@@ -1,5 +1,6 @@
 #include "dxmt9_trace_bindings.hpp"
 #include "dxmt9_trace_gpu_bridge.hpp"
+#include "observations/gpu_source.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_render_tape_emission_observer.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
@@ -6870,34 +6871,35 @@ bool QueueLifecycleController::processOnePendingCompletion() {
                                                         pending.diagnostics,
                                                         pending.contextValue.c_str());
   }
-  if (pending.renderEncoderGpuSampleBuffer &&
+  if (completionSucceeded && pending.renderEncoderGpuSampleBuffer &&
       !pending.renderEncoderGpuSamples.empty()) {
-    std::uint32_t sampleCount = 0;
-    for (const auto& sample : pending.renderEncoderGpuSamples) {
-      sampleCount = std::max(sampleCount, sample.endIndex + 1u);
-    }
-    if (sampleCount > 0) {
-      std::vector<std::uint64_t> timestamps(sampleCount, 0);
+    const bool shared = observations::hasCounterSource(
+        pending.renderEncoderGpuSampleBuffer.handle);
+    std::vector<std::uint64_t> legacyTimestamps;
+    if (!shared) {
+      std::uint32_t sampleCount = 0;
+      for (const auto& sample : pending.renderEncoderGpuSamples)
+        sampleCount = std::max(sampleCount, sample.endIndex + 1u);
+      legacyTimestamps.resize(sampleCount, 0);
       pending.renderEncoderGpuSampleBuffer.resolveCounterRange(
-          0, sampleCount, timestamps.data(),
-          timestamps.size() * sizeof(timestamps[0]));
-      for (const auto& sample : pending.renderEncoderGpuSamples) {
-        if (sample.startIndex >= timestamps.size() ||
-            sample.endIndex >= timestamps.size()) {
-          continue;
-        }
-        const auto start = timestamps[sample.startIndex];
-        const auto end = timestamps[sample.endIndex];
-        if (start == 0 || end <= start) {
-          continue;
-        }
-        perf::countRenderEncoderGpuTime(
-            end - start,
-            static_cast<std::uint32_t>(sample.passType),
-            sample.rtHandle,
-            sample.depthHandle,
-            sample.psoHandle);
-      }
+          0, sampleCount, legacyTimestamps.data(),
+          legacyTimestamps.size() * sizeof(legacyTimestamps[0]));
+    }
+    for (const auto& sample : pending.renderEncoderGpuSamples) {
+      if (sample.startIndex == UINT32_MAX ||
+          sample.endIndex != sample.startIndex + 1u ||
+          (!shared && (sample.startIndex >= legacyTimestamps.size() ||
+                       sample.endIndex >= legacyTimestamps.size()))) continue;
+      const auto endpoints = shared
+          ? observations::counterPairEndpoints(
+                pending.renderEncoderGpuSampleBuffer.handle, sample.startIndex)
+          : observations::GpuEndpoints{legacyTimestamps[sample.startIndex],
+                                       legacyTimestamps[sample.endIndex]};
+      if (!endpoints.valid()) continue;
+      perf::countRenderEncoderGpuTime(
+          endpoints.end - endpoints.begin,
+          static_cast<std::uint32_t>(sample.passType),
+          sample.rtHandle, sample.depthHandle, sample.psoHandle);
     }
   }
   for (auto& callback : pending.completionCallbacks) {
@@ -7353,8 +7355,9 @@ bool CompletionTracker::inspect(obj_handle_t commandBuffer,
     // returns nanosecond timestamps via MTLCommandBuffer_property; on
     // older / unsupported drivers the values can be 0 or non-monotonic,
     // so guard before recording.
-    const std::uint64_t gpuStart = wrapped.gpuStartTime();
-    const std::uint64_t gpuEnd = wrapped.gpuEndTime();
+    const auto endpoints = observations::commandBufferEndpoints(wrapped.handle);
+    const std::uint64_t gpuStart = endpoints.begin;
+    const std::uint64_t gpuEnd = endpoints.end;
     if (gpuStart > 0 && gpuEnd > gpuStart) {
       dxmt9::perf::countGpuCommandBufferTime(gpuEnd - gpuStart);
     }

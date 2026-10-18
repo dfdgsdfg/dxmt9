@@ -2174,6 +2174,8 @@ foreach spec : ['tracing-concurrency', 'tracing-gpu-retirement']
 endforeach
 tracing_runtime_spec = executable(
   'dxmt9-tracing-runtime-spec', 'tracing_runtime_spec.cpp',
+  '../../../src/dxmt9/dxmt9_cpu_supply_trace.cpp',
+  '../../../src/dxmt9/dxmt9_wait_trace.cpp',
   include_directories: [dxmt9_inc, include_directories('../../../src')],
   cpp_args: ['-DDXMT9_TEST_PERFETTO=' + (get_option('dxmt9_perfetto') ? '1' : '0')],
   dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
@@ -2221,4 +2223,19 @@ if get_option('dxmt9_perfetto')
   )
   test('dxmt9-tracing-sdk-coexistence-spec', tracing_sdk_coexistence_spec,
        env: dxmt9_native_test_env, timeout: 30)
+endif
+
+shared_observation_spec = executable(
+  'dxmt9-shared-observation-spec', 'shared_observation_spec.mm',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+  dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-shared-observation-spec', shared_observation_spec, env: dxmt9_native_test_env)
+
+if get_option('dxmt9_perfetto')
+  test('dxmt9-shared-observation-roundtrip', python3,
+    args: [join_paths(meson.project_source_root(), 'tests/scripts/test_shared_observation_capture.py'),
+           tracing_runtime_spec.full_path()],
+    depends: tracing_runtime_spec, env: dxmt9_native_test_env, timeout: 60)
 endif

@@ -577,6 +577,17 @@ class TracingNormalizeTests(unittest.TestCase):
         self.assertEqual(bundle["clocks"][0]["source"], "CLOCK_MONOTONIC")
         self.assertEqual(bundle["qualification"]["verdict"], "unqualified")
 
+    def test_empty_shared_source_keeps_consumer_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "cpu.csv"
+            path.write_text("# cpu-supply-v2 first=1 last=3 closed=1 overflow=0 incomplete=0 "
+                            "cpu_clock=1 pid=44 acquisition_version=1 trace_attempted=0 trace_accepted=0\n"
+                            "wall_ns,cpu_ns,tid,owner,id,value,frame,event\n", encoding="utf-8")
+            bundle = tracing.adapt_cpu_supply(path.read_text(), path, run_id="run")
+        self.assertEqual(bundle["events"], [])
+        self.assertEqual(bundle["acquisition"]["version"], "1")
+        self.assertEqual(bundle["acquisition"]["trace_accepted"], "0")
+
     def test_wait_adapter_retains_elapsed_milestones_and_not_cpu(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "wait.csv"

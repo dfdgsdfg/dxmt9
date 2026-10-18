@@ -7,7 +7,7 @@ tags: [specs, experiments, harness, tracing, evidence]
 
 # Detailed Performance Tracing Evidence Matrix
 
-This matrix covers all 48 active requirements. Retired 7.1/7.2 remain reserved.
+This matrix and the migration sections below cover the active requirements. Retired 7.1/7.2 remain reserved.
 Implementation and qualification are separate: a deterministic fixture does not
 qualify an actual platform collector or establish negligible observer cost.
 Paths in the code column are repository-relative or unambiguous source basenames.
@@ -132,6 +132,34 @@ pinned Trace Processor v58.2 exact expectations; its companion SQLite retains
 all source records. SDK-off tracing tests pass 18/18; the SDK-on tracing/legacy/conformance set
 passes 22/22; TLA verification passes.
 These are native/fixture and dry-run checks, not fresh Wine workload or observer
-cost qualification. Complete replacement of legacy producers, physical GPU
-sampler sharing and guest attribution beyond the qualified PE point-bracket
-fixture remain open as recorded in gap.md.
+cost qualification. Complete replacement of legacy producers and guest attribution beyond the
+qualified PE point-bracket fixture remain open as recorded in gap.md. Shared
+GPU acquisition was subsequently implemented and verified below.
+
+## Shared acquisition
+
+R-HARN-TRACE-13.1–13.5 are implemented by
+`src/dxmt9/observations/{bounded_records.hpp,once_sample.hpp,gpu_source.mm,trace_sink.hpp}`,
+`StageSampleBuffer::reserve/resolve`, the render-pass attachment selection,
+queue diagnostics, native counter exporter, normalizer and pinned consumer.
+The [shared acquisition spec](shared-acquisition.md) owns the lifetime and
+measurement semantics.
+
+| Contract | Code/test evidence | Limits |
+|---|---|---|
+| 13.1: one physical acquisition | Counting-source concurrency checks require exactly one shared endpoint/pair read; actual Metal render-pass timestamps agree between legacy and trace consumers. | Shared capture may cost more CPU than legacy bulk resolve; no overhead reduction claim. |
+| 13.2: independent ownership | `shared_observation_spec.mm` checks close-before-completion, explicit retained-object destruction, wrong device/ticket generation, failed/missing timestamps, bounds rejection and fresh object lifetimes. | Existing `TracingGpuRetirement`/`TracingSessionLifecycle` safety and progress abstractions remain unchanged; Metal ownership and source caching are additionally tested in C++. |
+| 13.3: CPU/wait semantics | `BoundedRecords`, existing CPU/wait fixtures and `test_shared_observation_capture.py` compare each native counter to the original CSV value. | Detailed gates/windows remain explicit; wait projections are result-time counters, not aligned wait slices. |
+| 13.4: provenance | Raw/receipt acquisition contract, source keys, per-consumer counts, empty-source metadata and companion SQL round trip; pinned TP compares all 16 source/version/timestamp-kind counter annotations. | Join keys do not qualify unknown process incarnations or legacy clocks; legacy files remain acquisition evidence. |
+| 13.5: matrix | SDK-off tracing/legacy/shared set 21/21; SDK-on 23/23; full TLC inventory passes (71 safety, 8 progress, 178 intended counterexamples). The final shared bounds/ownership test also passes SDK-off. | No fresh Wine workload, Rosetta overhead comparison or live timeout injection was performed for this migration. |
+
+Retained evidence is under `experiments/output/shared-observation-samplers/`:
+`validation/` contains SDK-off/on, bounded-source and TLC logs.
+`dxmt9-tracing-runtime-64302/` contains 60 native events, 8 native counter samples,
+3 flows, zero loss, a qualified pinned v58.2 `consumer.json`, legacy CPU/wait
+files, and `observations.sqlite`. SQL integrity/foreign keys pass; ten SQL
+counter rows include the two additional legacy CPU projections. SQL SHA-256:
+`bfa70b4fb60e00aa4b5f20bcfc8526723bedd64b1c08394a4aef5f77662585f5`.
+The earlier `dxmt9-tracing-runtime-60097` diagnostic capture retains the consumer
+mismatch that exposed equal-timestamp counter ordering and missing native counter
+annotations; it is not qualified evidence. Both defects have regression tests.

@@ -173,7 +173,8 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
     track_event->set_type(event_type(event.phase));
     if (counter_track) {
       track_event->set_counter_value(static_cast<int64_t>(event.metric_value));
-      return;
+      // Counter observations also carry source/provenance annotations.
+
     }
     for (uint64_t flow_id : outgoing_flows)
       track_event->add_flow_ids(flow_id);
@@ -196,6 +197,21 @@ void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
       auto* begin_name = track_event->add_debug_annotations();
       begin_name->set_name("begin_event_name");
       begin_name->set_string_value(event_name(event.event_id));
+    }
+    if (event.observation_kind) {
+      auto* source = track_event->add_debug_annotations();
+      source->set_name("observation_source");
+      source->set_string_value(event.observation_kind == 1 ? "cpu-supply" : "wait");
+      auto* record = track_event->add_debug_annotations();
+      record->set_name("observation_record");
+      record->set_uint_value(event.observation_record);
+      auto* version = track_event->add_debug_annotations();
+      version->set_name("acquisition_version");
+      version->set_uint_value(1);
+      auto* semantics = track_event->add_debug_annotations();
+      semantics->set_name("observation_timestamp_kind");
+      semantics->set_string_value(event.observation_kind == 1
+          ? "cpu-query-start" : "wait-result-observed");
     }
     if (event.arg0) {
       auto* owner = track_event->add_debug_annotations();

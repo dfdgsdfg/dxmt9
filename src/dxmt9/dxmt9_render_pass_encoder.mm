@@ -980,8 +980,12 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
   if (attachmentCount < tracedAttachments.size()) {
     const auto traced = trace::gpu::reserveCurrentStageAttachment(
         static_cast<std::uintptr_t>(ctx.device.handle),
-        static_cast<std::uintptr_t>(commandBuffer.handle));
-    if (traced) tracedAttachments[attachmentCount++] = traced.attachment;
+        static_cast<std::uintptr_t>(commandBuffer.handle),
+        suppliedCount == 1 ? &tracedAttachments[0] : nullptr);
+    // The supplied legacy interval and the trace ticket refer to one physical
+    // pair. The ticket retains the buffer independently of the encode session.
+    if (traced && suppliedCount != 1)
+      tracedAttachments[attachmentCount++] = traced.attachment;
   }
   const auto effectiveSampleAttachments = std::span<const WMTSampleBufferAttachmentInfo>(
       tracedAttachments.data(), attachmentCount);

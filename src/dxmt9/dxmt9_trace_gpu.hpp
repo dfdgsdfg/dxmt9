@@ -201,7 +201,8 @@ public:
 
   bool start(WMT::Device& device, std::uint64_t sessionGeneration,
              std::uint32_t pairCapacity) noexcept;
-  StagePairReservation reserve(const WorkIdentity& work) noexcept;
+  StagePairReservation reserve(const WorkIdentity& work,
+      const WMTSampleBufferAttachmentInfo* sharedAttachment = nullptr) noexcept;
   bool resolve(StagePairTicket ticket, const CompletionEvidence& evidence,
                StagePairResult& result) noexcept;
   static bool resolveQuarantined(StagePairTicket ticket,
