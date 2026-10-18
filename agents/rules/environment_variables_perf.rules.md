@@ -394,11 +394,26 @@ intentionally written, and update this file in the same change.
 
 ## Perfetto analysis surface
 
-During an active trace, `DXMT9_PERF_FRAME_SAMPLING` also publishes selected
-frame-delta counters (draws, command buffers, encoded Presents and chunk/draw
-elapsed nanoseconds) on dedicated Perfetto tracks. Existing output remains
-compatible. Encoded Present snapshots are not display timestamps, and the
-historical `*CpuNs` elapsed timers are not native thread CPU.
+During an active trace, `DXMT9_PERF_FRAME_SAMPLING` projects the complete existing
+`CounterSnapshot` to Perfetto/SQLite, retaining the five original overview tracks.
+Counters are frame deltas; last GPU resource/PSO identifiers are exact latest-value
+annotations. Regressing counters clamp to zero and increment `regressed_fields`.
+This subset does not include every process counter or histogram. Existing output
+remains compatible. Encoded Present snapshots are not display timestamps, and
+historical `*CpuNs` elapsed timers are not native thread CPU. A zero in a gated
+detail field is not proof that the corresponding work was measured.
+
+`DXMT9_QUERY_BACKEND_OBSERVER` and `DXMT9_QUERY_RECEIPT_OBSERVER` share their
+existing locked totals with the wait category on the first call and existing
+periodic/final reports. Native `observer_mode=1` means counts-only; `2` means
+timing enabled with `timing_stride=64`. Totals cover process-lifetime observations,
+not only the trace window. A short late-starting trace may contain no report.
+
+`DXMT9_COMPAT_APPEND_DIAGNOSTICS` shares acquired snapshots with the encode
+category when a snapshot consumer runs. Enabled frame reports also pull that
+snapshot when append diagnostics are enabled. Native mode 1/2 retains parent/
+fine-phase selection. Values are cumulative, not frame deltas; nested phases
+must not be summed as exclusive time. No per-append trace events are added.
 
 Traced catalogue attempts automatically normalize selected CPU supply/wait
 files into the companion SQLite store, retaining detailed state and native CPU

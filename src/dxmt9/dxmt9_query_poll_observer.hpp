@@ -1,6 +1,7 @@
 #pragma once
 #include "dxmt9/query_fence.hpp"
 #include "util/log/log.hpp"
+#include "observations/snapshot_sink.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -67,6 +68,20 @@ template<bool Observe> inline void request(Request r) noexcept {
 template<bool Observe> inline void marker() noexcept {
   if constexpr (Observe) active->marker = true;
 }
+// Cold value projection: totals already contain the original sampled timings.
+inline void project(const Totals& t, unsigned observerMode) noexcept {
+  if (!tracing::enabled()) return;
+  observations::SnapshotSink sink(observations::Source::QueryBackend,
+      observerMode, observerMode == 2 ? 64 : 0);
+  std::uint16_t index = 0;
+  auto put = [&](std::uint64_t v) { sink.value(index++, v); };
+  put(t.calls); put(t.flush); put(t.samples); put(t.invalid);
+  put(t.markers); put(t.coveredPending);
+  for (auto v : t.requests) put(v);
+  for (auto v : t.results) put(v);
+  for (auto v : t.ns) put(v);
+  for (auto v : t.maximum) put(v);
+}
 class Ledger {
  public:
   ~Ledger() { std::lock_guard lock(mutex_); emit(); }
@@ -74,11 +89,13 @@ class Ledger {
   void add(const Sample& sample, bool flush, Poll result) {
     std::lock_guard lock(mutex_);
     totals_.add(sample, flush, result);
+    if (totals_.calls == 1) project(totals_, mode());
     if (totals_.calls % 4096 == 0 && reports_ < 64) emit();
   }
  private:
   void emit() {
     ++reports_;
+    project(totals_, mode());
     const auto u = [](std::uint64_t x) { return static_cast<unsigned long long>(x); };
     util::logf(util::LogLevel::Info, "dxmt9-query-backend",
         "calls=%llu flush=%llu samples=%llu invalid_clocks=%llu markers=%llu reports=%u covered_pending=%llu slow=%llu",

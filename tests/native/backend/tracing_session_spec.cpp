@@ -1,6 +1,7 @@
 #include "../../../src/dxmt9/dxmt9_trace.hpp"
 #include "../../../src/dxmt9/dxmt9_trace_bindings.hpp"
 #include "../../../src/dxmt9/tracing/config.hpp"
+#include "../../../src/dxmt9/observations/snapshot_sink.hpp"
 
 #include <CommonCrypto/CommonDigest.h>
 
@@ -78,7 +79,7 @@ private:
   bool optional_metal_timing_;
 
   void writeRequest(uint32_t max_events, uint32_t delay_ms) {
-    constexpr char categories[] = "[\"replay\"]";
+    constexpr char categories[] = "[\"replay\",\"wait\",\"encode\"]";
     const std::string optional_collectors = optional_metal_timing_
         ? "[\"metal-timing\"]" : "[]";
     const std::string policy = include_policy_
@@ -86,13 +87,13 @@ private:
         : "";
     const std::string canonical =
         "{\"attempt_id\":\"attempt-" + directory.filename().string() +
-        "\",\"categories\":[\"replay\"],\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,\"max_events\":" +
+        "\",\"categories\":[\"replay\",\"wait\",\"encode\"],\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,\"max_events\":" +
         std::to_string(max_events) +
         "},\"optional_collectors\":" + optional_collectors + ",\"output\":{\"pftrace\":\"" +
         trace_path.string() + "\",\"receipt\":\"" + receipt_path.string() +
         "\"},\"profile_id\":\"profile\"," + policy +
         "\"question\":\"session-spec\","
-        "\"required_categories\":[\"replay\"],\"required_collectors\":[\"engine-perfetto\"],"
+        "\"required_categories\":[\"replay\",\"wait\",\"encode\"],\"required_collectors\":[\"engine-perfetto\"],"
         "\"run_id\":\"run-" + directory.filename().string() +
         "\",\"schema\":\"dxmt9.trace.request.v1\",\"window\":{\"delay_ms\":" +
         std::to_string(delay_ms) + ",\"duration_ms\":30000,\"mode\":\"duration\"}}";
@@ -179,6 +180,9 @@ int main() {
   Capture second(root, "generation-two");
   assert(prepare_and_start(first.config()));
   waitForCollection();
+  dxmt9::observations::SnapshotSink oldSnapshot(dxmt9::observations::Source::QueryBackend, 2, 64);
+  assert(oldSnapshot.value(0, 123)); // Staged, no native rows before the final field.
+  dxmt9::observations::SnapshotSink oldInvalid(dxmt9::observations::Source::QueryBackend, 2, 64);
   assert(emit(replayEvent()));
   assert(stop_and_finalize());
   assert(!emit(replayEvent()));
@@ -192,6 +196,11 @@ int main() {
 
   assert(prepare_and_start(second.config()));
   waitForCollection();
+  bool admitted = true;
+  for (std::uint16_t i = 1; i < std::size(dxmt9::observations::backend_fields); ++i)
+    admitted = oldSnapshot.value(i, 456);
+  assert(!admitted);
+  assert(!oldInvalid.value(0, UINT64_MAX));
   assert(emit(replayEvent()));
   assert(stop_and_finalize());
   const std::string firstRaw = first.readRaw();
@@ -331,10 +340,23 @@ int main() {
   assert(afterLoss.readRaw().find("\"loss\":{\"total\":\"0\"}") !=
          std::string::npos);
 
+  Capture numericOverflow(root, "snapshot-numeric-overflow");
+  assert(prepare_and_start(numericOverflow.config()));
+  waitForCollection();
+  dxmt9::observations::SnapshotSink numeric(dxmt9::observations::Source::PerfFrame, 1, 0);
+  assert(!numeric.value(0, UINT64_MAX));
+  assert(emit(replayEvent()));
+  assert(!stop_and_finalize());
+  assert(numericOverflow.readRaw().find("\"loss\":{\"total\":\"1\"}") != std::string::npos);
+
   Capture overflow(root, "overflow", 1);
   assert(prepare_and_start(overflow.config()));
   waitForCollection();
   assert(emit(replayEvent()));
+  dxmt9::observations::SnapshotSink exhausted(dxmt9::observations::Source::QueryBackend, 1, 0);
+  for (std::uint16_t i = 0; i < std::size(dxmt9::observations::backend_fields); ++i)
+    admitted = exhausted.value(i, 1);
+  assert(!admitted);
   assert(!emit(replayEvent()));
   assert(!stop_and_finalize());
   assert(overflow.readReceipt().find("\"status\":\"incomplete\"") !=

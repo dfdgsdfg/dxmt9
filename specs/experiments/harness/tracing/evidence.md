@@ -163,3 +163,34 @@ counter rows include the two additional legacy CPU projections. SQL SHA-256:
 The earlier `dxmt9-tracing-runtime-60097` diagnostic capture retains the consumer
 mismatch that exposed equal-timestamp counter ordering and missing native counter
 annotations; it is not qualified evidence. Both defects have regression tests.
+
+## Shared query and counter snapshots
+
+R-HARN-TRACE-14.1–14.5 are implemented by
+`observations/{metadata.hpp,snapshot_sink.hpp,perf_fields.inc,perf_snapshot.hpp}`,
+query backend/receipt ledger projections, `append_diag::snapshot`, frame reports,
+and the native exporter/consumer. The [snapshot contract](shared-snapshots.md)
+defines source populations, report cadence and aggregation semantics.
+
+| Contract | Evidence | Limits |
+|---|---|---|
+| 14.1: acquired query totals | `shared_snapshot_spec.cpp` compares valid/invalid/counts-only populations, elapsed sums/maxima and first/4096/final report cadence; existing backend/receipt specs preserve results and nested observation. | Coarse cumulative reports do not recover individual poll intervals; short late captures can miss the next report. |
+| 14.2: frame/append snapshots | Complete 71-field frame catalogue plus regression census; deterministic 10−3 draw delta, 2−4 clamping, UINT64_MAX latest PSO ID, and actual nested append scopes. | Frame subset excludes broader process histograms/counters; unenabled detail fields are not measured zero. |
+| 14.3: provenance | `test_shared_snapshot_capture.py` checks 204 fields across five snapshots, pinned TP value/annotation parity, exact unsigned identity, SQLite integrity/foreign keys and test-result provenance. | Snapshot time is observation time; source ordinal is not a legacy log line or a clock mapping. |
+| 14.4: independent consumers | One bounded batch uses the existing generation-qualified writer lease. Counting-sink and actual session tests reject stale generations, numeric overflow and insufficient capacity without partial native rows. SDK-off leaves legacy collection available. | Existing TracingSessionLifecycle model applies; no production query sequencing or resource retirement changes. |
+| 14.5: matrix | SDK-off focused set 25/25; SDK-on 28/28. Full TLC passes 71 safety, 8 progress and 178 intended counterexamples. Existing CPU/wait source round trip also passes. | Native/fixture evidence only; no fresh Wine workload or matched observer-overhead claim. |
+
+Retained artifacts live under `experiments/output/shared-diagnostic-snapshots/`.
+`validation/` contains sanitized SDK-off/on results, build logs and TLC output.
+`qualified/dxmt9-tracing-runtime-17448/` contains the native trace, normalized
+bundle, qualified pinned v58.2 receipt and companion SQLite. Native TP reports
+52 complete slices, 208 counter rows, three flows and 2016 exact observation
+counter annotations, with no open slices or incomplete flows. The capture has
+zero loss. SQLite SHA-256:
+`b3eb5ab840c4da176c24454f23595ec86a46779c1df13bd3bff9bff6ca0a3408`.
+
+The retained `diagnostic2/` receipt records the initial equal-timestamp instant
+depth mismatch. Pinned TP nests simultaneous zero-duration instant rows for
+layout; the consumer now reproduces that rule without shifting timestamps or
+inventing measured durations. A focused regression and the real native round
+trip cover the correction. These rows do not establish nested workload phases.

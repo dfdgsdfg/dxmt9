@@ -1,0 +1,171 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+namespace dxmt9::observations {
+enum class Source : std::uint16_t {
+  CpuSupply = 1, Wait = 2, QueryBackend = 3, QueryReceipt = 4,
+  PerfFrame = 5, CompatAppend = 6,
+};
+inline const char* source_name(std::uint16_t source) noexcept {
+  switch (static_cast<Source>(source)) {
+    case Source::CpuSupply: return "cpu-supply";
+    case Source::Wait: return "wait";
+    case Source::QueryBackend: return "query-backend";
+    case Source::QueryReceipt: return "query-receipt";
+    case Source::PerfFrame: return "perf-frame";
+    case Source::CompatAppend: return "compat-append";
+  }
+  return "unknown";
+}
+inline const char* timestamp_kind(std::uint16_t source) noexcept {
+  return source == 1 ? "cpu-query-start" : source == 2
+      ? "wait-result-observed" : "snapshot-observed";
+}
+struct Field { const char* name; const char* unit; const char* aggregation; };
+inline constexpr Field backend_fields[] = {
+  {"calls", "count", "cumulative"},
+  {"flush", "count", "cumulative"},
+  {"samples", "count", "cumulative"},
+  {"invalid_clocks", "count", "cumulative"},
+  {"markers", "count", "cumulative"},
+  {"covered_pending", "count", "cumulative"},
+  {"request_none", "count", "cumulative"},
+  {"request_rejected", "count", "cumulative"},
+  {"request_existing_target", "count", "cumulative"},
+  {"request_submitted", "count", "cumulative"},
+  {"request_new", "count", "cumulative"},
+  {"result_invalid", "count", "cumulative"},
+  {"result_failed", "count", "cumulative"},
+  {"result_pending", "count", "cumulative"},
+  {"result_complete", "count", "cumulative"},
+  {"queue_wait_elapsed_ns", "ns", "cumulative"},
+  {"classify_elapsed_ns", "ns", "cumulative"},
+  {"marker_elapsed_ns", "ns", "cumulative"},
+  {"request_setup_elapsed_ns", "ns", "cumulative"},
+  {"pending_wait_elapsed_ns", "ns", "cumulative"},
+  {"decision_elapsed_ns", "ns", "cumulative"},
+  {"wake_elapsed_ns", "ns", "cumulative"},
+  {"exit_elapsed_ns", "ns", "cumulative"},
+  {"queue_wait_max_elapsed_ns", "ns", "maximum"},
+  {"classify_max_elapsed_ns", "ns", "maximum"},
+  {"marker_max_elapsed_ns", "ns", "maximum"},
+  {"request_setup_max_elapsed_ns", "ns", "maximum"},
+  {"pending_wait_max_elapsed_ns", "ns", "maximum"},
+  {"decision_max_elapsed_ns", "ns", "maximum"},
+  {"wake_max_elapsed_ns", "ns", "maximum"},
+  {"exit_max_elapsed_ns", "ns", "maximum"},
+};
+inline constexpr Field receipt_fields[] = {
+  {"calls", "count", "cumulative"},
+  {"flush", "count", "cumulative"},
+  {"samples", "count", "cumulative"},
+  {"invalid_clocks", "count", "cumulative"},
+  {"route_missing_target", "count", "cumulative"},
+  {"route_non_raw", "count", "cumulative"},
+  {"route_replay_failed", "count", "cumulative"},
+  {"route_superseded", "count", "cumulative"},
+  {"route_not_ready", "count", "cumulative"},
+  {"route_raw_mismatch", "count", "cumulative"},
+  {"route_ineligible", "count", "cumulative"},
+  {"route_identity_mismatch", "count", "cumulative"},
+  {"route_handled", "count", "cumulative"},
+  {"kind_0", "count", "cumulative"},
+  {"kind_1", "count", "cumulative"},
+  {"kind_2", "count", "cumulative"},
+  {"kind_3", "count", "cumulative"},
+  {"kind_4", "count", "cumulative"},
+  {"kind_5", "count", "cumulative"},
+  {"result_ok", "count", "cumulative"},
+  {"result_pending", "count", "cumulative"},
+  {"result_error", "count", "cumulative"},
+  {"result_fallback", "count", "cumulative"},
+  {"sampled_result_ok", "count", "cumulative"},
+  {"sampled_result_pending", "count", "cumulative"},
+  {"sampled_result_error", "count", "cumulative"},
+  {"sampled_result_fallback", "count", "cumulative"},
+  {"capture_elapsed_ns", "ns", "cumulative"},
+  {"replay_wait_elapsed_ns", "ns", "cumulative"},
+  {"snapshot_elapsed_ns", "ns", "cumulative"},
+  {"backend_elapsed_ns", "ns", "cumulative"},
+  {"final_elapsed_ns", "ns", "cumulative"},
+  {"ok_capture_elapsed_ns", "ns", "cumulative"},
+  {"ok_replay_wait_elapsed_ns", "ns", "cumulative"},
+  {"ok_snapshot_elapsed_ns", "ns", "cumulative"},
+  {"ok_backend_elapsed_ns", "ns", "cumulative"},
+  {"ok_final_elapsed_ns", "ns", "cumulative"},
+  {"pending_capture_elapsed_ns", "ns", "cumulative"},
+  {"pending_replay_wait_elapsed_ns", "ns", "cumulative"},
+  {"pending_snapshot_elapsed_ns", "ns", "cumulative"},
+  {"pending_backend_elapsed_ns", "ns", "cumulative"},
+  {"pending_final_elapsed_ns", "ns", "cumulative"},
+  {"error_capture_elapsed_ns", "ns", "cumulative"},
+  {"error_replay_wait_elapsed_ns", "ns", "cumulative"},
+  {"error_snapshot_elapsed_ns", "ns", "cumulative"},
+  {"error_backend_elapsed_ns", "ns", "cumulative"},
+  {"error_final_elapsed_ns", "ns", "cumulative"},
+  {"fallback_capture_elapsed_ns", "ns", "cumulative"},
+  {"fallback_replay_wait_elapsed_ns", "ns", "cumulative"},
+  {"fallback_snapshot_elapsed_ns", "ns", "cumulative"},
+  {"fallback_backend_elapsed_ns", "ns", "cumulative"},
+  {"fallback_final_elapsed_ns", "ns", "cumulative"},
+};
+inline constexpr Field append_fields[] = {
+  {"batch_elapsed_ns", "ns", "cumulative"},
+  {"batch_calls", "count", "cumulative"},
+  {"batch_reserve_elapsed_ns", "ns", "cumulative"},
+  {"batch_reserve_calls", "count", "cumulative"},
+  {"append_elapsed_ns", "ns", "cumulative"},
+  {"append_calls", "count", "cumulative"},
+  {"preflight_elapsed_ns", "ns", "cumulative"},
+  {"preflight_calls", "count", "cumulative"},
+  {"uniform_lookup_elapsed_ns", "ns", "cumulative"},
+  {"uniform_lookup_calls", "count", "cumulative"},
+  {"local_reserve_elapsed_ns", "ns", "cumulative"},
+  {"local_reserve_calls", "count", "cumulative"},
+  {"uniform_append_elapsed_ns", "ns", "cumulative"},
+  {"uniform_append_calls", "count", "cumulative"},
+  {"state_elapsed_ns", "ns", "cumulative"},
+  {"state_calls", "count", "cumulative"},
+  {"soa_elapsed_ns", "ns", "cumulative"},
+  {"soa_calls", "count", "cumulative"},
+};
+inline constexpr Field perf_fields[] = {
+#define X(member, name, unit, aggregation) {name, unit, aggregation},
+#include "perf_fields.inc"
+#undef X
+  {"regressed_fields", "count", "snapshot"},
+};
+inline std::size_t field_count(std::uint16_t source) noexcept {
+  switch (static_cast<Source>(source)) {
+    case Source::QueryBackend: return std::size(backend_fields);
+    case Source::QueryReceipt: return std::size(receipt_fields);
+    case Source::PerfFrame: return std::size(perf_fields);
+    case Source::CompatAppend: return std::size(append_fields);
+    default: return 0;
+  }
+}
+inline constexpr std::size_t max_snapshot_fields = std::size(perf_fields);
+static_assert(std::size(backend_fields) <= max_snapshot_fields &&
+              std::size(receipt_fields) <= max_snapshot_fields &&
+              std::size(append_fields) <= max_snapshot_fields);
+inline Field field(std::uint16_t source, std::uint16_t index) noexcept {
+  switch (static_cast<Source>(source)) {
+    case Source::QueryBackend:
+      if (index < std::size(backend_fields)) return backend_fields[index];
+      break;
+    case Source::QueryReceipt:
+      if (index < std::size(receipt_fields)) return receipt_fields[index];
+      break;
+    case Source::PerfFrame:
+      if (index < std::size(perf_fields)) return perf_fields[index];
+      break;
+    case Source::CompatAppend:
+      if (index < std::size(append_fields)) return append_fields[index];
+      break;
+    default: break;
+  }
+  return {"unknown", "unknown", "unknown"};
+}
+}  // namespace dxmt9::observations

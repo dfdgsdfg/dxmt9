@@ -736,11 +736,20 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
           << "\",\"arg1\":\"" << e.arg1 << "\"";
       if (e.observation_kind)
         out << ",\"acquisition_version\":\"1\",\"observation_source\":\""
-            << (e.observation_kind == 1 ? "cpu-supply" : "wait")
+            << observations::source_name(e.observation_kind)
             << "\",\"observation_record\":\"" << e.observation_record
             << "\",\"observation_timestamp_kind\":\""
-            << (e.observation_kind == 1 ? "cpu-query-start" : "wait-result-observed")
+            << observations::timestamp_kind(e.observation_kind)
             << "\"";
+      if (e.observation_kind >= 3) {
+        const auto field = observations::field(e.observation_kind, e.observation_field);
+        out << ",\"observation_field\":\"" << field.name
+            << "\",\"observation_value\":\"" << e.metric_value
+            << "\",\"observation_unit\":\"" << field.unit
+            << "\",\"observation_aggregation\":\"" << field.aggregation
+            << "\",\"observer_mode\":\"" << e.observation_mode
+            << "\",\"timing_stride\":\"" << e.observation_stride << "\"";
+      }
       if (e.phase == static_cast<uint8_t>(Phase::Counter))
         out << ",\"counter_value\":\"" << e.metric_value
             << "\",\"metric_id\":\"" << e.metric_id
@@ -1613,7 +1622,11 @@ bool emit_batch(std::span<const TraceEvent> inputs, uint64_t lossCount) noexcept
 }
 
 bool emit_observation(const TraceEvent& event, uint64_t generation) noexcept {
-  return generation != 0 && emit_batch_for_generation({&event, 1}, generation, 0, true);
+  return emit_observations({&event, 1}, generation);
+}
+
+bool emit_observations(std::span<const TraceEvent> events, uint64_t generation) noexcept {
+  return generation != 0 && emit_batch_for_generation(events, generation, 0, true);
 }
 
 uint64_t capture_generation() noexcept {

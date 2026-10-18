@@ -1,5 +1,7 @@
 #include "dxmt9_trace.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_append_diag.hpp"
+#include "observations/perf_snapshot.hpp"
 
 #include "dxmt9_perf_counters_internal.hpp"
 
@@ -909,6 +911,8 @@ void emitFrameDelta(std::uint64_t frameId,
     return b >= a ? b - a : 0ull;
   };
   if (::dxmt9::tracing::enabled()) {
+    observations::project_frame(frameId, prev, curr);
+    if (append_diag::mode()) (void)append_diag::snapshot();
     using namespace ::dxmt9::tracing;
     counter(Category::Encode, Metric::FrameDrawCalls, delta(prev.drawCalls, curr.drawCalls), 0, frameId);
     counter(Category::Encode, Metric::FrameCommandBuffers, delta(prev.commandBuffers, curr.commandBuffers), 0, frameId);

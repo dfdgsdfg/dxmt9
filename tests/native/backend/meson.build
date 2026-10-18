@@ -82,14 +82,16 @@ test('dxmt9-query-covered-pending-sync-disabled-spec', query_covered_pending_spe
        'DXMT9_QUERY_COVERED_PENDING=1', 'DXMT9_ASYNC_QUERY_FENCES=0'])
 query_backend_observer_spec = executable(
   'dxmt9-query-backend-observer-spec', 'query_backend_observer_spec.cpp',
-  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+  include_directories: dxmt9_inc, dependencies: [dxmt9_util_dep, dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
 )
 test('dxmt9-query-backend-observer-spec', query_backend_observer_spec,
      env: dxmt9_native_test_env)
 
 query_receipt_observer_spec = executable(
   'dxmt9-query-receipt-observer-spec', 'query_receipt_observer_spec.cpp',
-  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+  include_directories: dxmt9_inc, dependencies: [dxmt9_util_dep, dxmt9_trace_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
 )
 test('dxmt9-query-receipt-observer-spec', query_receipt_observer_spec,
      env: dxmt9_native_test_env)
@@ -2176,6 +2178,7 @@ tracing_runtime_spec = executable(
   'dxmt9-tracing-runtime-spec', 'tracing_runtime_spec.cpp',
   '../../../src/dxmt9/dxmt9_cpu_supply_trace.cpp',
   '../../../src/dxmt9/dxmt9_wait_trace.cpp',
+  '../../../src/dxmt9/dxmt9_append_diag.cpp',
   include_directories: [dxmt9_inc, include_directories('../../../src')],
   cpp_args: ['-DDXMT9_TEST_PERFETTO=' + (get_option('dxmt9_perfetto') ? '1' : '0')],
   dependencies: [dxmt9_trace_dep, dxmt9_winemetal_dep],
@@ -2236,6 +2239,18 @@ test('dxmt9-shared-observation-spec', shared_observation_spec, env: dxmt9_native
 if get_option('dxmt9_perfetto')
   test('dxmt9-shared-observation-roundtrip', python3,
     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_shared_observation_capture.py'),
+           tracing_runtime_spec.full_path()],
+    depends: tracing_runtime_spec, env: dxmt9_native_test_env, timeout: 60)
+endif
+
+shared_snapshot_spec = executable(
+  'dxmt9-shared-snapshot-spec', 'shared_snapshot_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-shared-snapshot-spec', shared_snapshot_spec, env: dxmt9_native_test_env)
+if get_option('dxmt9_perfetto')
+  test('dxmt9-shared-snapshot-roundtrip', python3,
+    args: [join_paths(meson.project_source_root(), 'tests/scripts/test_shared_snapshot_capture.py'),
            tracing_runtime_spec.full_path()],
     depends: tracing_runtime_spec, env: dxmt9_native_test_env, timeout: 60)
 endif

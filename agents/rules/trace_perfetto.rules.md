@@ -125,3 +125,12 @@ domain; follow [documentation rules](documentation.rules.md).
 - SDK-off legacy acquisition must work without allocating trace source caches.
   Shared per-pair resolve has a different CPU cost from legacy bulk resolve;
   require matched controls before asserting an overhead reduction.
+
+- Query/frame/append snapshot timestamps mean `snapshot-observed`; they do not
+  locate original phase intervals. Preserve mode, stride, populations, unit and
+  aggregation. Snapshot `observation_record` identifies a source-local projection,
+  not a legacy CSV/log row. Detailed collector gates remain explicit.
+- Admit all fields of a snapshot in one bounded generation-qualified batch.
+  Closure, filtering or insufficient capacity must not retain a partial snapshot.
+  Keep latest unsigned GPU identities as exact annotations rather than signed
+  or floating-point counters. See [snapshot contract](../../specs/experiments/harness/tracing/shared-snapshots.md).

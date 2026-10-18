@@ -65,6 +65,7 @@ enum class Metric : uint16_t {
   FrameEncodeChunkElapsedNs, FrameEncodeDrawElapsedNs,
   NativeThreadCpuNs,
   WaitMutexAcquireElapsedNs, WaitBodyElapsedNs,
+  SnapshotCount, SnapshotElapsedNs, SnapshotIdentity,
 };
 
 struct TraceEvent {
@@ -102,6 +103,9 @@ struct TraceEvent {
   uint64_t calibration_resolution_ns;
   uint64_t observation_record;
   uint16_t observation_kind;
+  uint16_t observation_field;
+  uint16_t observation_mode;
+  uint16_t observation_stride;
   uint64_t metric_value;
   uint16_t metric_id;
   uint32_t clock_id;
@@ -173,6 +177,8 @@ bool emit_batch(std::span<const TraceEvent> events,
 uint64_t capture_generation() noexcept;
 // Returns true only if this observation's category was selected and appended.
 bool emit_observation(const TraceEvent& event, uint64_t generation) noexcept;
+// One bounded snapshot is admitted atomically under one writer lease.
+bool emit_observations(std::span<const TraceEvent> events, uint64_t generation) noexcept;
 bool emit_batch_captured(std::span<const TraceEvent> events,
                          uint64_t generation,
                          uint64_t loss_count = 0) noexcept;

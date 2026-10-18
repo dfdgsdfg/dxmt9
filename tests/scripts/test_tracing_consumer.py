@@ -172,6 +172,16 @@ def normalized_bundle():
 
 
 class TracingConsumerTests(unittest.TestCase):
+    def test_coincident_instants_keep_pinned_processor_depths(self):
+        bundle = normalized_bundle()
+        base = bundle["events"][0]
+        for i in range(3):
+            bundle["events"].append(dict(base, event_id=f"snapshot-id-{i}",
+                                         source_record=str(100 + i)))
+        expected = consumer.derive_expected(bundle)
+        rows = [r for r in expected["slice_rows"] if r["ts"] == 900]
+        self.assertEqual([r["depth"] for r in rows], [0, 1, 2, 3])
+
     def test_simultaneous_counter_projection_order_and_source_annotations(self):
         bundle = normalized_bundle()
         base = bundle["events"][0]
