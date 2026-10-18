@@ -1,3 +1,4 @@
+#include "dxmt9_trace.hpp"
 #include "dxmt9_perf_counters.hpp"
 
 #include "dxmt9_perf_counters_internal.hpp"
@@ -907,6 +908,14 @@ void emitFrameDelta(std::uint64_t frameId,
     // mid-update — clamp to 0 instead of wrapping.
     return b >= a ? b - a : 0ull;
   };
+  if (::dxmt9::tracing::enabled()) {
+    using namespace ::dxmt9::tracing;
+    counter(Category::Encode, Metric::FrameDrawCalls, delta(prev.drawCalls, curr.drawCalls), 0, frameId);
+    counter(Category::Encode, Metric::FrameCommandBuffers, delta(prev.commandBuffers, curr.commandBuffers), 0, frameId);
+    counter(Category::Encode, Metric::FramePresentEncoded, delta(prev.presentEncoded, curr.presentEncoded), 0, frameId);
+    counter(Category::Encode, Metric::FrameEncodeChunkElapsedNs, delta(prev.encodeChunkCpuNs, curr.encodeChunkCpuNs), 0, frameId);
+    counter(Category::Encode, Metric::FrameEncodeDrawElapsedNs, delta(prev.encodeDrawCpuNs, curr.encodeDrawCpuNs), 0, frameId);
+  }
   std::fprintf(
       stderr,
       "[dxmt9-perf-frame frame=%llu "

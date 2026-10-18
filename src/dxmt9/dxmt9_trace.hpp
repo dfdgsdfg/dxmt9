@@ -53,9 +53,18 @@ enum class EventId : uint16_t {
   PeChunkCommitBegin = 32,
   PeChunkCommitEnd = 33,
   PeClockCalibration = 34,
+  Metric = 35,
 };
 
-enum class Phase : uint8_t { Instant, Begin, End };
+enum class Phase : uint8_t { Instant, Begin, End, Counter };
+
+// Numeric metric IDs are append-only; names/units are resolved after capture.
+enum class Metric : uint16_t {
+  QueueReady = 1, QueueInflight, QueueCompleted,
+  FrameDrawCalls, FrameCommandBuffers, FramePresentEncoded,
+  FrameEncodeChunkElapsedNs, FrameEncodeDrawElapsedNs,
+  NativeThreadCpuNs,
+};
 
 struct TraceEvent {
   uint64_t timestamp_ns;
@@ -89,6 +98,8 @@ struct TraceEvent {
   uint64_t calibration_host_second_ns;
   uint64_t calibration_valid_begin;
   uint64_t calibration_valid_end;
+  uint64_t metric_value;
+  uint16_t metric_id;
   uint32_t clock_id;
   uint16_t event_id;
   uint8_t category;
@@ -148,6 +159,9 @@ bool attach_metal_device(uintptr_t device_handle) noexcept;
 // Emission consumes only POD values. No SDK call, lock, bridge operation or
 // heap allocation occurs here. Callers should first test enabled().
 bool emit(const TraceEvent& event) noexcept;
+// Caller gates with enabled(); fixed-size batch, original observation time.
+void counter(Category category, Metric metric, uint64_t value,
+             uint64_t owner = 0, uint64_t work = 0) noexcept;
 bool emit_batch(std::span<const TraceEvent> events,
                 uint64_t loss_count = 0) noexcept;
 // Capture this token at the start of a bounded external handler, then use the

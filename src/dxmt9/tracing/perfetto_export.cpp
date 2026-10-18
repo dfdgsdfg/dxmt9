@@ -1,6 +1,8 @@
 #include "perfetto_export.hpp"
 #include "artifact.hpp"
 #include "relations.hpp"
+#include "metrics.hpp"
+#include <tuple>
 
 #include <perfetto.h>
 
@@ -91,6 +93,7 @@ const char* event_name(uint16_t event) {
     case EventId::PeChunkCommitBegin: return "pe_chunk_commit_begin";
     case EventId::PeChunkCommitEnd: return "pe_chunk_commit_end";
     case EventId::PeClockCalibration: return "pe_clock_calibration";
+    case EventId::Metric: return "metric";
   }
   return "engine_event";
 }
@@ -100,6 +103,7 @@ perfetto::protos::pbzero::TrackEvent::Type event_type(uint8_t phase) {
     case Phase::Begin: return perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_BEGIN;
     case Phase::End: return perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_END;
     case Phase::Instant: return perfetto::protos::pbzero::TrackEvent::TYPE_INSTANT;
+    case Phase::Counter: return perfetto::protos::pbzero::TrackEvent::TYPE_COUNTER;
   }
   return perfetto::protos::pbzero::TrackEvent::TYPE_INSTANT;
 }
@@ -112,18 +116,34 @@ std::string annotation_name(uint8_t phase, const char* name) {
   return name;
 }
 
-void write_event(const TraceEvent& event, uint64_t pid,
+void write_event(const TraceEvent& event, uint64_t pid, uint64_t counter_track,
                  const std::vector<uint64_t>& outgoing_flows,
                  const std::vector<uint64_t>& incoming_flows) {
   EngineTraceDataSource::Trace([&](EngineTraceDataSource::TraceContext context) {
-    const uint64_t track_id = event.track_id ? event.track_id : event.thread_id;
+    const uint64_t track_id = counter_track ? counter_track :
+        (event.track_id ? event.track_id : event.thread_id);
     const int32_t process_id = static_cast<int32_t>(
         event.process_id ? event.process_id : pid);
+    if (counter_track) {
+      auto parent_packet = context.NewTracePacket();
+      auto* parent = parent_packet->set_track_descriptor();
+      parent->set_uuid(event.track_id);
+      parent->set_name("dxmt9 thread");
+      auto* thread = parent->set_thread();
+      thread->set_pid(process_id);
+      thread->set_tid(static_cast<int32_t>(event.thread_id));
+    }
     {
       auto descriptor_packet = context.NewTracePacket();
       auto* descriptor = descriptor_packet->set_track_descriptor();
       descriptor->set_uuid(track_id);
-      if (event.category == static_cast<uint8_t>(Category::Gpu)) {
+      if (counter_track) {
+        descriptor->set_name(metric_track_name(event));
+        descriptor->set_parent_uuid(event.track_id);
+        auto* counter = descriptor->set_counter();
+        counter->set_unit_name(metric_unit(event.metric_id));
+        counter->set_is_incremental(false);
+      } else if (event.category == static_cast<uint8_t>(Category::Gpu)) {
         // Synthetic track IDs distinguish device/queue, CB-vs-stage, and
         // interval colors. They are never native thread identities.
         const bool stage = event.event_id ==
@@ -151,6 +171,10 @@ void write_event(const TraceEvent& event, uint64_t pid,
     auto* track_event = packet->set_track_event();
     track_event->set_track_uuid(track_id);
     track_event->set_type(event_type(event.phase));
+    if (counter_track) {
+      track_event->set_counter_value(static_cast<int64_t>(event.metric_value));
+      return;
+    }
     for (uint64_t flow_id : outgoing_flows)
       track_event->add_flow_ids(flow_id);
     for (uint64_t flow_id : incoming_flows)
@@ -158,6 +182,9 @@ void write_event(const TraceEvent& event, uint64_t pid,
     if (static_cast<Phase>(event.phase) != Phase::End)
       track_event->set_name(event_name(event.event_id));
     track_event->add_categories(category_name(event.category));
+    auto* store = track_event->add_debug_annotations();
+    store->set_name(annotation_name(event.phase, "observation_store"));
+    store->set_string_value("observations.sqlite");
     auto* event_type_annotation = track_event->add_debug_annotations();
     event_type_annotation->set_name(annotation_name(event.phase, "event_type"));
     event_type_annotation->set_uint_value(event.event_id);
@@ -430,6 +457,10 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       retain_timed_out_session(session);
       return result;
     }
+    std::map<std::tuple<uint64_t, uint64_t, uint16_t>, uint64_t> counter_tracks;
+    std::set<uint64_t> occupied;
+    for (const auto& event : events) occupied.insert(event.track_id);
+    uint64_t next_counter = UINT64_MAX;
     size_t serialized = 0;
     for (const TraceEvent& event : events) {
       if (((serialized++) & 0xffu) == 0 &&
@@ -440,7 +471,17 @@ ExportResult export_pftrace(std::span<const TraceEvent> events, const char* path
       const auto outgoing = outgoing_flows.find(event.source_record);
       const auto incoming = incoming_flows.find(event.source_record);
       static const std::vector<uint64_t> no_flows;
-      write_event(event, pid,
+      uint64_t counter_track = 0;
+      if (event.phase == static_cast<uint8_t>(Phase::Counter)) {
+        const auto key = std::make_tuple(event.track_id, event.arg0, event.metric_id);
+        auto found = counter_tracks.find(key);
+        if (found == counter_tracks.end()) {
+          while (occupied.contains(next_counter)) --next_counter;
+          found = counter_tracks.emplace(key, next_counter--).first;
+        }
+        counter_track = found->second;
+      }
+      write_event(event, pid, counter_track,
                   outgoing == outgoing_flows.end() ? no_flows : outgoing->second,
                   incoming == incoming_flows.end() ? no_flows : incoming->second);
     }

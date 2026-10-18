@@ -269,3 +269,11 @@ draw-state delta construction, and producer scheduling that happened before the
 canonical stream was sealed are outside its replay claim. Any experiment that
 depends on those producer-side observables requires a distinct raw-API or
 producer trace and must not cite Render Tape identity as evidence.
+
+## Shared Observation Evidence
+
+**R-HARN-8.1** Traced experiments must publish the Perfetto overview and the
+companion SQLite evidence contract in [tracing requirements](tracing/requirements.md)
+R-HARN-TRACE-12.1–12.6. The final artifact graph must bind the database digest;
+workload correctness, collector qualification and supplemental import failures
+must remain independently identifiable. Baseline runs must remain observer-off.

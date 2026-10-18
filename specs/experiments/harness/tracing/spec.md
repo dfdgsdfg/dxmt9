@@ -26,10 +26,10 @@ a required deliverable under R-HARN-TRACE-9.1–9.9.
 
 ### Perfetto overview and supplemental SQL observations
 
-The tracing entry point defaults to the bounded `timeline` profile. Ordinary
+The tracing entry point defaults to the bounded `overview` profile. Ordinary
 baseline experiments remain observer-off. The overview carries the engine
-timeline and collector coverage; GPU, guest and expensive detail sources are
-selected explicitly and missing domains are never presented as measured zero.
+timeline and collector coverage; Command-buffer GPU timing is optional in overview; guest and expensive
+detail sources are selected explicitly and missing domains are never presented as measured zero.
 
 `scripts/tools/tracing_store.py` owns the cold-path companion analysis database.
 It consumes validated normalized bundles and immutable supplemental inputs,
@@ -54,6 +54,11 @@ collector/role, source digest and optional explicit engine event/work endpoints.
 Opaque `.trace`, `.gputrace`, images and payloads stay external files. Raw engine
 JSONL, external acquisition formats and crash breadcrumbs remain justified
 simple-file acquisition/control artifacts; SQL is the structured analysis product.
+
+Native slice annotations name the relative companion store and original source
+record; SQL artifact links retain explicit event/work bindings. Structured logs
+without timestamps use `diagnostic_row`/`diagnostic_value` rather than fake slices.
+Archived conformance runs also expose `test_result` through the same schema.
 
 Native numeric metrics use dedicated counter tracks with fixed metric names and
 units; event owner IDs must never be repurposed as metric values. Queue depth

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -51,6 +52,35 @@ class TraceHarnessTests(unittest.TestCase):
         with self.assertRaises(Exception):
             profile.name = "changed"  # type: ignore[misc]
 
+    def test_default_overview_requests_optional_gpu_without_pe_or_detail(self):
+        paths = attempt_paths(Path('/tmp/overview-fixture'), 'run')
+        request = make_trace_request(TRACE_PROFILES['overview'], run_id='run', attempt_id='attempt', paths=paths)
+        self.assertIn('gpu', request['categories'])
+        self.assertNotIn('gpu', request['required_categories'])
+        self.assertFalse(request['gpu_timing']['required'])
+        self.assertNotIn('pe', request['categories'])
+        self.assertNotIn('detail', request['categories'])
+
+    def test_malformed_supplement_keeps_failed_queryable_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            broken = root/'broken.csv'
+            broken.write_text('not a trace')
+            paths = attempt_paths(root,'run-failed')
+            paths['root'].mkdir(parents=True)
+            manifest = {'run_id':'run-failed','attempt_id':'attempt',
+                        'validity':{'status':'valid'},
+                        'workload_outcome':{'status':'pass'},
+                        'supplemental_bundles':[{'role':'cpu','path':str(broken)}]}
+            sealed = seal_trace_manifest(paths,manifest)
+            self.assertEqual(sealed['observations']['status'],'partial')
+            self.assertEqual(manifest['validity']['status'],'invalid')
+            with sqlite3.connect(paths['observations']) as db:
+                status = json.loads(db.execute("SELECT value_json FROM provenance WHERE key='workload_outcome'").fetchone()[0])
+                self.assertEqual(status['status'],'pass')
+                errors = json.loads(db.execute("SELECT value_json FROM provenance WHERE key='normalization_errors'").fetchone()[0])
+                self.assertEqual(errors[0]['role'],'cpu')
+
     def test_attempt_paths_are_run_scoped(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -69,7 +99,7 @@ class TraceHarnessTests(unittest.TestCase):
             before = sha256_file(paths["manifest"])
             self.assertTrue(json.loads(paths["manifest"].read_text())["sealed"])
             self.assertEqual(sealed["artifact_graph_sha256"], manifest["artifact_graph_sha256"])
-            self.assertEqual([item["role"] for item in artifact_graph(paths)], ["request"])
+            self.assertEqual([item["role"] for item in artifact_graph(paths)], ["observations-sqlite", "request"])
             with self.assertRaises(FileExistsError):
                 seal_trace_manifest(paths, {"validity": {"status": "invalid"}})
             self.assertEqual(sha256_file(paths["manifest"]), before)

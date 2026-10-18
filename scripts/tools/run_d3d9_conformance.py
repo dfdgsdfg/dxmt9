@@ -33,7 +33,7 @@ Output:
   tmp/d3d9-conformance-results.json
     {"<function_name>": "pass"|"fail"|"skip"|"timeout", ...}
   experiments/output/conformance-<UTC>/
-    results.json + staged-build.json + run.json -- a timestamped bundle
+    results.json + staged-build.json + run.json + observations.sqlite -- a timestamped bundle
     that survives the next run, so a document can cite a verdict.
     Disable with --no-archive.
 
@@ -51,6 +51,8 @@ import json
 import os
 import re
 import shutil
+import sqlite3
+import uuid
 import subprocess
 import sys
 import time
@@ -67,6 +69,27 @@ from scripts.wine.resolve import (  # noqa: E402
     load_manifest,
     validate_wsi_spawn,
 )
+
+def publish_test_observations(archive: Path) -> dict:
+    """Use the same immutable SQL/provenance contract as performance captures."""
+    from scripts.tools.tracing_store import publish_store
+    from scripts.run_apps.tracing_harness import atomic_write_json, source_identity
+    run = json.loads((archive / "run.json").read_text())
+    results = json.loads((archive / "results.json").read_text())
+    artifacts = [{"role": name, "path": str(archive / name)}
+                 for name in ("run.json", "results.json", "staged-build.json")
+                 if (archive / name).exists()]
+    receipt = publish_store(archive / "observations.sqlite", run_id=archive.name,
+        attempt_id=uuid.uuid4().hex,
+        provenance={"producer": "run_d3d9_conformance", "run": run,
+                    "source": source_identity(REPO_ROOT), "test_results": results,
+                    "trace_status": "not_requested",
+                    "workload_outcome": {"status": "fail" if any(
+                        value not in ("pass", "skip") for value in results.values()) else "pass"}},
+        bundles=[], artifacts=artifacts)
+    atomic_write_json(archive / "observation-receipt.json", receipt)
+    return receipt
+
 
 DEFAULT_EXE = REPO_ROOT / "build-win32-x64-builtin/tests/conformance/d3d9/dxmt9-d3d9-conformance.exe"
 DEFAULT_EXE_DIR = DEFAULT_EXE.parent
@@ -897,6 +920,7 @@ def main() -> int:
     # point `source:` at, and the claim had to be dropped. Land a timestamped
     # bundle under experiments/output/ -- the tree documents already cite -- so
     # a result survives as evidence.
+    archive_failed = False
     if not args.no_archive:
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
         archive = args.archive_root / f"conformance-{stamp}"
@@ -929,12 +953,14 @@ def main() -> int:
                     "aux_summary": aux_summary,
                 }, f, indent=2, sort_keys=True)
                 f.write("\n")
+            publish_test_observations(archive)
             print(f"[runner] archived run -> {_relative_or_absolute(archive)}",
                   file=sys.stderr)
-        except OSError as exc:
-            # Never fail a completed suite over bookkeeping; --output still holds
-            # the verdicts.
-            print(f"[runner] archive skipped ({exc})", file=sys.stderr)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            # Preserve completed verdicts, but requested evidence must not claim
+            # archival success when the SQL/provenance product failed.
+            archive_failed = True
+            print(f"[runner] archive failed ({exc})", file=sys.stderr)
     print(
         f"[runner] done: {len(out)} tests "
         f"pass={summary['pass']} fail={summary['fail']} "
@@ -945,7 +971,7 @@ def main() -> int:
         file=sys.stderr,
     )
 
-    return 0
+    return 1 if archive_failed else 0
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 """Regression tests for the D3D9 conformance runner's chunk verdicts."""
 
 import sys
+import json
+import sqlite3
 import tempfile
 import unittest
 import os
@@ -15,6 +17,21 @@ from scripts.tools import run_d3d9_conformance as runner
 
 
 class ChunkProcessFailureTests(unittest.TestCase):
+    def test_archive_uses_shared_sql_evidence_without_changing_verdicts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            verdicts = {'draw':'pass','query':'fail','device':'skip'}
+            (root/'results.json').write_text(json.dumps(verdicts))
+            (root/'run.json').write_text(json.dumps({'commit':'fixture','wine':'fixture'}))
+            receipt = runner.publish_test_observations(root)
+            self.assertEqual(json.loads((root/'results.json').read_text()),verdicts)
+            self.assertEqual(receipt['sha256'], json.loads((root/'observation-receipt.json').read_text())['sha256'])
+            with sqlite3.connect(root/'observations.sqlite') as db:
+                self.assertEqual(dict(db.execute('SELECT name,status FROM test_result')),verdicts)
+                self.assertEqual(json.loads(db.execute("SELECT value_json FROM provenance WHERE key='trace_status'").fetchone()[0]),'not_requested')
+                outcome = json.loads(db.execute("SELECT value_json FROM provenance WHERE key='workload_outcome'").fetchone()[0])
+                self.assertEqual(outcome['status'],'fail')
+
     def test_aux_directory_follows_selected_executable(self):
         for executable in (runner.DEFAULT_EXE, Path("/pe32/tests/suite.exe")):
             with patch.object(sys, "argv", ["runner", "--exe", str(executable)]):

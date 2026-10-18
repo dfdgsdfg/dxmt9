@@ -5,7 +5,10 @@ description: Investigate dxmt9 Metal GPU timing, command-buffer and encoder acti
 
 # GPU tracing and frame debugging
 
-Choose the question and artifact before launching anything. A supplied capture
+Choose the question and artifact before launching anything. The default Perfetto
+overview (`--trace`) includes optional command-buffer timing; use `gpu-detail`
+when GPU timing is required. Keep external capture links and provenance in the
+shared companion SQLite store. A supplied capture
 can be analyzed without rerunning its workload. Run commands from the repository
 root and Python through `scripts/run_python.sh`.
 

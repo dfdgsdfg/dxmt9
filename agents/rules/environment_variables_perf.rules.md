@@ -391,3 +391,17 @@ come back. A counter stuck at zero is worse than a missing one: it reads as
 *measured and negligible* rather than *not measured*. Do not schedule new
 runs with this env unless an equivalent sparse-section diagnostic is
 intentionally written, and update this file in the same change.
+
+## Perfetto analysis surface
+
+During an active trace, `DXMT9_PERF_FRAME_SAMPLING` also publishes selected
+frame-delta counters (draws, command buffers, encoded Presents and chunk/draw
+elapsed nanoseconds) on dedicated Perfetto tracks. Existing output remains
+compatible. Encoded Present snapshots are not display timestamps, and the
+historical `*CpuNs` elapsed timers are not native thread CPU.
+
+Traced catalogue attempts automatically normalize selected CPU supply/wait
+files into the companion SQLite store, retaining detailed state and native CPU
+values. Workload log statistics remain queryable by source line when no clock
+is available. Legacy frame-window, decimation and observer switches retain their
+meaning; a shared output does not reduce their measurement overhead.

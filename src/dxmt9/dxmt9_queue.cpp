@@ -1850,6 +1850,14 @@ void QueueLifecycleController::observeTransition(const QueueTransitionRecord& re
   const auto lifecycleEvent = classifyTransition(record);
   if (::dxmt9::tracing::enabled()) {
     using namespace ::dxmt9::tracing;
+    if (lifecycleEvent == QueueLifecycleEvent::CommitPublish ||
+        lifecycleEvent == QueueLifecycleEvent::EncodeDequeue ||
+        lifecycleEvent == QueueLifecycleEvent::ReclaimFree) {
+      const auto owner = submissionBinding_.queryQueueIdentity;
+      counter(Category::Queue, Metric::QueueReady, record.after.readyCount, owner, record.eventSeqId);
+      counter(Category::Queue, Metric::QueueInflight, record.after.inflightCount, owner, record.eventSeqId);
+      counter(Category::Queue, Metric::QueueCompleted, record.after.completedQueueCount, owner, record.eventSeqId);
+    }
     if (lifecycleEvent == QueueLifecycleEvent::CommitPublish)
       observe(Category::Queue, EventId::QueuePublish,
               submissionBinding_.queryQueueIdentity, record.eventSeqId);

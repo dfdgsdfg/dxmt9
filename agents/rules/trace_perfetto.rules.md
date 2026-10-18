@@ -15,8 +15,9 @@ alwaysApply: false
 
 # Perfetto Performance Evidence
 
-Use the integrated Perfetto harness for bounded dxmt9 engine timelines and
-explicitly requested Metal timing. Use [cputrace](../skills/cputrace/SKILL.md) for engine CPU timelines and
+Use the integrated Perfetto harness as the default trace view. `--trace` selects
+a bounded CPU/wait/submission overview with optional command-buffer GPU timing;
+heavy detail and PE observations remain explicit. Use [cputrace](../skills/cputrace/SKILL.md) for engine CPU timelines and
 [gputrace](../skills/gputrace/SKILL.md) for GPU timing. They share the
 [normalization and native consumer workflow](../skills/cputrace/references/perfetto.md).
 The [tracing spec](../../specs/experiments/harness/tracing/spec.md) owns the
@@ -87,3 +88,19 @@ and source-appropriate metrics. Preserve rendering qualification under
 Keep bulk captures in ignored experiment output directories. Record durable
 conclusions with concrete evidence links in the owning `docs/perfomance/`
 domain; follow [documentation rules](documentation.rules.md).
+
+## Shared SQL evidence
+
+- Prefer the versioned companion SQLite store for structured supplemental
+  observations and experiment/test provenance. Native `.pftrace` remains
+  protobuf; the companion is not a Trace Processor dump or a UI input.
+- Keep source clocks, exact IDs/values, loss, closure and sampling populations.
+  Logs without time remain source-line-indexed records; never fabricate slices.
+- Bind supplemental evidence by digest and explicit source event or owner/work
+  IDs. A native slice's `observation_store` and `source_record` are lookup keys,
+  not automatic clock alignment or evidence of exclusive ownership.
+- Seal SQL before the final artifact graph. Failed imports must retain a
+  queryable failure envelope and invalidate the requested evidence product.
+- Preserve legacy acquisition formats, control/receipt envelopes, crash
+  breadcrumbs and opaque captures where their format/lifecycle requires files.
+  Existing aggregates remain usable with the SDK disabled.

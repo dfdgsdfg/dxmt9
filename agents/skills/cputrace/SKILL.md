@@ -6,6 +6,8 @@ description: Investigate dxmt9 CPU hotspots, function flow, thread activity and 
 # CPU tracing
 
 Start with the workload, question, target process/thread, and measurement window.
+Use the integrated Perfetto overview (`--trace`) as the default engine view;
+consult its companion SQLite store for supplemental observations and provenance.
 Analyze existing artifacts first when supplied. Run commands from the repository
 root, and Python through `scripts/run_python.sh`.
 
