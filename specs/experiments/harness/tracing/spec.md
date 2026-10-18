@@ -24,6 +24,48 @@ a required deliverable under R-HARN-TRACE-9.1–9.9.
 
 ## 1. Ownership and Data Boundaries
 
+### Perfetto overview and supplemental SQL observations
+
+The tracing entry point defaults to the bounded `timeline` profile. Ordinary
+baseline experiments remain observer-off. The overview carries the engine
+timeline and collector coverage; GPU, guest and expensive detail sources are
+selected explicitly and missing domains are never presented as measured zero.
+
+`scripts/tools/tracing_store.py` owns the cold-path companion analysis database.
+It consumes validated normalized bundles and immutable supplemental inputs,
+preserving raw records and provenance. Its Perfetto-style `track`, `slice`,
+`counter`, `args` and `flow` surfaces are a local SQLite contract, not a replacement
+for the pinned Trace Processor. Source clocks remain explicit on all rows;
+unqualified sources are not placed on the engine timeline by assuming an offset.
+Exact source IDs and unsigned values are retained as text when necessary.
+
+The runner finalizes the database before sealing the artifact graph. The database
+contains an acyclic snapshot of run/build/runtime/configuration and source
+digests; it cannot hash itself or the final parent manifest. The final manifest
+hashes the sealed database and `result.json` binds that manifest. Test producers
+may use the same store API/CLI with their own outcome/provenance envelope.
+Database integrity and successful publication do not qualify the observations.
+
+Legacy CPU supply, wait and PE sample inputs use their existing strict adapters.
+Their native CPU values, wait snapshots, frame windows, sample populations and
+unknown clock/identity fields survive in SQL arguments and source records.
+Other observations attach through a typed supplemental manifest: declared
+collector/role, source digest and optional explicit engine event/work endpoints.
+Opaque `.trace`, `.gputrace`, images and payloads stay external files. Raw engine
+JSONL, external acquisition formats and crash breadcrumbs remain justified
+simple-file acquisition/control artifacts; SQL is the structured analysis product.
+
+Native numeric metrics use dedicated counter tracks with fixed metric names and
+units; event owner IDs must never be repurposed as metric values. Queue depth
+snapshots are a coarse initial consumer. Existing aggregate reports remain
+available, and detailed observer migration requires semantic parity before
+retiring any legacy gate or parser. GPU physical sampler sharing and PE clock
+qualification are independent follow-on contracts, not implied by a SQL export.
+
+Verification maps R-HARN-TRACE-12.1–12.6 to store round trips and failure fixtures,
+runner manifest sealing, native counter consumer tests, and existing lifecycle
+checks. Live observer cost is qualified separately under section 8.
+
 This cross-domain profile uses the parent's eight stages and seven domains;
 it does not introduce another launcher or redefine `domain` in the envelope.
 
