@@ -60,5 +60,6 @@ Archives and operation records belong outside sealed analysis directories in
 `experiments/output/_retention/{archives,operations}/`. The Brewfile supplies
 `zstd`; use bounded offline compression and verify an extracted copy against
 original digests before removing materialized bytes. Keep current cited paths
-available until archive-aware readers/audits exist. General retention tooling
-and automatic budget enforcement are not implemented yet.
+available until archive-aware readers/audits exist. The [offline retention workflow](retention.md) provides inventory, explicit plans,
+verified archives/restores and guarded bulk-file eviction. Capture/analysis
+runners do not yet enforce storage budgets automatically.

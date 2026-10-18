@@ -632,6 +632,12 @@ foreach tracing_test : ['harness', 'normalize', 'consumer', 'external', 'store']
        args: [join_paths(meson.project_source_root(),
               'tests/scripts/test_tracing_' + tracing_test + '.py')])
 endforeach
+foreach retention_test : ['retention_archive', 'trace_retention']
+  test('dxmt9-' + retention_test.replace('_', '-'), python3,
+       args: [join_paths(meson.project_source_root(),
+              'tests/scripts/test_' + retention_test + '.py')],
+       suite: ['scripts'], is_parallel: false)
+endforeach
 test('dxmt9-tracing-observer-controls', python3,
   args: [join_paths(meson.project_source_root(), 'tests/scripts/test_qualify_trace_observer.py')])
 test('dxmt9-tracing-lifecycle-binding', python3,

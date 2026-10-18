@@ -137,7 +137,8 @@ for adoption decisions.
   The existing 3DMark05 name-based inventory is not a general deletion gate.
 - Keep cited paths materialized while readers/audits lack archive resolution.
   Record deletion/eviction explicitly; unavailable evidence cannot support a
-  fresh qualified claim. Retention tools and automatic cleanup remain unimplemented.
+  fresh qualified claim. Use the [offline retention tool](../../experiments/analysis/retention.md)
+  for explicit plans and verified recovery; automatic cleanup remains disabled.
 
 ## Shared acquisition
 

@@ -34,6 +34,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   joining deterministic run evidence. Generated bundles stay under ignored
   `experiments/render-tapes/`; curated fixtures use
   `experiments/render-tapes/curated/` and explicit `git add -f` review.
+- `retain_trace_artifacts.py` — explicit evidence-aware inventory/plan/apply/restore;
+  protects citations, pins, lifecycle evidence and live owners. See
+  [retention workflow](../../experiments/analysis/retention.md).
+- `retention_archive.py` — bounded zstd archive and exact restore verification;
+  never deletes source artifacts.
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank
   3DMark05 `traces/` and `experiments/output/` run-id cleanup candidates,
   marking run ids referenced by `docs/perfomance/**/*.md`.

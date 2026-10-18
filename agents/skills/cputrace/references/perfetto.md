@@ -269,10 +269,13 @@ before compression or deletion. It owns default review ages and protection rules
    path-bound consumers run; keep currently cited paths materialized until
    archive-aware readers and source audits exist.
 
-There is no general retention/restore command yet. The existing
-`scripts/tools/summarize_3dmark05_cleanup_candidates.py` reports only matching
-3DMark05 run directories and name references; it does not authorize removal or
-verify complete dependencies. No automatic compression/deletion is implied.
+Use `scripts/tools/retain_trace_artifacts.py` for `inventory`, `plan`, `apply`
+and `restore`; follow the [offline retention workflow](../../../../experiments/analysis/retention.md)
+for lifecycle review records, pins and capacity overrides. Default `archive-copy`
+preserves cited sources. Eviction supports explicitly reviewed bulk files and
+blocks unknown/opaque dependency metadata. The old
+`scripts/tools/summarize_3dmark05_cleanup_candidates.py` remains an inventory,
+not an eviction gate. No automatic compression/deletion is enabled.
 
 ## Optional asynchronous persistence
 

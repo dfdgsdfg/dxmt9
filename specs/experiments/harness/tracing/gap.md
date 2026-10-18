@@ -54,13 +54,25 @@ this is not a required runtime collector or a gap in per-run SQLite publication.
 ## Artifact retention
 
 R-HARN-TRACE-18.1–18.5 is specified in [artifact retention](artifact-retention.md).
-Retention classes, review ages, storage locations and developer `zstd` support
-are documented. The existing 3DMark05 cleanup inventory is non-destructive and
-uses run-name references; it does not prove transitive artifact safety. No
-general retention planner/applier, archive/restore verifier, pin registry,
-archive-aware source audit or budget enforcement is implemented. Existing
-consumers still require materialized source paths. No automatic deletion or
-compression is enabled by this specification.
+Status: **partial**. `scripts/tools/retain_trace_artifacts.py` implements
+inventory, frozen explicit plans, manual digest-bound lifecycle reviews,
+path/digest pins, conservative reverse-reference checks, a mutation lease,
+quarantine/unlink journals, compact evidence preservation and availability
+receipts. `scripts/tools/retention_archive.py` supplies zstd archive publication,
+bounded isolated extraction, exact file/tree verification and restore-to-new-path.
+Archive/restore and evidence writes enforce the operation's free-space floor,
+including simultaneous staging and allocation overhead. Focused tests are
+`dxmt9-retention-archive` and `dxmt9-trace-retention`.
+
+Eviction is limited to individual reviewed bulk files; directory bundles can be
+archive-copied. Unknown/opaque dependency metadata blocks eviction. Automatic
+producer lifecycle qualification, SQLite/DuckDB/Parquet dependency adapters,
+archive-aware source audits/readers, integrated 10 GiB analysis quotas and
+unattended interrupted-operation recovery remain unimplemented. The mutation
+lease does not lock producers; explicit offline owner closure is required.
+Existing consumers require materialized source paths, so cited evidence remains
+materialized. No automatic expiry or cleanup timer is enabled. See the
+[operational workflow](../../../../experiments/analysis/retention.md).
 
 ## External Collection
 
