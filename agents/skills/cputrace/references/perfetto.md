@@ -1,23 +1,19 @@
----
-name: perf
-description: Capture and qualify dxmt9 performance traces with the integrated Perfetto harness, normalize legacy CPU/wait/PE logs, and validate native traces with the pinned Trace Processor. Use for dxmt9 timeline or GPU-detail captures and tracing failure diagnosis.
----
+# Engine timeline and shared Perfetto qualification
 
-# dxmt9 Performance Tracing
-
-Read [Perfetto rules](../../rules/perfetto.rules.md) before capture or analysis.
+Read [Perfetto rules](../../../rules/perfetto.rules.md) before capture or analysis.
 Run commands from the repository root using `scripts/run_python.sh`.
 For existing artifacts, skip capture and use normalization or native consumer
 validation below. Do not rebuild or launch a workload merely to inspect a trace.
 
 ## Capture a bounded catalogue run
 
-1. Select the workload and the question: engine timeline, per-draw detail, or
-   GPU timing. Read its catalogue entry and the applicable
-   [wild-run rules](../../rules/test_wild.rules.md).
-2. Follow [build and staging instructions](../../../docs/build.md#optional-native-perfetto-tracing).
+1. Select the workload and the question: engine timeline or bounded per-draw
+   detail. For GPU capture, use [the GPU recipe](../../gputrace/references/perfetto.md).
+   Read the workload's catalogue entry and the applicable
+   [wild-run rules](../../../rules/test_wild.rules.md).
+2. Follow [build and staging instructions](../../../../docs/build.md#optional-native-perfetto-tracing).
    For the example below, first build the self-closing wrapper using
-   [the fixture instructions](../../../tests/integration/tracing/README.md).
+   [the fixture instructions](../../../../tests/integration/tracing/README.md).
    The example binary is generated locally, not included in the repository.
 3. List profiles and inspect a dry run before capture. Verify the chosen binary,
    Wine runtime, collector capabilities, duration, capacity and output location.
@@ -36,10 +32,6 @@ scripts/run_python.sh scripts/run_apps/run_experiment.py run conf-d3d9-triangle 
 scripts/run_python.sh scripts/run_apps/run_experiment.py run conf-d3d9-triangle \
   --binary experiments/output/tracing-acceptance/wine-triangle-x64.exe \
   --trace-profile timeline --trace-duration-ms 500 --timeout 60
-scripts/run_python.sh scripts/run_apps/run_experiment.py run conf-d3d9-triangle \
-  --binary experiments/output/tracing-acceptance/wine-triangle-x64.exe \
-  --trace-profile gpu-detail --trace-gpu-level encoder-stage \
-  --trace-gpu-capacity 64 --trace-duration-ms 500 --timeout 60
 ```
 
 The workload timeout must cover delay, capture, and the frozen finalization
@@ -62,7 +54,7 @@ falls back to another level. These profiles do not collect scheduler residency,
 shader occupancy or display presentation timestamps.
 
 For a short D3D9 app, use the self-closing `wine_triangle.cpp` wrapper described
-in [`tests/integration/tracing/README.md`](../../../tests/integration/tracing/README.md).
+in [`tests/integration/tracing/README.md`](../../../../tests/integration/tracing/README.md).
 It runs the triangle fixture, then keeps the process alive for a bounded 1.5 s
 dwell after the app window closes. The trace window must fit inside that dwell;
 the qualified x64 CPU timeline used 500 ms. The original 1000 ms examples
@@ -114,7 +106,7 @@ evidence.
 
 `tracing_consumer.py` reads the engine-produced native `.pftrace` using the
 platform-specific executable and SHA-256 in
-[`tracing_toolchain.lock.json`](../../../scripts/tools/tracing_toolchain.lock.json). The pin is
+[`tracing_toolchain.lock.json`](../../../../scripts/tools/tracing_toolchain.lock.json). The pin is
 Perfetto v58.2, revision `add693d8b338ba9599dbcbc3e300b1ab8c000897`, under
 Apache-2.0. First use downloads the exact pinned binary into the user cache and
 checks both size and digest. An explicit `--tp` binary must match the same pin.
@@ -149,7 +141,7 @@ obtain a passing result. Fix the cause and create a new attempt.
 Report the workload/run ID, runtime and build identities, profile and window,
 artifact paths and hashes, collector outcomes, qualified observations, and
 remaining clock/coverage/capability limits. Use the
-[requirement evidence matrix](../../../specs/experiments/harness/tracing/evidence.md)
+[requirement evidence matrix](../../../../specs/experiments/harness/tracing/evidence.md)
 for the scope of existing qualification. Put durable findings in the owning
 `docs/perfomance/` domain with artifact links; keep bulk captures under ignored
 experiment output directories.

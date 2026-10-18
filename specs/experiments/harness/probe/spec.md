@@ -396,7 +396,7 @@ them through into the `finalize_cmd_after_xcode_export` /
 `xctrace_system_trace_summary_cmd` command lines it prints after the
 run, for a human to paste into the `join`-domain
 `finalize_3dmark05_perf_probe.sh` invocation once Xcode counters are
-exported (per `agents/rules/metal_debugging.rules.md` §9's documented
+exported (per [GT1 probe workflow](../../../../agents/skills/gputrace/references/gt1-probes.md)'s documented
 recipe). Their gate semantics — what "top-N GPU decrease" or
 "opaque-depth-index-cache-proof" means when actually evaluated — are
 the `join`/`gate` domains' own mode-table responsibility, not this

@@ -71,7 +71,7 @@ B/invocation, the recovery denominator is negative (`1591.9 - 1623.4 = -31.5`),
 so `recovery(D) = 1.001` means only "lane D matches lane B", not "lane D
 recovered a win". The largest B/invocation deviation from lane A across all
 lanes is `2.0%`, inside the `10%` Xcode replay-noise floor
-(`agents/rules/metal_debugging.rules.md` §5) — the four lanes do not separate on
+([GPU counter interpretation](../../../agents/skills/gputrace/references/gpu-counters.md)) — the four lanes do not separate on
 the metric the discriminator scores.
 
 **Verdict.** Two separable claims. (1) On row `60/1`, a pure vertex permutation

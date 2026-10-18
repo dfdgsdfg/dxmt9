@@ -6,11 +6,11 @@ Reads MTLBuffer/MTLTexture files from .gputrace bundles using labels
 injected by Claude Code (or set manually) to identify resources.
 
 Usage:
-    python3 parse_gputrace.py capture.gputrace
-    python3 parse_gputrace.py capture.gputrace --buffer "Color Output Buffer"
-    python3 parse_gputrace.py capture.gputrace --buffer "Color Output Buffer" --layout float4 --index 100
-    python3 parse_gputrace.py capture.gputrace --buffer "Particle Buffer" --layout "float4,float4,float4" --index 0-10
-    python3 parse_gputrace.py capture.gputrace --dump-all
+    scripts/run_python.sh agents/skills/gputrace/scripts/parse_gputrace.py capture.gputrace
+    scripts/run_python.sh agents/skills/gputrace/scripts/parse_gputrace.py capture.gputrace --buffer "Color Output Buffer"
+    scripts/run_python.sh agents/skills/gputrace/scripts/parse_gputrace.py capture.gputrace --buffer "Color Output Buffer" --layout float4 --index 100
+    scripts/run_python.sh agents/skills/gputrace/scripts/parse_gputrace.py capture.gputrace --buffer "Particle Buffer" --layout "float4,float4,float4" --index 0-10
+    scripts/run_python.sh agents/skills/gputrace/scripts/parse_gputrace.py capture.gputrace --dump-all
 """
 
 import argparse

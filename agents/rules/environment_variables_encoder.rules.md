@@ -4,7 +4,7 @@ Part of the [`environment_variables.rules.md`](environment_variables.rules.md)
 index (force-state knobs for triaging, index-cache locality opt-ins, and
 3DMark05/Xcode backend-shape classifiers). A flag is "set" when its value is a
 non-empty string that is not `0`, unless documented otherwise. See the index
-for global notes, and [`metal_debugging.rules.md`](metal_debugging.rules.md) §9
+for global notes, and [GT1 probe workflow](../skills/gputrace/references/gt1-probes.md)
 for the probe-class → flag → `docs/perfomance/` mapping.
 
 ## Encoder / state debug

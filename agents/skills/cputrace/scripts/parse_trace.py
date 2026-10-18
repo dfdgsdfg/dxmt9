@@ -8,10 +8,10 @@ Usage:
       --xpath '/trace-toc/run[@number="1"]/data/table[@schema="metal-driver-event-intervals"]'
 
     # Then parse:
-    python3 parse_trace.py events.xml
-    python3 parse_trace.py events.xml --format json
-    python3 parse_trace.py events.xml --format csv
-    python3 parse_trace.py events.xml --summary
+    scripts/run_python.sh agents/skills/cputrace/scripts/parse_trace.py events.xml
+    scripts/run_python.sh agents/skills/cputrace/scripts/parse_trace.py events.xml --format json
+    scripts/run_python.sh agents/skills/cputrace/scripts/parse_trace.py events.xml --format csv
+    scripts/run_python.sh agents/skills/cputrace/scripts/parse_trace.py events.xml --summary
 """
 
 import argparse

@@ -152,7 +152,7 @@ paths; this script adds the `external-join`-stage paths listed above).
 ## 4. The Human Export Step's Declared Contract
 
 Per R-HARN-JOIN-2.1/2.2/2.3, the GUI procedure itself is specified in
-`agents/rules/metal_debugging.rules.md` §2b and is not restated here.
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md) and is not restated here.
 What this section states is the artifact contract that procedure must
 satisfy, which this domain's own scripts check.
 
@@ -166,7 +166,7 @@ ${trace_dir}/analysis/frame${frame}-counters-xcode.csv
 where `trace_dir` defaults to `$repo_root/traces/$run_id` (`:1125-1127`)
 and `frame` defaults to `60` (`:6`, overridable by
 `DXMT_3DMARK05_PROBE_FRAME` or `--frame`). This is the exact path
-`agents/rules/metal_debugging.rules.md` §2b's step 6 instructs a human
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md)'s step 6 instructs a human
 to save the export to.
 
 **Expected column shape.** `summarize_xcode_encoder_counters.py`
@@ -206,7 +206,7 @@ the first three data rows are literally
 `RenderPass[seq=255,enc=1,...]`, `RenderPass[seq=255,enc=2,...]` — the
 exact shape the regex expects, and the same label format
 `dxmt9_draw_encoder.mm:2226` emits per
-`agents/rules/metal_debugging.rules.md` §2's resource-labeling table.
+[capture labels](../../../../agents/skills/gputrace/references/frame-capture.md#reading-the-capture-labels--debug-groups)'s resource-labeling table.
 
 **Missing export is a hard failure naming the human action.**
 `finalize_3dmark05_perf_probe.sh` checks for the file after the
@@ -232,7 +232,7 @@ clean `--dry-run` exit as evidence the export step is done, when it is
 not.
 
 **What the path/save-panel caveat means for this contract.**
-`agents/rules/metal_debugging.rules.md` §2b warns that Xcode's save
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md) warns that Xcode's save
 panel can retain a previous run's `analysis` folder, so a human export
 can land at the *wrong* `frame<N>-counters-xcode.csv` path — a
 different run's `traces/<run>/analysis/` directory — while this
@@ -289,7 +289,7 @@ caller who runs the standard recipe without either flag gets a
 "joined" CSV and bottleneck report from a wrong-run or malformed
 export with **no diagnostic and a zero exit code** — this is a real,
 verified gap against R-HARN-JOIN-3.1, stated here rather than implied
-closed. `agents/rules/metal_debugging.rules.md` §9's `--require-*`
+closed. [GT1 probe workflow](../../../../agents/skills/gputrace/references/gt1-probes.md)'s `--require-*`
 gate table already steers proof-oriented runs toward passing these
 flags (for example `--require-stable-frame-proof` forces both on,
 `:955-975` of the finalize script), but a scout/no-gates invocation of
@@ -412,7 +412,7 @@ per real-run evidence in both trace directories above: the reduced
 `frame<N>-xcode-dxmt-joined-summary.csv`, and the
 `frame<N>-xcode-dxmt-bottleneck-report.md` — all three present
 together in both directories, confirming the artifact set
-`agents/rules/metal_debugging.rules.md` §2b's step 7 describes is
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md)'s step 7 describes is
 still what the current wrapper produces.
 
 `summarize_xctrace_metal_intervals.py --output-csv`/`--output-md`

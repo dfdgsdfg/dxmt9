@@ -69,7 +69,7 @@ Part of the [`environment_variables.rules.md`](environment_variables.rules.md)
 index (counter system, per-frame snapshot, and 3DMark05 GT1 perf-probe knobs).
 A flag is "set" when its value is a non-empty string that is not `0`, unless
 documented otherwise. See the index for global notes, and
-[`metal_debugging.rules.md`](metal_debugging.rules.md) §9 for the 3DMark05 GT1
+[GT1 probe workflow](../skills/gputrace/references/gt1-probes.md) for the 3DMark05 GT1
 perf-probe toolkit.
 
 ## Perf counters
@@ -255,7 +255,7 @@ gaps do not establish GPU blocking, and missing/evicted paths stay unknown.
 > added for exactly that reason after its timer shipped ungated on the wrong
 > number.
 
-| `DXMT9_PERF_ENCODER_GPU_TIME` | Opt-in per-encoder GPU-time via counter sample buffers at render-encoder boundaries; pairs with `DXMT_PERF_COUNTERS`. See `metal_debugging.rules.md` §5 path B | `0` |
+| `DXMT9_PERF_ENCODER_GPU_TIME` | Opt-in per-encoder GPU-time via counter sample buffers at render-encoder boundaries; pairs with `DXMT_PERF_COUNTERS`. See [GPU counter interpretation](../skills/gputrace/references/gpu-counters.md) | `0` |
 | `DXMT9_PERF_ENCODER_BREAKDOWN` | Emit per-render-encoder `[dxmt9-perf-encoder]` summary and `[dxmt9-perf-encoder-stream]` stream breakdown lines for stream handle/offset/stride churn, stream Metal-bind first/handle/offset reasons, stream/IB unique handle bytes/usage/pool buckets, IB handle churn, primitive/vertex/FFP/pre-transformed geometry shape, PSO/shader-variant/VSOut-layout attribution including layout-cache hit/miss counts, VS/PS shader hash and, when `DXMT_DUMP_SHADER_DIR` is set, exact VS/PS source hash attribution, argbuf table/cbuf byte totals, setVertexBytes slot-5/other bytes, transient vertex/index bytes split by UP preupload, decl/shadow fallback, and indexed expansion, VS float upload-plan ranges, and write attribution | `0` |
 | `DXMT9_PERF_ENCODER_BREAKDOWN_CBUF_CONTENT` | Heavy opt-in extension for `DXMT9_PERF_ENCODER_BREAKDOWN=1`. Enables byte-by-byte VS/FFPVS cbuf content-history scans and first/rewrite/field-split columns. Keep off for normal CPU baselines because it runs on cbuf upload hot paths and is visible as `encode_draw_argbuf_cbuf_observer_cpu_ms` | `0` |
 | `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ` | Optional numeric filter for `DXMT9_PERF_ENCODER_BREAKDOWN=1`; when set, emit encoder breakdown rows only for one render-pass sequence id such as frame-capture `seq=60`, keeping 3DMark05 no-gputrace logs bounded during per-frame attribution probes | unset |

@@ -29,7 +29,7 @@ requirement does not stop applying because the producer of one
 particular artifact is a human following a documented procedure
 instead of a script. §2 below states what that means concretely: the
 procedure itself is out of this document's scope (it belongs to
-`agents/rules/metal_debugging.rules.md` §2b), but the artifact the
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md)), but the artifact the
 procedure must produce — its path and its column shape — is this
 domain's contract, checkable the same way any other domain's input
 contract is checkable.
@@ -87,7 +87,7 @@ applied to an external tool's shape rather than an internal one.
 **R-HARN-JOIN-2.3** The GUI procedure that produces the export — Open,
 Show Performance, Counters, wait for draw-counter profiling, Export —
 is specified by reference to
-`agents/rules/metal_debugging.rules.md` §2b and is not restated here;
+[Xcode export procedure](../../../../agents/skills/gputrace/references/xcode-counters.md) and is not restated here;
 this document's scope is the artifact the procedure must produce
 (R-HARN-JOIN-2.1/2.2), not the click sequence that produces it.
 Restating the GUI steps in two places would let them drift out of

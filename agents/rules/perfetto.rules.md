@@ -7,7 +7,8 @@ paths:
   - "src/dxmt9/tracing/**/*"
   - "specs/experiments/harness/tracing/**/*.md"
   - "docs/perfomance/**/*.md"
-  - "agents/skills/perf/**/*"
+  - "agents/skills/cputrace/**/*"
+  - "agents/skills/gputrace/**/*"
 globs: "scripts/tools/tracing*"
 alwaysApply: false
 ---
@@ -15,8 +16,9 @@ alwaysApply: false
 # Perfetto Performance Evidence
 
 Use the integrated Perfetto harness for bounded dxmt9 engine timelines and
-explicitly requested Metal timing. Follow the [perf skill](../skills/perf/SKILL.md)
-for capture, normalization, native Trace Processor validation, and handoff.
+explicitly requested Metal timing. Use [cputrace](../skills/cputrace/SKILL.md) for engine CPU timelines and
+[gputrace](../skills/gputrace/SKILL.md) for GPU timing. They share the
+[normalization and native consumer workflow](../skills/cputrace/references/perfetto.md).
 The [tracing spec](../../specs/experiments/harness/tracing/spec.md) owns the
 contract; the [evidence matrix](../../specs/experiments/harness/tracing/evidence.md)
 records the qualified platform/workload scope and remaining gaps.

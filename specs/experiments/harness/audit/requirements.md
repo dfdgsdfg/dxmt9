@@ -27,7 +27,7 @@ empty match set for exactly one: `compare-gate → record`
 (spec.md:254-277 — the boundary this domain owns). A 2026-07-27
 extraction found a second zero-citation section, `run-capture →
 dump-extract` (then spec.md:112-123, citing
-`agents/rules/metal_debugging.rules.md` §1 but no `R-HARN-*` ID); the
+[frame capture procedure](../../../../agents/skills/gputrace/references/frame-capture.md) but no `R-HARN-*` ID); the
 same day's cross-document consistency pass added an `R-HARN-4.1`
 citation there (now spec.md:125-136), closing that gap without this
 domain's own boundary gaining one. R-HARN-AUDIT-1.2 only needs the

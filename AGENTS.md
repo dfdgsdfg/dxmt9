@@ -18,13 +18,15 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | `agents/rules/codebase_conventions.rules.md` | Any implementation change — PE/unix/Metal boundary, hot-path DOD shape, span ownership, formatting. |
 | `agents/rules/build.rules.md` | Driving builds — build-dir naming contract, install_name fixup gotcha, ABI lockstep; full guide in `docs/build.md`. |
 | `agents/rules/environment_variables.rules.md` | Any `DXMT*` / `DXMT9*` runtime knob (master list). |
-| `agents/rules/metal_debugging.rules.md` | GPU-side debugging: frame capture, `.gputrace`, signposts, perf counters, 3DMark05 GT1 probe toolkit. |
+| `agents/rules/metal_debugging.rules.md` | Xcode Metal Debugger: capture-layer, resource, validation and replay-counter constraints. Workflow: `agents/skills/gputrace/SKILL.md`. |
 | `agents/rules/experiment_3dmark.rules.md` | Running and qualifying 3DMark05/06 scene, CPU, HDR, and result-artifact lanes. |
 | `agents/rules/experiment_sfiv.rules.md` | Running and qualifying the Street Fighter IV benchmark lane. |
 | `agents/rules/rendering_correctness.rules.md` | Stateful rendering optimizations: formal/refinement-first evidence, model-code binding, GPU oracle, and promotion order. |
 | `agents/rules/test_wild.rules.md` | Running against real D3D9 binaries under Wine (runtime selection — must use Sikarugir/symbol-exposing `winemac.so`). |
 | `agents/rules/rea.rules.md` | Inspecting target app binaries with REA to understand D3D9 usage, control flow, and compatibility assumptions; provider setup and evidence workflow. |
-| `agents/rules/perfetto.rules.md` | Capturing or interpreting Perfetto performance traces; evidence qualification and platform limits. Execution workflow: `agents/skills/perf/SKILL.md`. |
+| `agents/rules/perfetto.rules.md` | Capturing or interpreting Perfetto performance traces; evidence qualification and platform limits. Workflows: `agents/skills/cputrace/SKILL.md` and `agents/skills/gputrace/SKILL.md`. |
+| `agents/rules/xctrace.rules.md` | Instruments CLI collection: target identity, bounded recording, TOC/schema export and artifact preservation. |
+| `agents/rules/instruments.rules.md` | Measurement interpretation: Time Profiler, Processor Trace support, thread states, symbols and CPU/GPU attribution. |
 | `agents/rules/documentation*.rules.md` | Writing docs/specs/rules (English-only for rules/specs; AGENTS.md vs rules vs specs decision flow). |
 | `specs/gap.md`, `specs/<domain>/gap.md`, `specs/d3d9/gap_d3d9.md`, `specs/tests/gap_d3d9_wine_test.md` | Implementation status / missing evidence before assuming a feature exists. |
 | `docs/perfomance/overview-3dmark05-gt1.md` | Performance investigation history (experiment knowledge graph). |

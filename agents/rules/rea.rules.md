@@ -146,6 +146,11 @@ version rather than assuming that upstream main matches the package.
   Preserve the [license/reference policy](codebase_conventions.rules.md):
   target pseudocode is evidence, not MIT-compatible implementation source.
 
+For runtime follow-up, use [cputrace](../skills/cputrace/SKILL.md) or
+[gputrace](../skills/gputrace/SKILL.md). Follow
+[Perfetto rules](perfetto.rules.md) for event joins and
+[Instruments rules](instruments.rules.md) for native/guest attribution limits.
+
 ## Evidence Handoff
 
 Retain the question, exact commands, REA/provider versions and settings,

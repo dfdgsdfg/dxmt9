@@ -6,7 +6,7 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 
 - `tracing_normalize.py`, `tracing_consumer.py`, `tracing_external.py` — normalize
   observations, qualify native Perfetto traces, and validate external probe
-  evidence. See the [perf execution skill](../../agents/skills/perf/SKILL.md)
+  evidence. See the [CPU tracing](../../agents/skills/cputrace/SKILL.md) and [GPU tracing](../../agents/skills/gputrace/SKILL.md)
   and [Perfetto rules](../../agents/rules/perfetto.rules.md).
 - `shader_corpus_tool.py` — manage the shader corpus: list passing files,
   drift against upstream, gap reporting (used by the Meson test wiring).

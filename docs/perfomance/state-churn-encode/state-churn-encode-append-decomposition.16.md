@@ -39,7 +39,7 @@ run it never fires.
 
 The labels exist so a `.gputrace` opened in Xcode shows a nested
 `RenderPass[...] → Draw[idx,tri]` narrative
-(`agents/rules/metal_debugging.rules.md` §2). Nothing reads them at runtime.
+([capture labels](../../../agents/skills/gputrace/references/frame-capture.md#reading-the-capture-labels--debug-groups)). Nothing reads them at runtime.
 
 **Measured**, by disabling the block and re-running GT2:
 
@@ -132,7 +132,7 @@ It was a real trade, not a free one:
 | for | against |
 |---|---|
 | `2.7 ms/present` of work with no runtime consumer | zero FPS on GT2 |
-| Per-draw heap allocation on a hot path, which `codebase_conventions.rules.md` explicitly forbids | the labels are the documented `.gputrace` navigation aid (`metal_debugging.rules.md` §2) |
+| Per-draw heap allocation on a hot path, which `codebase_conventions.rules.md` explicitly forbids | the labels are the documented `.gputrace` navigation aid ([capture labels](../../../agents/skills/gputrace/references/frame-capture.md#reading-the-capture-labels--debug-groups)) |
 | Would matter on any workload where encode *does* bind — untested | removing them silently degrades every future capture |
 
 Gating on capture keeps both sides — the same move the SWVP hoist made, gating

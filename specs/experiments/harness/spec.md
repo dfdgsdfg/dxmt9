@@ -141,7 +141,7 @@ canonical wire/direct-control journal, and content-addressed resource blobs;
 it is not valid at this boundary until the producer seals it after proving
 checkpoint consistency and resource closure. The
 consumer must not read GPU-side content out of a capture layer that
-was never inserted (`agents/rules/metal_debugging.rules.md` §1); a
+was never inserted ([frame capture procedure](../../../agents/skills/gputrace/references/frame-capture.md)); a
 `probe`-domain script's file-capture preflight is the in-band signal
 that the layer is present, not an assumption from the command line
 used to launch it (R-HARN-4.1).

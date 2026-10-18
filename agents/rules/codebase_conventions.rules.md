@@ -141,7 +141,7 @@ Measured incidents, three shapes of the same mistake:
 | Incident | Shape |
 |---|---|
 | **PE call-token contract** | `D3D9PePresentCallToken`, ~96 bytes of ordinal / timestamps / a 12-entry caller stack, returned **by value** from the entry note at 118 D3D9 call sites (88 device entry points, 30 child wrappers) and named in the child recorder's virtual interface — for logs only `DXMT9_PE_RECORDER_STATS` reads. |
-| **Per-draw debug groups** | A string format, a bridged `WMT::String` allocation, and a push/pop per draw: `2.7 ms/present` on GT2 — see [environment_variables_capture.rules.md](environment_variables_capture.rules.md) (`DXMT9_PER_DRAW_DEBUG_GROUPS`) and [metal_debugging.rules.md](metal_debugging.rules.md) §2. |
+| **Per-draw debug groups** | A string format, a bridged `WMT::String` allocation, and a push/pop per draw: `2.7 ms/present` on GT2 — see [environment_variables_capture.rules.md](environment_variables_capture.rules.md) (`DXMT9_PER_DRAW_DEBUG_GROUPS`) and [capture labels](../skills/gputrace/references/frame-capture.md#reading-the-capture-labels--debug-groups). |
 | **Ungated `PerfScope` family** | `4.64 ms/present` (`11.5%` of the frame) against the encode stage wall, after an A/B against frame wall had priced it at `0.3%` — see [environment_variables_perf.rules.md](environment_variables_perf.rules.md). |
 
 How to price one of these is a separate question with its own rules:
