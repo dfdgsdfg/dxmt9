@@ -18,6 +18,7 @@ qualify an unavailable external collector or establish negligible overhead.
 
 | Contract | Implementation | Qualification and remaining limits |
 |---|---|---|
+| R-HARN-TRACE-14.1–14.5 | Not started: [query and counter snapshot sharing](shared-snapshots.md). | Requires population/metadata parity, SDK-off/on and native-to-SQL evidence; live Wine overhead remains separate. |
 | R-HARN-TRACE-13.1–13.5 | Shared object-owned GPU endpoint sources, retained legacy stage attachments, common bounded CPU/wait records, native counter projections and SQL source keys. | SDK-off/on and actual Metal fixture evidence is recorded in [shared acquisition evidence](evidence.md#shared-acquisition). Detailed legacy clocks remain unqualified for direct timeline placement; fresh Wine and observer-overhead qualification remain open. |
 | R-HARN-TRACE-12.1–12.6 | Implemented: default overview, native queue/frame counter tracks, slice-to-SQL source links, supplemental CPU/wait/PE adapters and source-line log indexing, immutable SQLite, experiment and conformance provenance. | Native counter/SQLite round trip and deterministic failure fixtures pass. Full replacement of legacy producers and live migration overhead remain unqualified; PE QPC limits above still apply. |
 | R-HARN-TRACE-1.1–1.3 | Catalogue profiles, unique attempts, frozen requests, build/source provenance, separate collector outcomes and atomic manifest sealing. | Python positive/negative fixtures pass; final catalogue Wine evidence is recorded in the matrix. |
@@ -51,6 +52,14 @@ External collection gaps are owned by the
 | R-HARN-TRACE-11.7–11.8: lifecycle/admission | not started | [External probe verification](external-probes.md#verification-and-admission) defines acceptance. | Attach/detach model/code evidence, actual Linux/macOS capability fixtures, preserved target state and pinned Perfetto consumer checks. |
 
 ## Existing Component Entry Points
+
+Remaining migration beyond R-HARN-TRACE-14: detailed CPU/wait slices require
+qualified endpoint clocks; PE sampler/recorder observations need population-
+preserving bridge projection; queue text/signpost sites and renderer structural
+diagnostics need shared output adapters. Perf fields/histograms outside
+CounterSnapshot remain independent. External Instruments/Processor Trace/Xcode
+capture retain separate acquisition and join only through qualified identity,
+clock and artifact provenance.
 
 - `src/dxmt9/dxmt9_cpu_supply_trace.{hpp,cpp}` and
   `scripts/tools/analyze_cpu_supply.py` (`load`, `pair`).

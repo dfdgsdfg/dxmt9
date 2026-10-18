@@ -68,6 +68,9 @@ retiring any legacy gate or parser. The [shared acquisition contract](shared-acq
 sampling from consumer lifetimes. PE clock qualification remains independent
 of sampler sharing and SQL export.
 
+The [shared snapshot contract](shared-snapshots.md) extends this boundary to
+query ledgers and acquired frame/append snapshots (R-HARN-TRACE-14.1–14.5).
+
 Verification maps R-HARN-TRACE-12.1–12.6 to store round trips and failure fixtures,
 runner manifest sealing, native counter consumer tests, and existing lifecycle
 checks. Live observer cost is qualified separately under section 8.

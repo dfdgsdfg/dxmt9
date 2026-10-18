@@ -412,3 +412,28 @@ simultaneous consumers, concurrent reads, failed completion, retained storage
 after close and fresh object generations. GPU lifecycle model/code checks and
 source/consumer round trips are required. Live observer overhead and Wine
 workload qualification remain separate evidence gates.
+
+## 14. Shared Query and Counter Snapshots
+
+**R-HARN-TRACE-14.1** Query backend and receipt diagnostics must project existing
+cumulative ledgers without repeating polling, waits or phase clocks. Counts-only
+and one-in-64 timing populations remain distinct; invalid clocks retain their
+census and must not contribute elapsed totals.
+
+**R-HARN-TRACE-14.2** Frame counter and compatibility-append projections must
+reuse acquired snapshots, preserving delta/latest/cumulative semantics. Elapsed
+wall time must not become thread CPU time or exclusive phase attribution.
+
+**R-HARN-TRACE-14.3** Native Perfetto and companion SQLite must retain source,
+version, ordinal, mode, stride, units and aggregation semantics. Snapshot
+timestamps denote observation time, not original interval endpoints; ordinals
+are source/process-local projection identities, not legacy log line numbers.
+
+**R-HARN-TRACE-14.4** Existing acquisition gates and bounded report cadence remain
+explicit. Overview must not enable expensive collectors. Bounded generation-
+qualified POD output failure must not change legacy totals or production policy.
+
+**R-HARN-TRACE-14.5** Verification must cover populations, invalid clocks,
+snapshot arithmetic/metadata, stale/filtered/overflow consumers and SDK-off/on
+native-to-SQL round trips with pinned Trace Processor. Live Wine overhead remains
+a separate matched-control qualification.
