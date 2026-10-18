@@ -24,6 +24,7 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | `agents/rules/rendering_correctness.rules.md` | Stateful rendering optimizations: formal/refinement-first evidence, model-code binding, GPU oracle, and promotion order. |
 | `agents/rules/test_wild.rules.md` | Running against real D3D9 binaries under Wine (runtime selection — must use Sikarugir/symbol-exposing `winemac.so`). |
 | `agents/rules/rea.rules.md` | Inspecting target app binaries with REA to understand D3D9 usage, control flow, and compatibility assumptions; provider setup and evidence workflow. |
+| `agents/rules/perfetto.rules.md` | Capturing or interpreting Perfetto performance traces; evidence qualification and platform limits. Execution workflow: `agents/skills/perf/SKILL.md`. |
 | `agents/rules/documentation*.rules.md` | Writing docs/specs/rules (English-only for rules/specs; AGENTS.md vs rules vs specs decision flow). |
 | `specs/gap.md`, `specs/<domain>/gap.md`, `specs/d3d9/gap_d3d9.md`, `specs/tests/gap_d3d9_wine_test.md` | Implementation status / missing evidence before assuming a feature exists. |
 | `docs/perfomance/overview-3dmark05-gt1.md` | Performance investigation history (experiment knowledge graph). |

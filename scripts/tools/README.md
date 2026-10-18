@@ -4,6 +4,10 @@ General-purpose developer tooling that does not belong to a single suite or
 build. `shader_corpus_tool.py` is also imported by the Meson tests under
 `tests/meson.build` for shader-corpus listing and gap reporting.
 
+- `tracing_normalize.py`, `tracing_consumer.py`, `tracing_external.py` — normalize
+  observations, qualify native Perfetto traces, and validate external probe
+  evidence. See the [perf execution skill](../../agents/skills/perf/SKILL.md)
+  and [Perfetto rules](../../agents/rules/perfetto.rules.md).
 - `shader_corpus_tool.py` — manage the shader corpus: list passing files,
   drift against upstream, gap reporting (used by the Meson test wiring).
 - `package_app_local.py` — assemble a self-contained `dxmt9-app-local`

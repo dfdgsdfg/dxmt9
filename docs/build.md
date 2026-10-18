@@ -432,5 +432,5 @@ meson compile -C build-win32-x86-builtin
 
 An enabled build remains idle without a validated `DXMT9_TRACE_CONFIG` request.
 Use the catalogue runner to create requests and check receipts; a trace viewer
-opening a file does not qualify it. See [tracing usage](../scripts/tools/tracing_tools.md)
+opening a file does not qualify it. See [perf execution skill](../agents/skills/perf/SKILL.md)
 and the [requirement evidence matrix](../specs/experiments/harness/tracing/evidence.md).
