@@ -62,3 +62,16 @@ support no speedup or negligible-overhead claim. Their summary artifacts are
 (20/20); x86/x64 PE and unix builds complete. Live Linux and macOS external
 probe adapters remain unavailable; portable adapter fixtures do not replace
 those platform runs.
+
+
+## PE endpoint repair
+
+The ABI v2 [PE point-bracket protocol](../../../specs/experiments/harness/tracing/pe-clock.md)
+now qualifies both x86 and x64. Add `--trace-include-pe` to the timeline request.
+Three baseline/timeline pairs per architecture pass on the isolated
+`experiments/prefixs/tracing-pe-clock-v2` prefix, with the same image hash above.
+All six traces retain six PE endpoints, zero loss, exact native TP agreement,
+and unchanged 1000 ns clock policy: x64 247–810 ns, x86 476–956 ns. The earlier
+failed PE traces remain historical evidence. New summaries and test logs live
+under `experiments/output/tracing-pe-clock-fix/`; this smoke does not establish
+throughput or negligible probe cost.

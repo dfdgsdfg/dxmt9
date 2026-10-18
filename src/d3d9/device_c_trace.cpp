@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -13,47 +14,21 @@ namespace {
 constexpr uint32_t kHostMonotonicClockId = 3u;
 constexpr uint64_t kHostMonotonicClockFrequency = 1'000'000'000ull;
 
-// The PE gives us a one-call QPC bracket, not a calibration that can safely
-// be extrapolated indefinitely. Align only samples inside that bracket.
-bool mapQpcWithinCalibration(uint64_t qpc, uint64_t frequency,
-                             const D9CTraceClockCalibration& calibration,
-                             uint64_t* hostNs, double* scale,
-                             double* offset,
-                             uint64_t* uncertaintyNs) noexcept {
-  if (!hostNs || !scale || !offset || !uncertaintyNs || frequency == 0u ||
-      calibration.valid == 0u || qpc < calibration.qpcBefore ||
-      qpc > calibration.qpcAfter ||
-      calibration.qpcAfter < calibration.qpcBefore) {
-    return false;
-  }
-  if (!dxmt9PeTraceCalibrationUncertainty(
-          calibration.qpcBefore, calibration.qpcAfter, frequency,
-          calibration.hostUncertaintyNs, uncertaintyNs)) {
-    return false;
-  }
-  const uint64_t midpoint = calibration.qpcBefore +
-      (calibration.qpcAfter - calibration.qpcBefore) / 2u;
-  const __int128 delta = qpc >= midpoint
-      ? static_cast<__int128>(qpc - midpoint)
-      : -static_cast<__int128>(midpoint - qpc);
-  const __int128 adjustment = delta * kHostMonotonicClockFrequency /
-      static_cast<__int128>(frequency);
-  const __int128 mapped = static_cast<__int128>(
-      calibration.hostMonotonicNs) + adjustment;
-  if (mapped <= 0 || mapped > static_cast<__int128>(UINT64_MAX))
-    return false;
-  *hostNs = static_cast<uint64_t>(mapped);
-  *scale = static_cast<double>(kHostMonotonicClockFrequency) /
-      static_cast<double>(frequency);
-  *offset = static_cast<double>(calibration.hostMonotonicNs) -
-      static_cast<double>(midpoint) * *scale;
-  return true;
-}
-
 uint64_t nativeThreadId() noexcept {
   uint64_t tid = 0;
   (void)pthread_threadid_np(nullptr, &tid);
   return tid;
+}
+
+uint64_t hostClockResolutionNs() noexcept {
+  static const uint64_t resolution = []() noexcept {
+    mach_timebase_info_data_t scale{};
+    if (mach_timebase_info(&scale) != KERN_SUCCESS || scale.denom == 0u)
+      return 0u;
+    return scale.numer / scale.denom +
+        (scale.numer % scale.denom != 0u);
+  }();
+  return resolution;
 }
 
 void initializeReceipt(D9CTraceBatchReceipt* receipt,
@@ -64,7 +39,57 @@ void initializeReceipt(D9CTraceBatchReceipt* receipt,
   receipt->status = status;
 }
 
+bool mapPointBracket(const D9CTraceBatchEvent& source, uint64_t qpcFrequency,
+                     uint64_t endpoint,
+                     uint64_t* hostNs, uint64_t* uncertaintyNs,
+                     double* scale, double* offset) noexcept {
+  if (!hostNs || !uncertaintyNs || !scale || !offset ||
+      source.hostBeforeNs == 0u || source.hostAfterNs < source.hostBeforeNs ||
+      source.hostResolutionNs == 0u || qpcFrequency == 0u || endpoint > 1u)
+    return false;
+  if (!dxmt9PeTracePointUncertainty(source.hostBeforeNs, source.hostAfterNs,
+                                   source.hostResolutionNs, qpcFrequency,
+                                   uncertaintyNs))
+    return false;
+  const uint64_t midpoint = source.hostBeforeNs +
+      (source.hostAfterNs - source.hostBeforeNs) / 2u;
+  if (midpoint == 0u) return false;
+  *hostNs = midpoint;
+  *scale = static_cast<double>(kHostMonotonicClockFrequency) /
+      static_cast<double>(qpcFrequency);
+  *offset = static_cast<double>(midpoint) -
+      static_cast<double>(source.qpcTicks) * *scale;
+  return true;
+}
+
 }  // namespace
+
+extern "C" int32_t dxmt9c_trace_clock_probe(
+    D9CDevice*, D9CTraceClockProbe* outProbe) {
+  if (!outProbe) return 1;
+  *outProbe = {};
+  outProbe->structSize = static_cast<uint32_t>(sizeof(*outProbe));
+  outProbe->version = D9C_TRACE_BATCH_VERSION;
+  const uint64_t generation = dxmt9::tracing::capture_generation();
+  if (generation == 0u) {
+    outProbe->status = D9C_TRACE_RECEIPT_DISABLED;
+    return 0;
+  }
+  const uint64_t tid = nativeThreadId();
+  const uint64_t resolution = hostClockResolutionNs();
+  const uint64_t hostNs = dxmt9::tracing::now_ns();
+  if (tid == 0u || resolution == 0u || hostNs == 0u ||
+      generation != dxmt9::tracing::capture_generation()) {
+    outProbe->status = D9C_TRACE_RECEIPT_DROPPED;
+    return 0;
+  }
+  outProbe->status = D9C_TRACE_RECEIPT_ACCEPTED;
+  outProbe->sessionGeneration = generation;
+  outProbe->nativeThreadId = tid;
+  outProbe->hostMonotonicNs = hostNs;
+  outProbe->resolutionNs = resolution;
+  return 0;
+}
 
 extern "C" int32_t dxmt9c_device_trace_batch(
     D9CDevice*, const D9CTraceBatch* batch,
@@ -78,64 +103,24 @@ extern "C" int32_t dxmt9c_device_trace_batch(
     outReceipt->status = D9C_TRACE_RECEIPT_DISABLED;
     return 0;
   }
+  if (capturedGeneration != batch->sessionGeneration) {
+    outReceipt->status = D9C_TRACE_RECEIPT_DROPPED;
+    return 0;
+  }
 
   const uint64_t nativeTid = nativeThreadId();
-  const uint64_t hostBefore = dxmt9::tracing::now_ns();
-  std::array<dxmt9::tracing::TraceEvent,
-             D9C_TRACE_BATCH_MAX_EVENTS + 1u> events{};
-  uint32_t eventCount = 0u;
-  if (batch->previousCalibration.valid != 0u) {
-    auto& calibration = events[eventCount++];
-    calibration.timestamp_ns = batch->previousCalibration.hostMonotonicNs;
-    calibration.track_id = batch->previousCalibration.nativeThreadId;
-    calibration.work_id = batch->previousCalibration.sourceOrder;
-    calibration.scope_id = batch->previousCalibration.sourceOrder;
-    // The unix collector owns source-record identity across PE and native
-    // producers. sourceOrder remains the PE correlation key (work_id/scope_id).
-    calibration.source_record = 0u;
-    calibration.arg0 = batch->previousCalibration.qpcBefore;
-    calibration.arg1 = batch->previousCalibration.qpcAfter;
-    const uint64_t qpcMidpoint = batch->previousCalibration.qpcBefore +
-        (batch->previousCalibration.qpcAfter -
-         batch->previousCalibration.qpcBefore) / 2u;
-    calibration.process_id = static_cast<uint64_t>(getpid());
-    calibration.thread_id = batch->previousCalibration.nativeThreadId;
-    calibration.guest_process_id = batch->guestProcessId;
-    calibration.guest_thread_id = batch->guestThreadId;
-    calibration.process_create_time100ns = batch->processCreateTime100ns;
-    calibration.thread_create_time100ns = batch->threadCreateTime100ns;
-    calibration.clock_frequency = batch->qpcFrequency;
-    calibration.clock_id = kHostMonotonicClockId;
-    calibration.source_timestamp = qpcMidpoint;
-    calibration.source_clock_id = D9C_TRACE_CLOCK_QPC;
-    calibration.calibration_id = batch->previousCalibration.sourceOrder;
-    calibration.calibration_scale =
-        static_cast<double>(kHostMonotonicClockFrequency) /
-        static_cast<double>(batch->qpcFrequency);
-    calibration.calibration_offset =
-        static_cast<double>(batch->previousCalibration.hostMonotonicNs) -
-        static_cast<double>(qpcMidpoint) * calibration.calibration_scale;
-    calibration.event_id = static_cast<uint16_t>(
-        dxmt9::tracing::EventId::PeClockCalibration);
-    calibration.category = static_cast<uint8_t>(dxmt9::tracing::Category::Pe);
-    calibration.phase = static_cast<uint8_t>(dxmt9::tracing::Phase::Instant);
-    if (!dxmt9PeTraceCalibrationUncertainty(
-            batch->previousCalibration.qpcBefore,
-            batch->previousCalibration.qpcAfter, batch->qpcFrequency,
-            batch->previousCalibration.hostUncertaintyNs,
-            &calibration.uncertainty_ns)) {
-      calibration.uncertainty_ns = UINT64_MAX;
-    }
+  if (nativeTid == 0u || nativeTid != batch->nativeThreadId) {
+    outReceipt->status = D9C_TRACE_RECEIPT_DROPPED;
+    return 0;
   }
+  std::array<dxmt9::tracing::TraceEvent, D9C_TRACE_BATCH_MAX_EVENTS> events{};
   for (uint32_t i = 0; i < batch->eventCount; ++i) {
     const D9CTraceBatchEvent& source = batch->events[i];
-    auto& event = events[eventCount++];
+    auto& event = events[i];
     event.timestamp_ns = source.qpcTicks;
-    event.track_id = nativeTid;
+    event.track_id = 0u;
     event.work_id = source.sourceOrder;
     event.scope_id = source.scopeId;
-    // The scope/order ID is PE-owned. Let the unix collector assign unique
-    // native source-record IDs to the begin and end rows independently.
     event.source_record = 0u;
     event.arg0 = batch->processCreateTime100ns;
     event.arg1 = batch->threadCreateTime100ns;
@@ -150,16 +135,25 @@ extern "C" int32_t dxmt9c_device_trace_batch(
     event.source_timestamp = source.qpcTicks;
     event.source_clock_id = D9C_TRACE_CLOCK_QPC;
     uint64_t alignedNs = 0u;
-    uint64_t alignedUncertaintyNs = 0u;
-    if (mapQpcWithinCalibration(source.qpcTicks, batch->qpcFrequency,
-                                batch->previousCalibration, &alignedNs,
-                                &event.calibration_scale,
-                                &event.calibration_offset,
-                                &alignedUncertaintyNs)) {
+    uint64_t uncertaintyNs = 0u;
+    if (dxmt9PeTraceCalibrationId(source.sourceOrder, i,
+                                    &event.calibration_id) &&
+        mapPointBracket(source, batch->qpcFrequency, i,
+                        &alignedNs, &uncertaintyNs,
+                        &event.calibration_scale,
+                        &event.calibration_offset)) {
       event.timestamp_ns = alignedNs;
       event.clock_id = kHostMonotonicClockId;
-      event.calibration_id = batch->previousCalibration.sourceOrder;
-      event.uncertainty_ns = alignedUncertaintyNs;
+      event.uncertainty_ns = uncertaintyNs;
+      event.calibration_source_first = source.qpcTicks;
+      event.calibration_host_first_ns = source.hostBeforeNs;
+      event.calibration_source_second = source.qpcTicks;
+      event.calibration_host_second_ns = source.hostAfterNs;
+      event.calibration_valid_begin = source.qpcTicks;
+      event.calibration_valid_end = source.qpcTicks;
+      event.calibration_resolution_ns = source.hostResolutionNs;
+    } else {
+      event.calibration_id = 0u;
     }
     event.event_id = static_cast<uint16_t>(
         source.eventKind == D9C_TRACE_EVENT_SCOPE_BEGIN
@@ -172,15 +166,15 @@ extern "C" int32_t dxmt9c_device_trace_batch(
             : dxmt9::tracing::Phase::End);
   }
   const bool emitted = dxmt9::tracing::emit_batch_captured(
-      std::span<const dxmt9::tracing::TraceEvent>(events.data(), eventCount),
-      capturedGeneration,
-      batch->droppedBatchCount);
-  const uint64_t hostAfter = dxmt9::tracing::now_ns();
+      std::span<const dxmt9::tracing::TraceEvent>(events.data(),
+                                                  batch->eventCount),
+      batch->sessionGeneration, batch->droppedBatchCount);
   outReceipt->status = emitted ? D9C_TRACE_RECEIPT_ACCEPTED
                                : D9C_TRACE_RECEIPT_DROPPED;
   outReceipt->nativeThreadId = nativeTid;
   outReceipt->hostClockId = kHostMonotonicClockId;
-  outReceipt->hostMonotonicNs = hostBefore + (hostAfter - hostBefore) / 2u;
-  outReceipt->hostUncertaintyNs = hostAfter - hostBefore;
+  outReceipt->hostMonotonicNs = dxmt9::tracing::now_ns();
+  outReceipt->hostUncertaintyNs = hostClockResolutionNs();
+  if (outReceipt->hostUncertaintyNs == 0u) outReceipt->hostUncertaintyNs = 1u;
   return 0;
 }

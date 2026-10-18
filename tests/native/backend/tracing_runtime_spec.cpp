@@ -2,7 +2,9 @@
 #include "../../../src/dxmt9/tracing/config.hpp"
 
 #include <CommonCrypto/CommonDigest.h>
+#include <mach/mach_time.h>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -68,7 +70,7 @@ int main(int argc, char** argv) {
   const auto receipt_path = base / "receipt.json";
   const auto raw_path = base / "trace.pftrace.raw.jsonl";
   const std::string categories =
-      "[\"import\",\"replay\",\"queue\",\"encode\",\"wait\",\"submit\",\"completion\"]";
+      "[\"import\",\"replay\",\"queue\",\"encode\",\"wait\",\"submit\",\"completion\",\"pe\"]";
   const std::string canonical =
       "{\"attempt_id\":\"attempt\",\"categories\":" + categories +
       ",\"limits\":{\"finalize_timeout_ms\":5000,\"max_bytes\":1048576,"
@@ -113,6 +115,7 @@ int main(int argc, char** argv) {
 
   const uint64_t base_time = now_ns();
   const uint64_t main_tid = native_thread_id();
+  uint64_t peHostBase = 0u;
   {
     TraceScope scope(static_cast<uint8_t>(Category::Replay),
                      static_cast<uint16_t>(EventId::ReplayBegin),
@@ -129,6 +132,7 @@ int main(int argc, char** argv) {
     binding.arg1 = 9001;
     binding.related_owner_id = 88;
     assert(emit(binding));
+
     // One publication may feed more than one encode invocation. Native flows
     // must preserve both exact endpoints without chaining the two children.
     for (unsigned i = 0; i < 2; ++i) {
@@ -142,6 +146,71 @@ int main(int argc, char** argv) {
       assert(emit(member));
     }
   }
+
+  // Exercise the PE point-bracket raw contract after the replay scope closes.
+  // QPC at 24 MHz has a non-integral ns/tick scale, and each endpoint maps
+  // only its exact source tick to the host midpoint.
+  const uint64_t peGeneration = capture_generation();
+  assert(peGeneration != 0u);
+  constexpr uint64_t qpcFrequency = 24'000'000u;
+  constexpr uint64_t sourceOrder = 9003u;
+  constexpr uint64_t scopeId = 9003u;
+  peHostBase = now_ns();
+  mach_timebase_info_data_t timebase{};
+  assert(mach_timebase_info(&timebase) == KERN_SUCCESS && timebase.denom != 0u);
+  const uint64_t hostResolutionNs = std::max<uint64_t>(
+      1u, timebase.numer / timebase.denom +
+          (timebase.numer % timebase.denom != 0u));
+  const uint64_t qpcResolutionNs =
+      1'000'000'000u / qpcFrequency +
+      (1'000'000'000u % qpcFrequency != 0u);
+  const uint64_t pointErrorNs = 1u + qpcResolutionNs + hostResolutionNs;
+  assert(pointErrorNs <= 1000u);
+  const auto pePoint = [main_tid, pointErrorNs, hostResolutionNs](
+                           uint16_t eventId, uint8_t phase, uint64_t qpc,
+                           uint64_t hostBefore, uint64_t hostAfter,
+                           uint64_t endpoint) {
+    TraceEvent point{};
+    point.timestamp_ns = hostBefore + (hostAfter - hostBefore) / 2u;
+    point.track_id = 0u;
+    point.work_id = sourceOrder;
+    point.scope_id = scopeId;
+    point.process_id = static_cast<uint64_t>(getpid());
+    point.thread_id = main_tid;
+    point.guest_process_id = 17u;
+    point.guest_thread_id = 23u;
+    point.process_create_time100ns = 1000u;
+    point.thread_create_time100ns = 2000u;
+    point.clock_frequency = qpcFrequency;
+    point.uncertainty_ns = pointErrorNs;
+    point.source_timestamp = qpc;
+    point.source_clock_id = 0x44585150u;
+    point.calibration_id = sourceOrder * 2u + endpoint;
+    point.calibration_scale = 1'000'000'000.0 /
+        static_cast<double>(qpcFrequency);
+    point.calibration_offset = static_cast<double>(point.timestamp_ns) -
+        static_cast<double>(qpc) * point.calibration_scale;
+    point.calibration_source_first = qpc;
+    point.calibration_host_first_ns = hostBefore;
+    point.calibration_source_second = qpc;
+    point.calibration_host_second_ns = hostAfter;
+    point.calibration_valid_begin = qpc;
+    point.calibration_valid_end = qpc;
+    point.calibration_resolution_ns = hostResolutionNs;
+    point.clock_id = 3u;
+    point.event_id = eventId;
+    point.category = static_cast<uint8_t>(Category::Pe);
+    point.phase = phase;
+    return point;
+  };
+  std::array<TraceEvent, 2> pePoints{
+      pePoint(static_cast<uint16_t>(EventId::PeChunkCommitBegin),
+              static_cast<uint8_t>(Phase::Begin), 24'000'001u,
+              peHostBase - 2u, peHostBase, 0u),
+      pePoint(static_cast<uint16_t>(EventId::PeChunkCommitEnd),
+              static_cast<uint8_t>(Phase::End), 24'240'001u,
+              peHostBase + 9'998u, peHostBase + 10'000u, 1u)};
+  assert(emit_batch_captured(pePoints, peGeneration));
 
   std::array<std::thread, 4> producers;
   for (size_t i = 0; i < producers.size(); ++i) {
@@ -166,6 +235,64 @@ int main(int argc, char** argv) {
   assert(raw_text.find("\"schema\":\"dxmt9.trace.raw.v1\"") != std::string::npos);
   assert(raw_text.find("\"relations\":[{\"relation_id\":") != std::string::npos);
   assert(raw_text.find("\"work_ids\":[\"9001\"]") != std::string::npos);
+  const std::string pointMapping = "\"mapping_kind\":\"point_bracket\"";
+  const size_t firstPointMapping = raw_text.find(pointMapping);
+  assert(firstPointMapping != std::string::npos);
+  assert(raw_text.find(pointMapping,
+                       firstPointMapping + pointMapping.size()) !=
+         std::string::npos);
+  assert(raw_text.find("\"calibration_resolution_ns\":\"" +
+                       std::to_string(hostResolutionNs) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"scale\":\"41.666") !=
+         std::string::npos);
+  assert(raw_text.find("\"calibration_id\":\"18006\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"calibration_id\":\"18007\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"frequency\":\"24000000\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"source_ticks\":\"24000001\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"source_ticks\":\"24240001\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"source_before\":\"24000001\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"source_after\":\"24240001\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"host_ns\":\"" +
+                       std::to_string(peHostBase - 1u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"host_ns\":\"" +
+                       std::to_string(peHostBase + 9'999u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"host_before_ns\":\"" +
+                       std::to_string(peHostBase - 2u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"host_before_ns\":\"" +
+                       std::to_string(peHostBase + 9'998u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"host_after_ns\":\"" +
+                       std::to_string(peHostBase + 10'000u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"track_id\":\"" +
+                       std::to_string((peGeneration << 32) | 1u) + "\"") !=
+         std::string::npos);
+  assert(raw_text.find("\"native_tid\":\"" +
+                       std::to_string(main_tid) + "\"") !=
+         std::string::npos);
+  const auto assertPeEventTrack = [&](uint16_t eventId) {
+    const std::string eventType = "\"event_type\":" +
+        std::to_string(eventId);
+    const size_t eventPosition = raw_text.find(eventType);
+    assert(eventPosition != std::string::npos);
+    const std::string track = "\"track_id\":\"" +
+        std::to_string((peGeneration << 32) | 1u) + "\"";
+    const size_t trackPosition = raw_text.find(track, eventPosition);
+    assert(trackPosition != std::string::npos);
+  };
+  assertPeEventTrack(static_cast<uint16_t>(EventId::PeChunkCommitBegin));
+  assertPeEventTrack(static_cast<uint16_t>(EventId::PeChunkCommitEnd));
   assert(raw_text.find("\"binding_kind\":\"raw_publication\"") !=
          std::string::npos);
   assert(raw_text.find("\"phase\":\"begin\"") != std::string::npos);

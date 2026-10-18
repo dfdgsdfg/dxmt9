@@ -255,6 +255,7 @@ def validate_bundle(bundle: dict[str, Any], *, require_complete: bool = False) -
     events = {e["event_id"]: e for e in bundle["events"]}
     scopes: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     source_orders: set[tuple[str, str, str]] = set()
+    point_generations: dict[tuple[str, str], int] = {}
     for event in events.values():
         for key, ref, label in (("process_id", processes, "process"),
                                 ("thread_id", threads, "thread"),
@@ -306,7 +307,8 @@ def validate_bundle(bundle: dict[str, Any], *, require_complete: bool = False) -
     for index, raw_calibration in enumerate(calibration_rows):
         calibration = _mapping(raw_calibration, f"clock_calibrations[{index}]")
         mapping_kind = _id(calibration.get("mapping_kind"), "calibration.mapping_kind")
-        if mapping_kind not in ("host_api_identity", "two_anchor", "bracket"):
+        if mapping_kind not in ("host_api_identity", "two_anchor", "bracket",
+                                "point_bracket"):
             raise TraceError(f"unsupported calibration mapping_kind: {mapping_kind!r}")
         source_clock_id = _id(calibration.get("source_clock_id"), "calibration.source_clock_id")
         calibration_id = _id(calibration.get("calibration_id"), "calibration.calibration_id")
@@ -343,13 +345,49 @@ def validate_bundle(bundle: dict[str, Any], *, require_complete: bool = False) -
                                      "calibration.valid_begin")
             valid_end = _timestamp(calibration.get("valid_end"),
                                    "calibration.valid_end")
-            if source_before >= source_after or valid_begin >= valid_end:
-                raise TraceError("calibration anchors or validity range are not increasing")
-            for source_anchor, host_anchor in ((source_before, host_before),
-                                               (source_after, host_after)):
-                if abs(_map_calibrated_timestamp(source_anchor, scale, offset) -
-                       host_anchor) > error_ns:
-                    raise TraceError("calibration transform does not fit its anchors")
+            if mapping_kind == "point_bracket":
+                frequency = _uint(calibration.get("frequency"),
+                                  "calibration.frequency")
+                resolution_ns = _uint(calibration.get("resolution_ns"),
+                                      "calibration.resolution_ns")
+                if not frequency:
+                    raise TraceError("point-bracket frequency must be positive")
+                if (source_before != source_ticks or source_after != source_ticks or
+                        valid_begin != source_ticks or valid_end != source_ticks):
+                    raise TraceError("point-bracket calibration must have single-point validity")
+                if host_before > host_after:
+                    raise TraceError("point-bracket host endpoints are inverted")
+                midpoint = (host_before + host_after) // 2
+                if host_ns != midpoint:
+                    raise TraceError("point-bracket host timestamp is not the floor midpoint")
+                expected_scale = Decimal(1_000_000_000) / Decimal(frequency)
+                expected_offset = Decimal(host_ns) - expected_scale * Decimal(source_ticks)
+                scale_tolerance = max(abs(expected_scale), Decimal(1)) * Decimal("1e-15")
+                if abs(scale - expected_scale) > scale_tolerance:
+                    raise TraceError("point-bracket scale disagrees with its QPC frequency")
+                offset_tolerance = min(
+                    max(abs(expected_offset), Decimal(1)) * Decimal("1e-15"),
+                    Decimal(1000))
+                if abs(offset - expected_offset) > offset_tolerance:
+                    raise TraceError("point-bracket transform does not fit the exact observation")
+                tick_error_ns = (1_000_000_000 + frequency - 1) // frequency
+                minimum_error = ((host_after - host_before + 1) // 2 +
+                                 tick_error_ns + resolution_ns)
+                if error_ns < minimum_error:
+                    raise TraceError("point-bracket calibration error underclaims its bound")
+                if str(host_clock_id) in clocks:
+                    host_resolution = _uint(clocks[host_clock_id]["resolution_ns"],
+                                            "host clock resolution_ns")
+                    if resolution_ns < host_resolution:
+                        raise TraceError("point-bracket resolution is below host clock resolution")
+            else:
+                if source_before >= source_after or valid_begin >= valid_end:
+                    raise TraceError("calibration anchors or validity range are not increasing")
+                for source_anchor, host_anchor in ((source_before, host_before),
+                                                   (source_after, host_after)):
+                    if abs(_map_calibrated_timestamp(source_anchor, scale, offset) -
+                           host_anchor) > error_ns:
+                        raise TraceError("calibration transform does not fit its anchors")
         calibrations[key] = calibration
 
     for event in events.values():
@@ -382,6 +420,42 @@ def validate_bundle(bundle: dict[str, Any], *, require_complete: bool = False) -
             raise TraceError("non-identity calibrated event timestamp unit must be ticks")
         valid_begin = int(calibration["valid_begin"])
         valid_end = int(calibration["valid_end"])
+        if calibration["mapping_kind"] == "point_bracket":
+            generation = _uint(attrs.get("generation"), "event.generation")
+            if generation == 0:
+                raise TraceError("point-bracket event generation must be positive")
+            generation_key = (event["process_id"], source_clock_id)
+            prior_generation = point_generations.setdefault(generation_key, generation)
+            if prior_generation != generation:
+                raise TraceError("point-bracket generation changed within source clock")
+            if bundle.get("collector") == "engine-perfetto":
+                process_generation = _uint(
+                    processes[event["process_id"]]["incarnation"],
+                    "engine-perfetto process incarnation")
+                if generation != process_generation:
+                    raise TraceError(
+                        "point-bracket generation disagrees with process incarnation")
+            if attrs.get("clock_frequency") is not None and _uint(
+                    attrs["clock_frequency"], "event.clock_frequency") != int(
+                        calibration["frequency"]):
+                raise TraceError("point-bracket frequency disagrees with event clock frequency")
+            if source_ticks != int(calibration["source_ticks"]):
+                raise TraceError("point-bracket event source timestamp differs from calibrated point")
+            if int(event["timestamp"]) != int(calibration["host_ns"]):
+                raise TraceError("point-bracket event timestamp is not the exact host midpoint")
+            event_error = _uint(attrs.get("uncertainty_ns"), "event.uncertainty_ns")
+            if event_error < int(calibration["error_ns"]):
+                raise TraceError("point-bracket event uncertainty underclaims calibration error")
+            if (attrs.get("source_api") != "QueryPerformanceCounter" or
+                    attrs.get("source_timestamp_unit") != "ticks"):
+                raise TraceError("point-bracket event must preserve QueryPerformanceCounter ticks")
+            if attrs.get("calibration_resolution_ns") is None or int(
+                    _uint(attrs["calibration_resolution_ns"],
+                          "event.calibration_resolution_ns")) != int(calibration["resolution_ns"]):
+                raise TraceError("point-bracket event resolution annotation disagrees with calibration")
+            if max_error_ns is not None and event_error > max_error_ns:
+                calibration_issues.append(f"event_uncertainty_exceeds_policy:{event['event_id']}")
+            continue
         if not valid_begin <= source_ticks <= valid_end:
             calibration_issues.append(f"event_calibration_out_of_range:{event['event_id']}")
             continue
@@ -668,6 +742,7 @@ def _from_runtime_events(source: dict[str, Any], *, producer: str) -> dict[str, 
                                        ("calibration_offset", "calibration_offset"),
                                        ("calibration_source_first", "calibration_source_first"),
                                        ("calibration_host_first_ns", "calibration_host_first_ns"),
+                                       ("calibration_resolution_ns", "calibration_resolution_ns"),
                                        ("calibration_source_second", "calibration_source_second"),
                                        ("calibration_host_second_ns", "calibration_host_second_ns"),
                                        ("calibration_valid_begin", "calibration_valid_begin"),

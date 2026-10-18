@@ -288,6 +288,7 @@ def derive_expected(bundle: dict[str, Any]) -> dict[str, Any]:
         "calibration_host_first_ns": "debug.calibration_host_first_ns",
         "calibration_source_second": "debug.calibration_source_second",
         "calibration_host_second_ns": "debug.calibration_host_second_ns",
+        "calibration_resolution_ns": "debug.calibration_resolution_ns",
         "calibration_valid_begin": "debug.calibration_valid_begin",
         "calibration_valid_end": "debug.calibration_valid_end",
         "relation_type": "debug.relation_type",

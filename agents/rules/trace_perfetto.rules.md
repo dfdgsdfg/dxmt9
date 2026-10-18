@@ -64,9 +64,11 @@ records the qualified platform/workload scope and remaining gaps.
 
 ## Platform and performance claim limits
 
-The recorded Wine x86/x64 PE captures retain observations but fail strict QPC
-clock qualification. Treat new PE runs according to their own receipts; do not
-infer complete guest attribution from the existing CPU/GPU acceptance runs.
+PE clock qualification is attempt-specific. The original Wine captures fail
+strict QPC qualification; subsequent [point-bracket captures](../../specs/experiments/harness/tracing/pe-clock.md#qualification)
+qualify both x86 and x64 at the unchanged 1000 ns policy. Treat each run by its
+own receipt. Chunk endpoint timing does not establish arbitrary guest-function
+attribution or negligible observer overhead.
 
 Live Linux perf/ptrace and macOS target-probe adapters are currently unavailable.
 Portable perf-ring, manifest and lifecycle fixtures do not qualify live

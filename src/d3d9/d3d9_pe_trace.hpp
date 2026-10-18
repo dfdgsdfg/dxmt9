@@ -13,99 +13,118 @@ inline bool dxmt9PeTraceEnabled() noexcept {
   return enabled;
 }
 
-// Transport receipts describe the current capture window. They never alter
-// whether a later chunk should be observed while the user opt-in is set.
 inline bool dxmt9PeTraceCaptureEligible(bool optedIn,
                                         bool identityValid) noexcept {
   return optedIn && identityValid;
 }
 
-enum class Dxmt9PeTraceReceiptAction : uint8_t {
-  Accepted,
-  Disabled,
-  Loss,
-};
+enum class Dxmt9PeTraceReceiptAction : uint8_t { Accepted, Disabled, Loss };
 
 constexpr Dxmt9PeTraceReceiptAction dxmt9PeTraceReceiptAction(
-    int32_t transportStatus, bool receiptValid, uint32_t receiptStatus,
-    bool calibrationWindowValid) noexcept {
+    int32_t transportStatus, bool receiptValid, uint32_t receiptStatus) noexcept {
   if (transportStatus == 0 && receiptValid &&
-      receiptStatus == D9C_TRACE_RECEIPT_DISABLED) {
+      receiptStatus == D9C_TRACE_RECEIPT_DISABLED)
     return Dxmt9PeTraceReceiptAction::Disabled;
-  }
-  if (transportStatus == 0 && receiptValid && calibrationWindowValid &&
-      receiptStatus == D9C_TRACE_RECEIPT_ACCEPTED) {
+  if (transportStatus == 0 && receiptValid &&
+      receiptStatus == D9C_TRACE_RECEIPT_ACCEPTED)
     return Dxmt9PeTraceReceiptAction::Accepted;
-  }
   return Dxmt9PeTraceReceiptAction::Loss;
 }
 
 struct Dxmt9PeTraceReceiptTransition {
-  bool keepCalibration;
   uint64_t droppedBatchCount;
 };
-
-constexpr bool dxmt9PeTraceCalibrationUncertainty(
-    uint64_t qpcBefore, uint64_t qpcAfter, uint64_t qpcFrequency,
-    uint64_t hostUncertaintyNs, uint64_t* outUncertaintyNs) noexcept {
-  if (!outUncertaintyNs || qpcFrequency == 0u || qpcAfter < qpcBefore)
-    return false;
-
-  constexpr uint64_t kNanosecondsPerSecond = 1'000'000'000u;
-  const uint64_t bracketTicks = qpcAfter - qpcBefore;
-  const uint64_t whole = bracketTicks / qpcFrequency;
-  const uint64_t remainder = bracketTicks % qpcFrequency;
-  if (whole > UINT64_MAX / kNanosecondsPerSecond) return false;
-  const uint64_t wholeNs = whole * kNanosecondsPerSecond;
-
-  // Compute ceil(remainder * 1e9 / frequency) without a wide integer.
-  // `remainder < frequency` keeps the quotient bounded by 1e9. The
-  // bitwise quotient/remainder recurrence avoids overflow in the product.
-  uint64_t fractionalNs = 0u;
-  uint64_t fractionalRemainder = 0u;
-  for (int bit = 63; bit >= 0; --bit) {
-    fractionalNs *= 2u;
-    if (fractionalRemainder >= qpcFrequency - fractionalRemainder) {
-      fractionalRemainder -= qpcFrequency - fractionalRemainder;
-      ++fractionalNs;
-    } else {
-      fractionalRemainder += fractionalRemainder;
-    }
-    if ((kNanosecondsPerSecond >> bit) & 1u) {
-      if (fractionalRemainder >= qpcFrequency - remainder) {
-        fractionalRemainder -= qpcFrequency - remainder;
-        ++fractionalNs;
-      } else {
-        fractionalRemainder += remainder;
-      }
-    }
-  }
-  if (fractionalRemainder != 0u) ++fractionalNs;
-  if (wholeNs > UINT64_MAX - fractionalNs) return false;
-  const uint64_t bracketNs = wholeNs + fractionalNs;
-  const uint64_t halfBracketNs = bracketNs / 2u + bracketNs % 2u;
-  if (halfBracketNs > UINT64_MAX - hostUncertaintyNs) return false;
-  *outUncertaintyNs = halfBracketNs + hostUncertaintyNs;
-  return true;
-}
 
 constexpr Dxmt9PeTraceReceiptTransition dxmt9PeTraceTransitionReceipt(
     uint64_t droppedBatchCount,
     Dxmt9PeTraceReceiptAction action) noexcept {
-  switch (action) {
-    case Dxmt9PeTraceReceiptAction::Accepted:
-      return {true, 0u};
-    case Dxmt9PeTraceReceiptAction::Disabled:
-      return {false, 0u};
-    case Dxmt9PeTraceReceiptAction::Loss:
-      return {false, droppedBatchCount == UINT64_MAX
-                         ? droppedBatchCount : droppedBatchCount + 1u};
-  }
-  return {false, droppedBatchCount};
+  if (action == Dxmt9PeTraceReceiptAction::Accepted ||
+      action == Dxmt9PeTraceReceiptAction::Disabled)
+    return {0u};
+  return {droppedBatchCount == UINT64_MAX ? droppedBatchCount
+                                           : droppedBatchCount + 1u};
 }
 
-// One optional PE scope around an already-existing chunk bridge operation.
-// The caller gates both calls with dxmt9PeTraceEnabled(); disabled execution
-// does not enter this helper or construct its TLS record storage.
-bool dxmt9PeTraceChunkBegin() noexcept;
+struct Dxmt9PeTracePointBracket {
+  uint64_t qpcTicks;
+  uint64_t hostBeforeNs;
+  uint64_t hostAfterNs;
+  uint64_t hostResolutionNs;
+  uint64_t sessionGeneration;
+  uint64_t nativeThreadId;
+  uint64_t uncertaintyNs;
+  bool present;
+  bool qualified;
+  bool disabled;
+  bool generationMismatch;
+};
+
+constexpr Dxmt9PeTracePointBracket dxmt9PeTraceClearBracket(
+    Dxmt9PeTracePointBracket point) noexcept {
+  point.hostBeforeNs = 0u;
+  point.hostAfterNs = 0u;
+  point.hostResolutionNs = 0u;
+  point.uncertaintyNs = 0u;
+  point.present = false;
+  point.qualified = false;
+  return point;
+}
+
+constexpr bool dxmt9PeTracePointUncertainty(
+    uint64_t hostBeforeNs, uint64_t hostAfterNs, uint64_t hostResolutionNs,
+    uint64_t qpcFrequency, uint64_t* outUncertaintyNs) noexcept {
+  if (!outUncertaintyNs || hostBeforeNs == 0u || hostAfterNs < hostBeforeNs ||
+      hostResolutionNs == 0u || qpcFrequency == 0u)
+    return false;
+  constexpr uint64_t kNsPerSecond = 1'000'000'000u;
+  const uint64_t span = hostAfterNs - hostBeforeNs;
+  const uint64_t halfSpan = span / 2u + span % 2u;
+  const uint64_t qpcResolution = kNsPerSecond / qpcFrequency +
+      (kNsPerSecond % qpcFrequency != 0u);
+  if (halfSpan > UINT64_MAX - qpcResolution) return false;
+  const uint64_t subtotal = halfSpan + qpcResolution;
+  if (subtotal > UINT64_MAX - hostResolutionNs) return false;
+  *outUncertaintyNs = subtotal + hostResolutionNs;
+  return true;
+}
+
+// Keep the first qualifying bracket; when all are slow, retain the best one.
+constexpr bool dxmt9PeTracePreferPointBracket(
+    uint64_t candidateUncertaintyNs, bool candidateValid,
+    uint64_t selectedUncertaintyNs, bool selectedValid) noexcept {
+  constexpr uint64_t kQualificationLimitNs = 1000u;
+  if (!candidateValid) return false;
+  if (!selectedValid) return true;
+  const bool candidateQualified = candidateUncertaintyNs <= kQualificationLimitNs;
+  const bool selectedQualified = selectedUncertaintyNs <= kQualificationLimitNs;
+  return candidateQualified != selectedQualified
+      ? candidateQualified
+      : (!selectedQualified && candidateUncertaintyNs < selectedUncertaintyNs);
+}
+
+constexpr bool dxmt9PeTraceCalibrationId(uint64_t sourceOrder,
+                                         uint64_t endpoint,
+                                         uint64_t* outId) noexcept {
+  if (!outId || endpoint > 1u || sourceOrder == 0u ||
+      sourceOrder > (UINT64_MAX - endpoint) / 2u)
+    return false;
+  *outId = sourceOrder * 2u + endpoint;
+  return true;
+}
+
+constexpr bool dxmt9PeTraceGenerationMatches(
+    uint64_t probeBeforeGeneration, uint64_t probeAfterGeneration,
+    uint64_t endpointGeneration, uint64_t batchGeneration,
+    uint64_t batchNativeThreadId, uint64_t probeBeforeNativeThreadId,
+    uint64_t probeAfterNativeThreadId) noexcept {
+  return probeBeforeGeneration != 0u &&
+      probeBeforeGeneration == probeAfterGeneration &&
+      probeBeforeGeneration == endpointGeneration &&
+      probeBeforeGeneration == batchGeneration &&
+      batchNativeThreadId != 0u &&
+      batchNativeThreadId == probeBeforeNativeThreadId &&
+      batchNativeThreadId == probeAfterNativeThreadId;
+}
+
+bool dxmt9PeTraceChunkBegin(D9CDevice* device) noexcept;
 void dxmt9PeTraceChunkEnd(D9CDevice* device) noexcept;

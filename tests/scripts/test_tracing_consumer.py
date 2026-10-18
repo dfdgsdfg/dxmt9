@@ -184,6 +184,15 @@ class TracingConsumerTests(unittest.TestCase):
             [dict(row, key="debug.owner_id", value="4386677808")],
             [dict(row, key="debug.owner_id", value="4386677809")]))
 
+    def test_point_bracket_resolution_annotation_preserves_decimal_precision(self):
+        bundle = normalized_bundle()
+        exact = "9007199254741001"
+        bundle["events"][3]["attrs"]["calibration_resolution_ns"] = exact
+        expected = consumer.derive_expected(bundle)
+        rows = [row for row in expected["annotation_rows"]
+                if row["key"] == "debug.calibration_resolution_ns"]
+        self.assertEqual([row["value"] for row in rows], [exact])
+
     def test_pinned_native_processor_checks_protobuf_timestamps_duration_and_tracks(self):
         tp, lock = consumer.resolve_pinned_processor()
         expected_version = lock["version"]

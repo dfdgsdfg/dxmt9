@@ -401,6 +401,10 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
   std::set<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>> seenGuests;
   std::set<std::pair<uint64_t, uint64_t>> seenGuestProcesses;
   std::set<std::pair<uint64_t, uint64_t>> seenPeHostThreads;
+  // PE batches use the admitted writer's native track. Do not redeclare that
+  // track with a second, incompatible incarnation in the raw registry.
+  for (uint32_t i = 0; i < count; ++i)
+    seenPeHostThreads.emplace(s.threads[i].track_id, s.threads[i].native_tid);
   std::vector<TraceEvent> rawEvents;
   size_t rawEventCount = 0;
   size_t scan = 0;
@@ -573,6 +577,9 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
         return false;
       const bool peCalibration = e.event_id ==
           static_cast<uint16_t>(EventId::PeClockCalibration);
+      const bool pePointCalibration = e.calibration_id != 0 &&
+          (e.event_id == static_cast<uint16_t>(EventId::PeChunkCommitBegin) ||
+           e.event_id == static_cast<uint16_t>(EventId::PeChunkCommitEnd));
       const bool gpuCalibration = e.event_id ==
               static_cast<uint16_t>(EventId::GpuStageBegin) ||
           e.event_id ==
@@ -580,7 +587,7 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       if (gpuCalibration && !e.calibration_id &&
           e.calibration_scale == 0.0 && e.calibration_offset == 0.0)
         continue;
-      if (!peCalibration && !gpuCalibration) continue;
+      if (!peCalibration && !pePointCalibration && !gpuCalibration) continue;
       if (gpuCalibration) {
         if (!seenGpuCalibrations.emplace(e.source_clock_id,
                                          e.calibration_id).second)
@@ -588,9 +595,9 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
       }
       if (!firstCalibration) out << ',';
       firstCalibration = false;
-      out << "{\"kind\":\"" << (peCalibration ? "qpc" : "gpu")
+      out << "{\"kind\":\"" << ((peCalibration || pePointCalibration) ? "qpc" : "gpu")
           << "\",\"mapping_kind\":\""
-          << (peCalibration ? "bracket" :
+          << (pePointCalibration ? "point_bracket" : peCalibration ? "bracket" :
               (e.event_id == static_cast<uint16_t>(
                    EventId::GpuCommandBufferBegin)
                    ? "host_api_identity" : "two_anchor"))
@@ -615,7 +622,10 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
           << (peCalibration ? e.arg0 : e.calibration_valid_begin)
           << "\",\"valid_end\":\""
           << (peCalibration ? e.arg1 : e.calibration_valid_end)
-          << "\",\"error_ns\":\"" << e.uncertainty_ns << "\"}";
+          << "\",\"error_ns\":\"" << e.uncertainty_ns << '"';
+      if (pePointCalibration)
+        out << ",\"resolution_ns\":\"" << e.calibration_resolution_ns << '"';
+      out << '}';
   }
   out << "],\"qualification_policy\":{\"max_clock_error_ns\":\""
       << s.max_clock_error_ns << "\"},"
@@ -762,6 +772,9 @@ bool write_raw(Session& s, std::chrono::steady_clock::time_point deadline) {
         out << ",\"calibration_scale\":\"" << e.calibration_scale << '"';
       if (e.calibration_offset != 0.0)
         out << ",\"calibration_offset\":\"" << e.calibration_offset << '"';
+      if (e.calibration_resolution_ns)
+        out << ",\"calibration_resolution_ns\":\""
+            << e.calibration_resolution_ns << '"';
       if (e.calibration_source_first || e.calibration_source_second ||
           e.calibration_scale != 0.0 || e.calibration_offset != 0.0) {
         out << ",\"calibration_source_first\":\""

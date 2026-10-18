@@ -89,6 +89,7 @@ struct TraceEvent {
   uint64_t calibration_host_second_ns;
   uint64_t calibration_valid_begin;
   uint64_t calibration_valid_end;
+  uint64_t calibration_resolution_ns;
   uint32_t clock_id;
   uint16_t event_id;
   uint8_t category;

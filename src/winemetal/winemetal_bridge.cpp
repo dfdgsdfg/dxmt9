@@ -445,6 +445,10 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_stateblock_apply:
     return BridgeClass::StateBlock;
 
+  case BridgeOpcode::dxmt9c_trace_clock_probe:
+  case BridgeOpcode::dxmt9c_device_trace_batch:
+    return BridgeClass::Other;
+
   case BridgeOpcode::dxmt9c_bridge_op_count:
     break;
   }

@@ -271,6 +271,11 @@ void write_event(const TraceEvent& event, uint64_t pid,
           annotation_name(event.phase, "source_timestamp"));
       source_timestamp->set_uint_value(event.source_timestamp);
     }
+    if (event.calibration_resolution_ns) {
+      auto* resolution = track_event->add_debug_annotations();
+      resolution->set_name(annotation_name(event.phase, "calibration_resolution_ns"));
+      resolution->set_uint_value(event.calibration_resolution_ns);
+    }
     if (event.calibration_id || event.calibration_scale != 0.0 ||
         event.calibration_offset != 0.0) {
       auto* calibration = track_event->add_debug_annotations();

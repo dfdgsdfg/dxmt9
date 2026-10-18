@@ -178,6 +178,15 @@ outside the calibration range must not be silently extrapolated. A pure offset
 requires evidence for equal rate. Events closer than the mapping uncertainty
 must not acquire a fabricated cross-source order.
 
+The opt-in PE batch uses [direct endpoint point brackets](pe-clock.md): each
+original QPC read is enclosed by two native clock probes in the same session
+and native thread. Its integer midpoint and conservative error apply only to
+that exact tick, including the first and last chunk. Approximate affine
+coefficients are retained as metadata; they do not authorize extrapolation or
+replace the exact midpoint. Slow observations remain unqualified under the
+frozen clock-error policy, and sampling overhead remains part of the observed
+execution.
+
 An external marker can qualify xctrace alignment without changing the target.
 It must identify its own process and retain both clock anchors across the
 selected window; target process/thread identity is established independently.

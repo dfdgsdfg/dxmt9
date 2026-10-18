@@ -25,22 +25,37 @@ D9CTraceBatch validBatch() {
   batch.processCreateTime100ns = 100;
   batch.threadCreateTime100ns = 200;
   batch.qpcFrequency = 10'000'000;
-  batch.events[0] = {1000, 1, 1, D9C_TRACE_EVENT_SCOPE_BEGIN, 0};
-  batch.events[1] = {1100, 1, 1, D9C_TRACE_EVENT_SCOPE_END, 0};
+  batch.sessionGeneration = 12;
+  batch.nativeThreadId = 77;
+  batch.events[0] = {1000, 1, 1, 5000, 5002, 1,
+                     D9C_TRACE_EVENT_SCOPE_BEGIN, 0};
+  batch.events[1] = {1100, 1, 1, 6000, 6002, 1,
+                     D9C_TRACE_EVENT_SCOPE_END, 0};
   return batch;
 }
 
-void testPointerFreePodLayout() {
+void testPointerFreePodLayoutAndCurrentBatchBrackets() {
   static_assert(std::is_standard_layout_v<D9CTraceBatch>);
   static_assert(std::is_trivially_copyable_v<D9CTraceBatch>);
   static_assert(std::is_standard_layout_v<D9CTraceBatchReceipt>);
   static_assert(std::is_trivially_copyable_v<D9CTraceBatchReceipt>);
+  static_assert(std::is_standard_layout_v<D9CTraceClockProbe>);
   static_assert(offsetof(D9CTraceBatch, events) % alignof(uint64_t) == 0);
   check(dxmt9c_trace_batch_validate(nullptr) != 0,
         "null batch must be rejected");
   auto batch = validBatch();
   check(dxmt9c_trace_batch_validate(&batch) == 0,
-        "versioned begin/end pair should validate");
+        "current-batch endpoint point brackets should validate without a prior batch");
+  batch.events[0].hostBeforeNs = 0;
+  batch.events[0].hostAfterNs = 0;
+  batch.events[0].hostResolutionNs = 0;
+  check(dxmt9c_trace_batch_validate(&batch) == 0,
+        "source-local event may carry no usable point bracket");
+  batch.events[1].hostBeforeNs = 0;
+  batch.events[1].hostAfterNs = 0;
+  batch.events[1].hostResolutionNs = 0;
+  check(dxmt9c_trace_batch_validate(&batch) == 0,
+        "last chunk needs no following chunk to qualify its endpoint");
 }
 
 void testRejectMalformedBatches() {
@@ -61,20 +76,79 @@ void testRejectMalformedBatches() {
   check(dxmt9c_trace_batch_validate(&batch) != 0,
         "reversed QPC endpoints must be rejected");
   batch = validBatch();
+  batch.events[0].sourceOrder = UINT64_MAX;
+  batch.events[1].sourceOrder = UINT64_MAX;
+  check(dxmt9c_trace_batch_validate(&batch) != 0,
+        "source order overflowing its calibration ID must be rejected");
+  batch = validBatch();
   batch.qpcFrequency = 0;
   check(dxmt9c_trace_batch_validate(&batch) != 0,
         "missing QPC frequency must be rejected");
+  batch = validBatch();
+  batch.events[0].hostAfterNs = batch.events[0].hostBeforeNs - 1u;
+  check(dxmt9c_trace_batch_validate(&batch) != 0,
+        "reversed host point bracket must be rejected");
+  batch = validBatch();
+  batch.events[0].hostResolutionNs = 0u;
+  check(dxmt9c_trace_batch_validate(&batch) != 0,
+        "point bracket without clock resolution must be rejected");
 }
 
-void testCalibrationAndReceiptValidation() {
-  auto batch = validBatch();
-  batch.previousCalibration = {100, 500, 104, 8, 1, 77, 1, 0};
-  check(dxmt9c_trace_batch_validate(&batch) == 0,
-        "bracketed prior clock observation should validate");
-  batch.previousCalibration.qpcAfter = 99;
-  check(dxmt9c_trace_batch_validate(&batch) != 0,
-        "reversed calibration bracket must be rejected");
+void testPointBracketErrorAndSelection() {
+  uint64_t uncertainty = 0;
+  check(dxmt9PeTracePointUncertainty(100u, 102u, 1u, 10'000'000u,
+                                     &uncertainty) && uncertainty == 102u,
+        "a short point bracket has bounded host, QPC and host-resolution error");
+  check(uncertainty <= 1000u,
+        "positive point bracket qualifies at the one-microsecond limit");
+  check(dxmt9PeTracePointUncertainty(100u, 10'100u, 1u, 10'000'000u,
+                                     &uncertainty) && uncertainty == 5101u,
+        "slow probes retain their measured high uncertainty");
+  check(dxmt9PeTracePreferPointBracket(5101u, true, 6000u, true),
+        "when none qualify, retain the lowest-error slow candidate");
+  check(dxmt9PeTracePreferPointBracket(999u, true, 1001u, true),
+        "first qualifying candidate supersedes a slower candidate");
+  check(!dxmt9PeTracePreferPointBracket(900u, true, 800u, true),
+        "later qualified candidate does not replace the first qualified one");
+  check(!dxmt9PeTracePointUncertainty(200u, 100u, 1u, 1u, &uncertainty),
+        "reversed host bounds cannot qualify");
+  check(!dxmt9PeTracePointUncertainty(1u, UINT64_MAX, UINT64_MAX, 1u,
+                                      &uncertainty),
+        "uncertainty addition overflow cannot qualify");
+  check(dxmt9PeTracePointUncertainty(0u, 1u, 1u, 1u, &uncertainty) == false,
+        "zero host clock point cannot qualify");
+}
 
+void testGenerationAndCalibrationIdentity() {
+  Dxmt9PeTracePointBracket failedBracket{};
+  failedBracket.qpcTicks = 1234u;
+  failedBracket.sessionGeneration = 9u;
+  failedBracket.nativeThreadId = 77u;
+  failedBracket.hostBeforeNs = 500u;
+  failedBracket.hostAfterNs = 400u;
+  failedBracket.present = true;
+  failedBracket = dxmt9PeTraceClearBracket(failedBracket);
+  check(failedBracket.qpcTicks == 1234u &&
+            failedBracket.sessionGeneration == 9u &&
+            failedBracket.nativeThreadId == 77u &&
+            !failedBracket.present && failedBracket.hostBeforeNs == 0u,
+        "invalid bounds clear qualification while retaining endpoint identity and QPC");
+  check(dxmt9PeTraceGenerationMatches(9u, 9u, 9u, 9u, 77u, 77u, 77u),
+        "both endpoint probes and batch admission must share generation and native TID");
+  check(!dxmt9PeTraceGenerationMatches(8u, 8u, 8u, 9u, 77u, 77u, 77u),
+        "a stale generation cannot rearm an event into a newer session");
+  check(!dxmt9PeTraceGenerationMatches(9u, 9u, 9u, 9u, 77u, 77u, 78u),
+        "probe and admission native TIDs must match");
+  uint64_t id = 0;
+  check(dxmt9PeTraceCalibrationId(17u, 0u, &id) && id == 34u,
+        "begin endpoint gets a unique checked point calibration ID");
+  check(dxmt9PeTraceCalibrationId(17u, 1u, &id) && id == 35u,
+        "end endpoint gets a unique checked point calibration ID");
+  check(!dxmt9PeTraceCalibrationId(UINT64_MAX, 1u, &id),
+        "calibration ID multiplication overflow is rejected");
+}
+
+void testReceiptValidation() {
   D9CTraceBatchReceipt receipt{};
   receipt.structSize = static_cast<uint32_t>(sizeof(receipt));
   receipt.version = D9C_TRACE_BATCH_VERSION;
@@ -82,89 +156,44 @@ void testCalibrationAndReceiptValidation() {
   receipt.hostClockId = 3;
   receipt.nativeThreadId = 77;
   receipt.hostMonotonicNs = 500;
-  receipt.hostUncertaintyNs = 8;
+  receipt.hostUncertaintyNs = 1;
   check(dxmt9c_trace_batch_receipt_validate(&receipt) == 0,
-        "accepted receipt with native clock anchor should validate");
+        "accepted receipt should validate");
   receipt.nativeThreadId = 0;
   check(dxmt9c_trace_batch_receipt_validate(&receipt) != 0,
         "accepted receipt without native TID must be rejected");
 }
 
 void testDisabledCaptureReceiptDoesNotLatchPeOptInOff() {
-  // Runtime capture may still be delayed when the PE opt-in is already set.
-  // A disabled receipt for this chunk must leave the production gate open for
-  // the next chunk once the engine capture becomes active.
-  const uint32_t disabledReceipt = D9C_TRACE_RECEIPT_DISABLED;
-  check(disabledReceipt == D9C_TRACE_RECEIPT_DISABLED,
-        "pre-armed response should be represented as a disabled receipt");
   check(dxmt9PeTraceCaptureEligible(true, true),
         "disabled receipt must not latch PE capture eligibility off");
 }
 
-void testDisabledWindowDoesNotBecomeInWindowLoss() {
-  uint64_t droppedBatchCount = 7u;
-  bool calibrationValid = true;
-
+void testReceiptTransitions() {
   auto action = dxmt9PeTraceReceiptAction(
-      0, true, D9C_TRACE_RECEIPT_DISABLED, false);
-  auto transition = dxmt9PeTraceTransitionReceipt(droppedBatchCount, action);
-  check(action == Dxmt9PeTraceReceiptAction::Disabled,
-        "a valid disabled receipt is an inactive-window outcome");
-  calibrationValid = transition.keepCalibration;
-  droppedBatchCount = transition.droppedBatchCount;
-  check(!calibrationValid && droppedBatchCount == 0u,
-        "disabled window clears calibration and prior inactive loss");
-
-  action = dxmt9PeTraceReceiptAction(
-      0, true, D9C_TRACE_RECEIPT_ACCEPTED, true);
-  transition = dxmt9PeTraceTransitionReceipt(droppedBatchCount, action);
-  calibrationValid = transition.keepCalibration;
-  droppedBatchCount = transition.droppedBatchCount;
-  check(calibrationValid && droppedBatchCount == 0u,
-        "accepted in-window receipt starts with a fresh calibration");
-
-  action = dxmt9PeTraceReceiptAction(
-      0, true, D9C_TRACE_RECEIPT_DROPPED, true);
-  transition = dxmt9PeTraceTransitionReceipt(droppedBatchCount, action);
-  calibrationValid = transition.keepCalibration;
-  droppedBatchCount = transition.droppedBatchCount;
-  check(!calibrationValid && droppedBatchCount == 1u,
-        "a real in-window drop clears calibration and counts as loss");
-}
-
-void testCalibrationUncertaintyIncludesQpcBracket() {
-  uint64_t uncertainty = 0;
-  check(dxmt9PeTraceCalibrationUncertainty(100u, 104u, 1'000'000u, 7u,
-                                          &uncertainty),
-        "valid QPC bracket uncertainty should be representable");
-  check(uncertainty == 2007u,
-        "calibration uncertainty adds half the rounded-up bracket duration");
-  check(dxmt9PeTraceCalibrationUncertainty(10u, 12u, 3u, 0u,
-                                          &uncertainty) &&
-            uncertainty == 333'333'334u,
-        "fractional QPC conversion rounds bracket and half-width upward");
-  check(dxmt9PeTraceCalibrationUncertainty(
-            0u, UINT64_MAX, UINT64_MAX, 0u, &uncertainty) &&
-            uncertainty == 500'000'000u,
-        "full-width bracket calculation avoids overflowing the product");
-  check(!dxmt9PeTraceCalibrationUncertainty(1u, 2u, 0u, 0u,
-                                           &uncertainty),
-        "zero QPC frequency cannot qualify calibration uncertainty");
-  check(!dxmt9PeTraceCalibrationUncertainty(
-            0u, UINT64_MAX, 1u, UINT64_MAX, &uncertainty),
-        "uncertainty addition overflow must reject qualification");
+      0, true, D9C_TRACE_RECEIPT_DISABLED);
+  check(action == Dxmt9PeTraceReceiptAction::Disabled &&
+            dxmt9PeTraceTransitionReceipt(7u, action).droppedBatchCount == 0u,
+        "disabled window clears prior inactive loss");
+  action = dxmt9PeTraceReceiptAction(0, true, D9C_TRACE_RECEIPT_ACCEPTED);
+  check(dxmt9PeTraceTransitionReceipt(7u, action).droppedBatchCount == 0u,
+        "accepted batch clears prior loss");
+  action = dxmt9PeTraceReceiptAction(1, false, D9C_TRACE_RECEIPT_ACCEPTED);
+  check(dxmt9PeTraceTransitionReceipt(7u, action).droppedBatchCount == 8u,
+        "failed in-window batch remains accounted as loss");
 }
 
 }  // namespace
 
 int main() {
   try {
-    testPointerFreePodLayout();
+    testPointerFreePodLayoutAndCurrentBatchBrackets();
     testRejectMalformedBatches();
-    testCalibrationAndReceiptValidation();
+    testPointBracketErrorAndSelection();
+    testGenerationAndCalibrationIdentity();
+    testReceiptValidation();
     testDisabledCaptureReceiptDoesNotLatchPeOptInOff();
-    testDisabledWindowDoesNotBecomeInWindowLoss();
-    testCalibrationUncertaintyIncludesQpcBracket();
+    testReceiptTransitions();
   } catch (const std::exception& error) {
     std::cerr << "tracing batch spec failed: " << error.what() << '\n';
     return 1;

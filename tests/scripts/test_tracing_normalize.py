@@ -65,6 +65,42 @@ class TracingNormalizeTests(unittest.TestCase):
             "valid_end": "300", "error_ns": "0"}]
         return bundle
 
+    def point_bracket_bundle(self):
+        bundle = self.calibrated_bundle()
+        start = int(bundle["events"][0]["timestamp"])
+        frequency = 10_000_000
+        scale = 1_000_000_000 // frequency
+        bundle["events"][0]["timestamp"] = str(start)
+        bundle["events"][0]["attrs"].update({
+            "source_api": "QueryPerformanceCounter", "source_timestamp": "200",
+            "source_timestamp_unit": "ticks", "uncertainty_ns": "104",
+            "calibration_resolution_ns": "1", "generation": "7"})
+        bundle["clock_calibrations"] = [{"kind": "cpu", "mapping_kind": "point_bracket",
+            "calibration_id": "1", "source_order": "1", "source_clock_id": "gpu-clock",
+            "source_ticks": "200", "source_before": "200", "source_after": "200",
+            "host_ns": str(start), "host_clock_id": "mono",
+            "host_before_ns": str(start-2), "host_after_ns": str(start+3),
+            "scale": str(scale), "offset_ns": str(start-scale*200),
+            "valid_begin": "200", "valid_end": "200", "frequency": str(frequency),
+            "resolution_ns": "1", "error_ns": "104"},
+            {"kind": "cpu", "mapping_kind": "point_bracket",
+            "calibration_id": "2", "source_order": "2", "source_clock_id": "gpu-clock",
+            "source_ticks": "300", "source_before": "300", "source_after": "300",
+            "host_ns": bundle["events"][1]["timestamp"], "host_clock_id": "mono",
+            "host_before_ns": str(int(bundle["events"][1]["timestamp"])-2),
+            "host_after_ns": str(int(bundle["events"][1]["timestamp"])+3),
+            "scale": str(scale),
+            "offset_ns": str(int(bundle["events"][1]["timestamp"])-scale*300),
+            "valid_begin": "300", "valid_end": "300", "frequency": str(frequency),
+            "resolution_ns": "1", "error_ns": "104"}]
+        bundle["events"][1]["attrs"].update({
+            "source_api": "QueryPerformanceCounter", "source_timestamp": "300",
+            "source_clock_id": "gpu-clock", "calibration_id": "2",
+            "source_timestamp_unit": "ticks", "uncertainty_ns": "104",
+            "calibration_resolution_ns": "1", "generation": "7"})
+        bundle["qualification_policy"]["max_clock_error_ns"] = "104"
+        return bundle
+
     def test_preserves_64_bit_strings_and_qualifies_scopes(self):
         bundle = complete_bundle()
         verdict = tracing.validate_bundle(bundle, require_complete=True)
@@ -156,6 +192,137 @@ class TracingNormalizeTests(unittest.TestCase):
         with self.assertRaisesRegex(tracing.TraceError,
                                     "relation_diagnostic_missing:unmatched_gpu_command_buffer"):
             tracing.validate_bundle(bundle, require_complete=True)
+
+    def test_point_bracket_accepts_exact_point_with_quantified_small_bound(self):
+        bundle = self.point_bracket_bundle()
+        self.assertEqual(tracing.validate_bundle(bundle, require_complete=True)["verdict"],
+                         "qualified")
+
+    def test_point_bracket_rejects_interpolation_and_underclaimed_uncertainty(self):
+        bundle = self.point_bracket_bundle()
+        bundle["events"][0]["attrs"]["source_timestamp"] = "201"
+        with self.assertRaisesRegex(tracing.TraceError, "source timestamp differs"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        bundle["events"][0]["timestamp"] = str(int(bundle["events"][0]["timestamp"])+1)
+        with self.assertRaisesRegex(tracing.TraceError, "not the exact host midpoint"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        bundle["events"][0]["attrs"]["uncertainty_ns"] = "103"
+        with self.assertRaisesRegex(tracing.TraceError, "underclaims calibration error"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        del bundle["events"][0]["attrs"]["generation"]
+        with self.assertRaisesRegex(tracing.TraceError, "event.generation"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        bundle["events"][1]["attrs"]["generation"] = "8"
+        with self.assertRaisesRegex(tracing.TraceError, "generation changed"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        bundle["collector"] = "engine-perfetto"
+        bundle["processes"][0]["incarnation"] = "7"
+        self.assertEqual(tracing.validate_bundle(bundle)["verdict"], "qualified")
+        bundle["events"][0]["attrs"]["generation"] = "8"
+        bundle["events"][1]["attrs"]["generation"] = "8"
+        with self.assertRaisesRegex(tracing.TraceError, "disagrees with process incarnation"):
+            tracing.validate_bundle(bundle)
+
+    def test_point_bracket_rejects_malformed_bounds_and_wide_bracket_error_underclaim(self):
+        bundle = self.point_bracket_bundle()
+        calibration = bundle["clock_calibrations"][0]
+        calibration["source_after"] = "201"
+        with self.assertRaisesRegex(tracing.TraceError, "single-point validity"):
+            tracing.validate_bundle(bundle)
+
+        bundle = self.point_bracket_bundle()
+        calibration = bundle["clock_calibrations"][0]
+        start = int(calibration["host_ns"])
+        calibration["host_before_ns"] = str(start-500)
+        calibration["host_after_ns"] = str(start+500)
+        calibration["error_ns"] = "104"
+        bundle["events"][0]["attrs"]["uncertainty_ns"] = "104"
+        with self.assertRaisesRegex(tracing.TraceError, "error underclaims"):
+            tracing.validate_bundle(bundle)
+
+    def test_point_bracket_error_above_policy_is_unqualified(self):
+        bundle = self.point_bracket_bundle()
+        bundle["clock_calibrations"][0]["error_ns"] = "1000"
+        bundle["events"][0]["attrs"]["uncertainty_ns"] = "1000"
+        bundle["qualification_policy"]["max_clock_error_ns"] = "500"
+        with self.assertRaisesRegex(tracing.TraceError, "calibration_error_exceeds_policy"):
+            tracing.validate_bundle(bundle, require_complete=True)
+
+        bundle = self.point_bracket_bundle()
+        bundle["clock_calibrations"][0]["error_ns"] = "1001"
+        bundle["events"][0]["attrs"]["uncertainty_ns"] = "1001"
+        bundle["qualification_policy"]["max_clock_error_ns"] = "1000"
+        partial = tracing.validate_bundle(bundle)
+        self.assertEqual(partial["verdict"], "unqualified")
+        self.assertIn("calibration_error_exceeds_policy:1", partial["reasons"])
+        self.assertEqual(partial["events"], 2)
+        with self.assertRaisesRegex(tracing.TraceError, "calibration_error_exceeds_policy:1"):
+            tracing.validate_bundle(bundle, require_complete=True)
+
+    def test_raw_point_generation_matches_owning_process_incarnation(self):
+        bundle = self.point_bracket_bundle()
+        bundle["schema"] = "dxmt9.trace.raw.v1"
+        bundle["collector"] = "engine-perfetto"
+        bundle["processes"][0]["incarnation"] = "7"
+        raw_events = []
+        for event in bundle["events"]:
+            raw_events.append({"event_id": event["event_id"],
+                "phase": "begin" if event["kind"] == "scope_begin" else "end",
+                "timestamp_ns": event["timestamp"], "source_order": event["source_order"],
+                "collector": event["collector"], "process_id": event["process_id"],
+                "thread_id": event["thread_id"], "clock_id": event["clock_id"],
+                "scope_id": event["scope_id"], "attrs": event["attrs"],
+                "generation": "7"})
+        bundle["events"] = raw_events
+        normalized = tracing.normalize_bundle(bundle)
+        self.assertEqual(normalized["qualification"]["verdict"], "qualified")
+
+        for event in bundle["events"]:
+            event["generation"] = "8"
+        with self.assertRaisesRegex(tracing.TraceError, "disagrees with process incarnation"):
+            tracing.normalize_bundle(bundle)
+
+    def test_point_bracket_fractional_qpf_large_offset_uses_exact_host_midpoint(self):
+        bundle = self.point_bracket_bundle()
+        calibration = bundle["clock_calibrations"][0]
+        event = bundle["events"][0]
+        host_ns = 123_456_789_012_345
+        calibration["host_ns"] = str(host_ns)
+        event["timestamp"] = str(host_ns)
+        bundle["window"]["start"] = str(host_ns)
+        source_ticks = 1_000_000_000_000_000
+        frequency = 24_000_000
+        scale = repr(1_000_000_000 / frequency)
+        offset = repr(float(host_ns) - float(scale) * source_ticks)
+        minimum_error = 1 + (1_000_000_000 + frequency - 1) // frequency + 1
+        calibration.update({"source_ticks": str(source_ticks),
+            "source_before": str(source_ticks), "source_after": str(source_ticks),
+            "valid_begin": str(source_ticks), "valid_end": str(source_ticks),
+            "frequency": str(frequency), "scale": scale, "offset_ns": offset,
+            "host_before_ns": str(host_ns-1), "host_after_ns": str(host_ns+1),
+            "error_ns": str(minimum_error)})
+        event["attrs"].update({"source_timestamp": str(source_ticks),
+            "clock_frequency": str(frequency), "uncertainty_ns": str(minimum_error)})
+        self.assertNotEqual(tracing._map_calibrated_timestamp(
+            source_ticks, tracing._decimal(scale, "scale"),
+            tracing._decimal(offset, "offset")), host_ns)
+        self.assertEqual(tracing.validate_bundle(bundle, require_complete=True)["verdict"],
+                         "qualified")
+
+        bundle["events"][0]["attrs"]["clock_frequency"] = "24000001"
+        with self.assertRaisesRegex(tracing.TraceError,
+                                    "disagrees with event clock frequency"):
+            tracing.validate_bundle(bundle)
 
     def test_gpu_process_track_has_stable_identity_without_fabricated_tid(self):
         bundle = complete_bundle()

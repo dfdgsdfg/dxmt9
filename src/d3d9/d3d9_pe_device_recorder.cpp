@@ -852,7 +852,7 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
             }
             const bool peTraceRequested = dxmt9PeTraceEnabled();
             const bool peTraceActive =
-                peTraceRequested && dxmt9PeTraceChunkBegin();
+                peTraceRequested && dxmt9PeTraceChunkBegin(dev_);
             const HRESULT bridgeHr = hr32(
                 segmented
                     ? dxmt9c_device_commit_chunk_segmented(

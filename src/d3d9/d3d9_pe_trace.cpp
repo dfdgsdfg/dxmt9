@@ -3,6 +3,7 @@
 
 #include "d3d9_pe_trace.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdlib>
 
@@ -15,9 +16,9 @@ struct PeTraceThreadState {
   uint64_t threadCreateTime100ns = 0;
   uint64_t qpcFrequency = 0;
   uint64_t droppedBatchCount = 0;
-  uint64_t pendingQpcBegin = 0;
+  uint64_t lastSessionGeneration = 0;
+  Dxmt9PeTracePointBracket pendingBegin{};
   uint64_t pendingSourceOrder = 0;
-  D9CTraceClockCalibration previousCalibration{};
   bool identityValid = false;
 };
 
@@ -63,21 +64,122 @@ uint64_t queryQpc() noexcept {
              : 0u;
 }
 
+Dxmt9PeTracePointBracket samplePoint(D9CDevice* device) noexcept {
+  Dxmt9PeTracePointBracket selected{};
+  for (uint32_t i = 0; i < 8u; ++i) {
+    D9CTraceClockProbe before{};
+    before.structSize = static_cast<uint32_t>(sizeof(before));
+    before.version = D9C_TRACE_BATCH_VERSION;
+    const int32_t beforeStatus = dxmt9c_trace_clock_probe(device, &before);
+    const uint64_t qpc = queryQpc();
+    if (selected.qpcTicks == 0u) selected.qpcTicks = qpc;
+    D9CTraceClockProbe after{};
+    after.structSize = static_cast<uint32_t>(sizeof(after));
+    after.version = D9C_TRACE_BATCH_VERSION;
+    const int32_t afterStatus = dxmt9c_trace_clock_probe(device, &after);
+    const bool beforeShape = before.structSize ==
+            static_cast<uint32_t>(sizeof(before)) &&
+        before.version == D9C_TRACE_BATCH_VERSION && before.reserved == 0u;
+    const bool afterShape = after.structSize ==
+            static_cast<uint32_t>(sizeof(after)) &&
+        after.version == D9C_TRACE_BATCH_VERSION && after.reserved == 0u;
+    const bool beforeAccepted = beforeStatus == 0 && beforeShape &&
+        before.status == D9C_TRACE_RECEIPT_ACCEPTED &&
+        before.sessionGeneration != 0u && before.nativeThreadId != 0u;
+    const bool afterAccepted = afterStatus == 0 && afterShape &&
+        after.status == D9C_TRACE_RECEIPT_ACCEPTED &&
+        after.sessionGeneration != 0u && after.nativeThreadId != 0u;
+    if (selected.sessionGeneration == 0u) {
+      const D9CTraceClockProbe& identityProbe = beforeAccepted
+          ? before : after;
+      if (beforeAccepted || afterAccepted) {
+        selected.sessionGeneration = identityProbe.sessionGeneration;
+        selected.nativeThreadId = identityProbe.nativeThreadId;
+      }
+    }
+    if (beforeStatus == 0 && afterStatus == 0 && beforeShape && afterShape &&
+        before.status == D9C_TRACE_RECEIPT_DISABLED &&
+        after.status == D9C_TRACE_RECEIPT_DISABLED) {
+      selected.disabled = true;
+      return selected;
+    }
+    const bool beforeInactive = before.status == D9C_TRACE_RECEIPT_DISABLED;
+    const bool afterInactive = after.status == D9C_TRACE_RECEIPT_DISABLED;
+    if (!selected.present && ((beforeAccepted && afterAccepted &&
+         (before.sessionGeneration != after.sessionGeneration ||
+          before.nativeThreadId != after.nativeThreadId)) ||
+        (beforeAccepted && afterInactive) ||
+        (afterAccepted && beforeInactive)))
+      selected.generationMismatch = true;
+    uint64_t uncertainty = 0u;
+    const bool valid = beforeStatus == 0 && afterStatus == 0 && qpc != 0u &&
+        beforeAccepted && afterAccepted &&
+        before.sessionGeneration != 0u &&
+        before.sessionGeneration == after.sessionGeneration &&
+        before.nativeThreadId != 0u &&
+        before.nativeThreadId == after.nativeThreadId &&
+        dxmt9PeTracePointUncertainty(
+            before.hostMonotonicNs, after.hostMonotonicNs,
+            before.resolutionNs > after.resolutionNs
+                ? before.resolutionNs : after.resolutionNs,
+            threadState().qpcFrequency, &uncertainty);
+    if (!valid) continue;
+    const bool qualified = uncertainty <= 1000u;
+    // Candidate ranking is local to one admitted identity. A restarted
+    // session must never inherit a lower-error point from its predecessor.
+    if (selected.sessionGeneration != before.sessionGeneration ||
+        selected.nativeThreadId != before.nativeThreadId ||
+        dxmt9PeTracePreferPointBracket(uncertainty, true,
+                                      selected.uncertaintyNs,
+                                      selected.present)) {
+      selected = {qpc, before.hostMonotonicNs, after.hostMonotonicNs,
+                  before.resolutionNs > after.resolutionNs
+                      ? before.resolutionNs : after.resolutionNs,
+                  before.sessionGeneration, before.nativeThreadId,
+                  uncertainty, true, qualified, false, false};
+    }
+    if (qualified) break;
+  }
+  return selected;
+}
+
+void noteDrop(PeTraceThreadState& state) noexcept {
+  if (state.droppedBatchCount != UINT64_MAX) ++state.droppedBatchCount;
+}
+
 }  // namespace
 
-bool dxmt9PeTraceChunkBegin() noexcept {
+bool dxmt9PeTraceChunkBegin(D9CDevice* device) noexcept {
   const DWORD priorError = GetLastError();
   PeTraceThreadState& state = threadState();
   bool active = false;
-  if (dxmt9PeTraceCaptureEligible(dxmt9PeTraceEnabled(),
-                                  state.identityValid)) {
-    state.pendingQpcBegin = queryQpc();
+  if (dxmt9PeTraceCaptureEligible(dxmt9PeTraceEnabled(), state.identityValid)) {
+    state.pendingBegin = samplePoint(device);
+    if (state.pendingBegin.disabled) {
+      state.pendingBegin = {};
+      state.pendingSourceOrder = 0u;
+      state.droppedBatchCount = 0u;
+      state.lastSessionGeneration = 0u;
+      SetLastError(priorError);
+      return false;
+    }
+    if (state.pendingBegin.sessionGeneration != 0u &&
+        state.lastSessionGeneration !=
+            state.pendingBegin.sessionGeneration) {
+      state.droppedBatchCount = 0u;
+      state.lastSessionGeneration = state.pendingBegin.sessionGeneration;
+    }
     state.pendingSourceOrder = gPeTraceSourceOrder.fetch_add(
         1u, std::memory_order_relaxed);
-    active = state.pendingQpcBegin != 0u && state.pendingSourceOrder != 0u;
-    if (!active) ++state.droppedBatchCount;
-  } else if (!state.identityValid) {
-    ++state.droppedBatchCount;
+    active = state.pendingSourceOrder != 0u &&
+        state.pendingBegin.sessionGeneration != 0u &&
+        state.pendingBegin.nativeThreadId != 0u;
+    if (!active || !state.pendingBegin.present) noteDrop(state);
+    if (!active) state.pendingBegin = {};
+  } else {
+    state.pendingBegin = {};
+    state.pendingSourceOrder = 0u;
+    if (!state.identityValid) noteDrop(state);
   }
   SetLastError(priorError);
   return active;
@@ -86,17 +188,50 @@ bool dxmt9PeTraceChunkBegin() noexcept {
 void dxmt9PeTraceChunkEnd(D9CDevice* device) noexcept {
   const DWORD priorError = GetLastError();
   PeTraceThreadState& state = threadState();
-  const uint64_t qpcEnd = queryQpc();
-  const uint64_t qpcBegin = state.pendingQpcBegin;
+  Dxmt9PeTracePointBracket endPoint = samplePoint(device);
+  Dxmt9PeTracePointBracket beginPoint = state.pendingBegin;
   const uint64_t sourceOrder = state.pendingSourceOrder;
-  state.pendingQpcBegin = 0u;
+  state.pendingBegin = {};
   state.pendingSourceOrder = 0u;
-  if (qpcEnd == 0u || qpcBegin == 0u || sourceOrder == 0u ||
-      qpcEnd < qpcBegin) {
-    ++state.droppedBatchCount;
+  if (sourceOrder == 0u) {
     SetLastError(priorError);
     return;
   }
+  if (sourceOrder > (UINT64_MAX - 1u) / 2u) {
+    noteDrop(state);
+    SetLastError(priorError);
+    return;
+  }
+  if (beginPoint.generationMismatch || endPoint.generationMismatch) {
+    noteDrop(state);
+    SetLastError(priorError);
+    return;
+  }
+
+  uint64_t generation = beginPoint.sessionGeneration != 0u
+      ? beginPoint.sessionGeneration : endPoint.sessionGeneration;
+  uint64_t nativeTid = beginPoint.nativeThreadId != 0u
+      ? beginPoint.nativeThreadId : endPoint.nativeThreadId;
+  if (generation == 0u || nativeTid == 0u) {
+    noteDrop(state);
+    SetLastError(priorError);
+    return;
+  }
+  if ((beginPoint.sessionGeneration != 0u &&
+       endPoint.sessionGeneration != 0u &&
+       beginPoint.sessionGeneration != endPoint.sessionGeneration) ||
+      (beginPoint.nativeThreadId != 0u && endPoint.nativeThreadId != 0u &&
+       beginPoint.nativeThreadId != endPoint.nativeThreadId)) {
+    noteDrop(state);
+    SetLastError(priorError);
+    return;
+  }
+  if (beginPoint.sessionGeneration != generation ||
+      beginPoint.nativeThreadId != nativeTid)
+    beginPoint = dxmt9PeTraceClearBracket(beginPoint);
+  if (endPoint.sessionGeneration != generation ||
+      endPoint.nativeThreadId != nativeTid)
+    endPoint = dxmt9PeTraceClearBracket(endPoint);
 
   D9CTraceBatch batch{};
   batch.structSize = static_cast<uint32_t>(sizeof(batch));
@@ -108,40 +243,39 @@ void dxmt9PeTraceChunkEnd(D9CDevice* device) noexcept {
   batch.threadCreateTime100ns = state.threadCreateTime100ns;
   batch.qpcFrequency = state.qpcFrequency;
   batch.droppedBatchCount = state.droppedBatchCount;
-  batch.previousCalibration = state.previousCalibration;
-  batch.events[0] = {qpcBegin, sourceOrder, sourceOrder,
+  batch.sessionGeneration = generation;
+  batch.nativeThreadId = nativeTid;
+  batch.events[0] = {beginPoint.qpcTicks, sourceOrder, sourceOrder,
+                     beginPoint.hostBeforeNs, beginPoint.hostAfterNs,
+                     beginPoint.hostResolutionNs,
                      D9C_TRACE_EVENT_SCOPE_BEGIN, 0u};
-  batch.events[1] = {qpcEnd, sourceOrder, sourceOrder,
+  batch.events[1] = {endPoint.qpcTicks, sourceOrder, sourceOrder,
+                     endPoint.hostBeforeNs, endPoint.hostAfterNs,
+                     endPoint.hostResolutionNs,
                      D9C_TRACE_EVENT_SCOPE_END, 0u};
+  if (!beginPoint.present || !endPoint.present) {
+    // Keep the admitted chunk visible as an unqualified loss event.
+    noteDrop(state);
+  }
+  if (beginPoint.qpcTicks == 0u || endPoint.qpcTicks == 0u ||
+      beginPoint.qpcTicks > endPoint.qpcTicks) {
+    noteDrop(state);
+    SetLastError(priorError);
+    return;
+  }
+  batch.droppedBatchCount = state.droppedBatchCount;
 
-  const uint64_t calibrationQpcBefore = queryQpc();
   D9CTraceBatchReceipt receipt{};
   receipt.structSize = static_cast<uint32_t>(sizeof(receipt));
   receipt.version = D9C_TRACE_BATCH_VERSION;
   const int32_t transportStatus =
       dxmt9c_device_trace_batch(device, &batch, &receipt);
-  const uint64_t calibrationQpcAfter = queryQpc();
-
   const bool receiptValid =
       dxmt9c_trace_batch_receipt_validate(&receipt) == 0u;
-  const bool calibrationWindowValid = calibrationQpcBefore != 0u &&
-      calibrationQpcAfter >= calibrationQpcBefore;
   const auto action = dxmt9PeTraceReceiptAction(
-      transportStatus, receiptValid, receipt.status, calibrationWindowValid);
+      transportStatus, receiptValid, receipt.status);
   const auto transition = dxmt9PeTraceTransitionReceipt(
       state.droppedBatchCount, action);
-  if (action == Dxmt9PeTraceReceiptAction::Accepted) {
-    state.previousCalibration = {calibrationQpcBefore,
-                                 receipt.hostMonotonicNs,
-                                 calibrationQpcAfter,
-                                 receipt.hostUncertaintyNs,
-                                 sourceOrder,
-                                 receipt.nativeThreadId,
-                                 1u,
-                                 0u};
-  } else if (!transition.keepCalibration) {
-    state.previousCalibration = {};
-  }
   state.droppedBatchCount = transition.droppedBatchCount;
   SetLastError(priorError);
 }

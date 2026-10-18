@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define D9C_TRACE_BATCH_VERSION 1u
+#define D9C_TRACE_BATCH_VERSION 2u
 #define D9C_TRACE_BATCH_MAX_EVENTS 2u
 #define D9C_TRACE_CLOCK_QPC 0x44585150u /* "DXQP"; source is scoped by process incarnation. */
 
@@ -24,21 +24,24 @@ typedef enum D9CTraceBatchReceiptStatus {
   D9C_TRACE_RECEIPT_DROPPED = 4u,
 } D9CTraceBatchReceiptStatus;
 
-typedef struct D9CTraceClockCalibration {
-  uint64_t qpcBefore;
-  uint64_t hostMonotonicNs;
-  uint64_t qpcAfter;
-  uint64_t hostUncertaintyNs;
-  uint64_t sourceOrder;
-  uint64_t nativeThreadId;
-  uint32_t valid;
+typedef struct D9CTraceClockProbe {
+  uint32_t structSize;
+  uint32_t version;
+  uint32_t status;
   uint32_t reserved;
-} D9CTraceClockCalibration;
+  uint64_t sessionGeneration;
+  uint64_t nativeThreadId;
+  uint64_t hostMonotonicNs;
+  uint64_t resolutionNs;
+} D9CTraceClockProbe;
 
 typedef struct D9CTraceBatchEvent {
   uint64_t qpcTicks;
   uint64_t sourceOrder;
   uint64_t scopeId;
+  uint64_t hostBeforeNs;
+  uint64_t hostAfterNs;
+  uint64_t hostResolutionNs;
   uint32_t eventKind;
   uint32_t reserved;
 } D9CTraceBatchEvent;
@@ -54,7 +57,8 @@ typedef struct D9CTraceBatch {
   uint64_t threadCreateTime100ns;
   uint64_t qpcFrequency;
   uint64_t droppedBatchCount;
-  D9CTraceClockCalibration previousCalibration;
+  uint64_t sessionGeneration;
+  uint64_t nativeThreadId;
   D9CTraceBatchEvent events[D9C_TRACE_BATCH_MAX_EVENTS];
 } D9CTraceBatch;
 
@@ -83,19 +87,19 @@ static inline uint32_t dxmt9c_trace_batch_validate(const D9CTraceBatch *batch) {
       batch->events[1].eventKind != D9C_TRACE_EVENT_SCOPE_END ||
       batch->events[0].reserved != 0u || batch->events[1].reserved != 0u ||
       batch->events[0].sourceOrder == 0u ||
+      batch->events[0].sourceOrder > (UINT64_MAX - 1u) / 2u ||
       batch->events[0].sourceOrder != batch->events[1].sourceOrder ||
       batch->events[0].scopeId == 0u ||
       batch->events[0].scopeId != batch->events[1].scopeId ||
       batch->events[0].qpcTicks > batch->events[1].qpcTicks) return 6u;
-  if (batch->previousCalibration.valid > 1u) return 7u;
-  if (batch->previousCalibration.valid != 0u &&
-      (batch->previousCalibration.qpcAfter <
-           batch->previousCalibration.qpcBefore ||
-       batch->previousCalibration.hostMonotonicNs == 0u ||
-       batch->previousCalibration.hostUncertaintyNs == 0u ||
-       batch->previousCalibration.sourceOrder == 0u ||
-       batch->previousCalibration.nativeThreadId == 0u ||
-       batch->previousCalibration.reserved != 0u)) return 8u;
+  if (batch->sessionGeneration == 0u || batch->nativeThreadId == 0u) return 7u;
+  for (uint32_t i = 0; i < D9C_TRACE_BATCH_MAX_EVENTS; ++i) {
+    const D9CTraceBatchEvent *event = &batch->events[i];
+    if ((event->hostBeforeNs == 0u) != (event->hostAfterNs == 0u) ||
+        (event->hostBeforeNs == 0u) != (event->hostResolutionNs == 0u) ||
+        (event->hostBeforeNs != 0u &&
+         event->hostAfterNs < event->hostBeforeNs)) return 8u;
+  }
   return 0u;
 }
 
