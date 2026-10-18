@@ -303,7 +303,10 @@ rather than ordinary emission-time macros on the serializer thread. SDK work
 is intentionally deferred so allocation, interning and flush cannot perturb
 individual critical sections. SDK service startup/idle overhead still belongs
 in observer controls. Direct SDK calls from hot paths and continuous streaming
-are outside this initial contract and require a separate cost/lifecycle proof.
+are outside this initial contract. The optional
+[asynchronous drain extension](asynchronous-drain.md) defines bounded producer
+handoff, worker ownership, streaming loss and the separate cost/lifecycle proof
+required by R-HARN-TRACE-16.1–16.6. Deferred output remains the default.
 
 Thread buffers stop accepting records at capacity; they do not overwrite old
 events or stall the workload. Per-thread loss counts and an out-of-band session

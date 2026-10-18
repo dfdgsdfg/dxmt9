@@ -131,7 +131,10 @@ fields and aggregate return types must not enter production hot-path contracts.
 storage. Measured paths must not allocate per event, format text, perform file
 I/O, acquire a sink-wide mutex or block for exporter progress. Capacity loss
 must be observable. Engine export and expensive parsing must run outside the
-selected measurement corridor. An external collector may drain kernel buffers
+selected measurement corridor by default. Explicit concurrent engine drain is
+permitted only under the bounded, cost-qualified R-HARN-TRACE-16 contract;
+expensive analysis and SQLite construction remain outside the corridor.
+An external collector may drain kernel buffers
 and persist raw records concurrently under a bounded, costed collection policy;
 that exception must not move I/O or blocking work into the target's hot path.
 
@@ -243,6 +246,8 @@ an SDK-free internal facade. The initial implementation must serialize those
 records through the SDK after closing the capture window, using the original
 timestamps and producer tracks. SDK callbacks, allocation, interning, flush,
 file writes and locks must not enter replay/encode/wait critical sections.
+The optional asynchronous extension follows R-HARN-TRACE-16; it must preserve
+the deferred mode as a control and must not silently enable concurrent export.
 
 **R-HARN-TRACE-9.4** A process-wide session controller must enforce explicit
 preparation, collection, closure, writer quiescence, SDK finalization and seal.
@@ -475,3 +480,46 @@ provenance. External acquisitions join through qualified identity/clock/artifact
 evidence only. Verification must exercise all families, transport rejection,
 clock failure, SDK-off/on and native/SQL round trips; live workload overhead
 remains a separate qualification.
+
+## 16. Bounded Producer and Asynchronous Drain
+
+**R-HARN-TRACE-16.1** Trace producer admission must have bounded work and use
+preallocated diagnostic storage without allocation, text formatting, sink-wide
+locks, waits for consumer progress or per-event worker notification. Disabled
+paths retain R-HARN-TRACE-4.1. Registration and schema setup occur before the
+measured corridor; exhausted capacity or contention must return observable loss.
+
+**R-HARN-TRACE-16.2** Deferred serialization remains the default. An explicitly
+selected asynchronous mode must hand off owned batches to a unix diagnostic
+worker, which owns Perfetto adaptation, serialization and output. Producers
+must not perform these operations. Trace Processor, SQLite construction and
+structural parsing remain offline. Existing SDK buffering must be assessed
+before introducing another transport stage; both stages count against budgets.
+
+**R-HARN-TRACE-16.3** Every batch must preserve original observation timestamps,
+clock qualification, source order, process/thread incarnation and session/work
+identity. Deferred readers must not dereference producer-owned mutable state or
+repeat acquisition. Large reports must share one acquired value/population
+snapshot, with all-or-nothing bounded admission and exact integer fidelity.
+
+**R-HARN-TRACE-16.4** Producer-to-worker handoff and buffer recycling must have
+explicit exclusive ownership and generation-qualified publication. Frequent
+events use per-producer storage; shared admission must have bounded contention.
+Full buffers and stalled consumers must never block production or overwrite
+unconsumed data. Source/batch loss must remain observable outside full buffers;
+incomplete evidence must not qualify as complete attribution.
+
+**R-HARN-TRACE-16.5** Mode, storage/SDK/output budgets, batch thresholds, worker
+service policy and shutdown deadline must be frozen before arming. Closure must
+stop admission, await admitted writers, drain published batches and finalize
+the SDK before sealing success. Timeout must retain safely owned resources and
+report incomplete capture; it never authorizes reuse under a live writer or
+consumer. Diagnostic failures must not affect production retirement or waits.
+
+**R-HARN-TRACE-16.6** Acceptance must compare observer-off, capture-only with
+deferred output, and full asynchronous output under matched workload controls.
+Evidence must retain producer and worker CPU/cost, frame-time tails, memory,
+buffer occupancy, notification/bridge counts and source/SDK/output loss, with
+budgets frozen before collection. Deterministic ownership/failure fixtures,
+lifecycle model/code evidence and pinned native/SQLite parity are required;
+moving work to another thread alone does not establish lower overhead.
